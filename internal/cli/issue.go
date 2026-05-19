@@ -42,8 +42,66 @@ func issueAddCmd() *cobra.Command {
 			}
 			defer s.Close()
 
-			if title == "" && desc == "" {
-				return fmt.Errorf("%w: --title is required (editor flow lands in a later task)", store.ErrValidation)
+			// Editor path: only triggered when no content flags supplied.
+			contentless := title == "" && desc == ""
+			if contentless {
+				if EditorDisabled(noEditor) {
+					return fmt.Errorf("%w: --title required when --no-editor or $CLIBAN_NO_EDITOR is set", store.ErrValidation)
+				}
+				if err := RequireTTY(); err != nil {
+					return fmt.Errorf("%w: %v", store.ErrValidation, err)
+				}
+				header := fmt.Sprintf("# Creating issue in %s — lines above the first '---' are ignored.\n# Statuses:   backlog | in-progress | blocked | in-review | done\n# Priorities: none | low | medium | high | urgent",
+					strings.ToUpper(project))
+				blank := IssueBuffer{
+					Header:   header,
+					Title:    "",
+					Status:   string(domain.StatusBacklog),
+					Priority: string(domain.PriorityNone),
+				}.Serialize()
+				path, err := WriteTempBuffer("cliban-new", blank)
+				if err != nil {
+					return err
+				}
+				if err := RunEditor(path); err != nil {
+					return err
+				}
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				bf, err := ParseIssueBuffer(string(data))
+				if err != nil {
+					return fmt.Errorf("buffer parse (file preserved at %s): %w", path, err)
+				}
+				params := store.CreateIssueParams{
+					ProjectKey:    strings.ToUpper(project),
+					Title:         bf.Title,
+					Description:   bf.Description,
+					MilestoneName: bf.Milestone,
+				}
+				if bf.Status != "" {
+					params.Status = domain.Status(bf.Status)
+				}
+				if bf.Priority != "" {
+					params.Priority = domain.Priority(bf.Priority)
+				}
+				if bf.Parent != "" {
+					k, err := domain.ParseIssueKey(bf.Parent)
+					if err != nil {
+						return err
+					}
+					params.ParentKey = &k
+				}
+				issue, err := s.CreateIssue(params)
+				if err != nil {
+					return err
+				}
+				if asJSON {
+					return WriteIssueJSON(cmd.OutOrStdout(), params.ProjectKey, issue)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "created %s-%d: %s\n", params.ProjectKey, issue.Seq, issue.Title)
+				return nil
 			}
 
 			descContent, err := readMaybeStdin(desc)
@@ -99,7 +157,6 @@ func issueAddCmd() *cobra.Command {
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 	c.Flags().BoolVar(&noEditor, "no-editor", false, "fail rather than opening $EDITOR")
 	_ = c.MarkFlagRequired("project")
-	_ = noEditor
 	return c
 }
 
@@ -276,7 +333,90 @@ func issueEditCmd() *cobra.Command {
 				!cmd.Flags().Changed("priority") && !cmd.Flags().Changed("milestone") &&
 				!cmd.Flags().Changed("parent") && !clearMilestone && !clearParent
 			if noChanges && !force {
-				return fmt.Errorf("%w: nothing to update (editor flow lands in a later task; pass at least one flag)", store.ErrValidation)
+				if EditorDisabled(noEditor) {
+					return fmt.Errorf("%w: no edits requested and editor disabled", store.ErrValidation)
+				}
+				if err := RequireTTY(); err != nil {
+					return fmt.Errorf("%w: %v", store.ErrValidation, err)
+				}
+				cur, err := s.GetIssueByKey(k)
+				if err != nil {
+					return err
+				}
+				bf := IssueBuffer{
+					Header:      fmt.Sprintf("# Editing %s — lines above the first '---' are ignored.\n# Statuses:   backlog | in-progress | blocked | in-review | done\n# Priorities: none | low | medium | high | urgent\n# Set milestone or parent to '' to clear.", k),
+					Title:       cur.Title,
+					Status:      string(cur.Status),
+					Priority:    string(cur.Priority),
+					Description: cur.Description,
+				}
+				if cur.MilestoneID != nil {
+					ms, _ := s.ListMilestones(k.Project, "")
+					for _, m := range ms {
+						if m.ID == *cur.MilestoneID {
+							bf.Milestone = m.Name
+							break
+						}
+					}
+				}
+				if cur.ParentID != nil {
+					parent, err := s.GetIssueByID(*cur.ParentID)
+					if err == nil && parent != nil {
+						bf.Parent = fmt.Sprintf("%s-%d", k.Project, parent.Seq)
+					}
+				}
+				path, err := WriteTempBuffer(fmt.Sprintf("cliban-issue-%s-%d", k.Project, k.Seq), bf.Serialize())
+				if err != nil {
+					return err
+				}
+				if err := RunEditor(path); err != nil {
+					return err
+				}
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				next, err := ParseIssueBuffer(string(data))
+				if err != nil {
+					return fmt.Errorf("buffer parse (file preserved at %s): %w", path, err)
+				}
+				up := store.UpdateIssueParams{}
+				if next.Title != cur.Title {
+					up.Title = &next.Title
+				}
+				if next.Description != cur.Description {
+					up.Description = &next.Description
+				}
+				if next.Priority != "" && next.Priority != string(cur.Priority) {
+					pri := domain.Priority(next.Priority)
+					up.Priority = &pri
+				}
+				switch {
+				case next.Milestone == "" && bf.Milestone != "":
+					up.ClearMilestone = true
+				case next.Milestone != bf.Milestone:
+					up.Milestone = &next.Milestone
+				}
+				switch {
+				case next.Parent == "" && bf.Parent != "":
+					up.ClearParent = true
+				case next.Parent != bf.Parent && next.Parent != "":
+					pk, err := domain.ParseIssueKey(next.Parent)
+					if err != nil {
+						return err
+					}
+					up.Parent = &pk
+				}
+				if next.Status != "" && next.Status != string(cur.Status) {
+					st, err := domain.ParseStatus(next.Status)
+					if err != nil {
+						return err
+					}
+					if err := s.MoveIssue(k, st); err != nil {
+						return err
+					}
+				}
+				return s.UpdateIssue(k, up)
 			}
 			return s.UpdateIssue(k, params)
 		},
@@ -290,7 +430,6 @@ func issueEditCmd() *cobra.Command {
 	c.Flags().BoolVar(&clearParent, "clear-parent", false, "clear parent")
 	c.Flags().BoolVarP(&force, "edit", "e", false, "force editor open (no-op until Task 15)")
 	c.Flags().BoolVar(&noEditor, "no-editor", false, "never open $EDITOR")
-	_ = noEditor
 	return c
 }
 
