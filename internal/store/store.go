@@ -30,8 +30,6 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db, now: func() time.Time { return time.Now().UTC() }}, nil
 }
 
-func (s *Store) DB() *sql.DB { return s.db }
-
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) Migrate() error {

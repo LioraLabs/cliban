@@ -26,7 +26,7 @@ func TestOpenAndMigrate(t *testing.T) {
 		t.Fatalf("second Migrate: %v", err)
 	}
 	// Tables exist?
-	rows, err := s.DB().Query(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`)
+	rows, err := s.db.Query(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`)
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -38,6 +38,9 @@ func TestOpenAndMigrate(t *testing.T) {
 			t.Fatal(err)
 		}
 		got = append(got, n)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
 	}
 	want := map[string]bool{"project": true, "milestone": true, "issue": true, "meta": true}
 	for n := range want {
