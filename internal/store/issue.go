@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/alex/cliban/internal/domain"
@@ -213,4 +214,174 @@ func (s *Store) ListIssues(f ListIssuesFilter) ([]*domain.Issue, error) {
 		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
 	}
 	return out, nil
+}
+
+type UpdateIssueParams struct {
+	Title          *string
+	Description    *string
+	Priority       *domain.Priority
+	Milestone      *string
+	ClearMilestone bool
+	Parent         *domain.IssueKey
+	ClearParent    bool
+}
+
+func (s *Store) UpdateIssue(k domain.IssueKey, p UpdateIssueParams) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	defer tx.Rollback()
+
+	var projID, id int64
+	var curParent sql.NullInt64
+	if err := tx.QueryRow(`SELECT i.id, i.project_id, i.parent_id FROM issue i JOIN project pr ON pr.id=i.project_id WHERE pr.key=? AND i.seq=?`, k.Project, k.Seq).
+		Scan(&id, &projID, &curParent); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+
+	set := []string{}
+	args := []any{}
+	if p.Title != nil {
+		if *p.Title == "" {
+			return fmt.Errorf("%w: title cannot be empty", ErrValidation)
+		}
+		set = append(set, "title=?")
+		args = append(args, *p.Title)
+	}
+	if p.Description != nil {
+		set = append(set, "description=?")
+		args = append(args, *p.Description)
+	}
+	if p.Priority != nil {
+		if _, err := domain.ParsePriority(string(*p.Priority)); err != nil {
+			return fmt.Errorf("%w: %v", ErrValidation, err)
+		}
+		set = append(set, "priority=?")
+		args = append(args, string(*p.Priority))
+	}
+	switch {
+	case p.ClearMilestone:
+		set = append(set, "milestone_id=NULL")
+	case p.Milestone != nil:
+		var mid int64
+		if err := tx.QueryRow(`SELECT id FROM milestone WHERE project_id=? AND name=?`, projID, *p.Milestone).Scan(&mid); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("%w: milestone %q", ErrNotFound, *p.Milestone)
+			}
+			return fmt.Errorf("%w: %v", ErrInternal, err)
+		}
+		set = append(set, "milestone_id=?")
+		args = append(args, mid)
+	}
+	switch {
+	case p.ClearParent:
+		set = append(set, "parent_id=NULL")
+	case p.Parent != nil:
+		if p.Parent.Project != k.Project {
+			return fmt.Errorf("%w: parent must be in same project", ErrValidation)
+		}
+		if p.Parent.Seq == k.Seq {
+			return fmt.Errorf("%w: issue cannot be its own parent", ErrValidation)
+		}
+		var parentID int64
+		var parentOfParent sql.NullInt64
+		if err := tx.QueryRow(`SELECT id, parent_id FROM issue WHERE project_id=? AND seq=?`, projID, p.Parent.Seq).Scan(&parentID, &parentOfParent); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("%w: parent %s", ErrNotFound, p.Parent)
+			}
+			return fmt.Errorf("%w: %v", ErrInternal, err)
+		}
+		if parentOfParent.Valid {
+			return fmt.Errorf("%w: depth-2 limit (target parent is itself a sub-issue)", ErrValidation)
+		}
+		var ownChildren int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM issue WHERE parent_id=?`, id).Scan(&ownChildren); err != nil {
+			return fmt.Errorf("%w: %v", ErrInternal, err)
+		}
+		if ownChildren > 0 {
+			return fmt.Errorf("%w: issue has sub-issues; cannot also be made a sub-issue (would exceed depth 2)", ErrValidation)
+		}
+		set = append(set, "parent_id=?")
+		args = append(args, parentID)
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	set = append(set, "updated_at=?")
+	args = append(args, s.nowISO())
+	args = append(args, id)
+	query := "UPDATE issue SET " + strings.Join(set, ", ") + " WHERE id=?"
+	if _, err := tx.Exec(query, args...); err != nil {
+		return fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	return tx.Commit()
+}
+
+func (s *Store) MoveIssue(k domain.IssueKey, newStatus domain.Status) error {
+	if _, err := domain.ParseStatus(string(newStatus)); err != nil {
+		return fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	defer tx.Rollback()
+
+	var id, projID int64
+	if err := tx.QueryRow(`SELECT i.id, i.project_id FROM issue i JOIN project p ON p.id=i.project_id WHERE p.key=? AND i.seq=?`, k.Project, k.Seq).Scan(&id, &projID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	var maxPos sql.NullFloat64
+	_ = tx.QueryRow(`SELECT MAX(position) FROM issue WHERE project_id=? AND status=?`, projID, string(newStatus)).Scan(&maxPos)
+	pos := 1000.0
+	if maxPos.Valid {
+		pos = maxPos.Float64 + 1000.0
+	}
+	now := s.nowISO()
+	var completed any
+	if newStatus == domain.StatusDone {
+		completed = now
+	} else {
+		completed = nil
+	}
+	if _, err := tx.Exec(`UPDATE issue SET status=?, position=?, completed_at=?, updated_at=? WHERE id=?`,
+		string(newStatus), pos, completed, now, id); err != nil {
+		return fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	return tx.Commit()
+}
+
+func (s *Store) DeleteIssue(k domain.IssueKey) error {
+	res, err := s.db.Exec(`DELETE FROM issue WHERE id = (SELECT i.id FROM issue i JOIN project p ON p.id=i.project_id WHERE p.key=? AND i.seq=?)`, k.Project, k.Seq)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) SetIssuePosition(k domain.IssueKey, newPos float64) error {
+	res, err := s.db.Exec(`UPDATE issue SET position=?, updated_at=? WHERE id = (SELECT i.id FROM issue i JOIN project p ON p.id=i.project_id WHERE p.key=? AND i.seq=?)`,
+		newPos, s.nowISO(), k.Project, k.Seq)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// GetIssueByID returns an issue by its internal ID.
+func (s *Store) GetIssueByID(id int64) (*domain.Issue, error) {
+	return s.getIssueByID(id)
 }
