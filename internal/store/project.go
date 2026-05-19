@@ -40,16 +40,15 @@ func (s *Store) CreateProject(key, name, description string) (*domain.Project, e
 	return s.GetProjectByID(id)
 }
 
+const projectSelectCols = `id,key,name,description,archived,issue_seq,created_at,updated_at`
+
 func (s *Store) GetProjectByKey(key string) (*domain.Project, error) {
-	return s.queryProject(`WHERE key = ?`, key)
+	row := s.db.QueryRow(`SELECT `+projectSelectCols+` FROM project WHERE key = ?`, key)
+	return scanProject(row)
 }
 
 func (s *Store) GetProjectByID(id int64) (*domain.Project, error) {
-	return s.queryProject(`WHERE id = ?`, id)
-}
-
-func (s *Store) queryProject(where string, args ...any) (*domain.Project, error) {
-	row := s.db.QueryRow(`SELECT id,key,name,description,archived,issue_seq,created_at,updated_at FROM project `+where, args...)
+	row := s.db.QueryRow(`SELECT `+projectSelectCols+` FROM project WHERE id = ?`, id)
 	return scanProject(row)
 }
 
@@ -70,7 +69,7 @@ func scanProject(r interface{ Scan(...any) error }) (*domain.Project, error) {
 }
 
 func (s *Store) ListProjects(includeArchived bool) ([]*domain.Project, error) {
-	q := `SELECT id,key,name,description,archived,issue_seq,created_at,updated_at FROM project`
+	q := `SELECT ` + projectSelectCols + ` FROM project`
 	if !includeArchived {
 		q += ` WHERE archived = 0`
 	}
