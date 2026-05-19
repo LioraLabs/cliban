@@ -25,5 +25,5 @@ func NewInit() *cobra.Command {
 
 // Placeholders so root compiles; real impls land in Tasks 10-12.
 func newProjectCmd() *cobra.Command { return projectCmd() }
-func newMilestoneCmd() *cobra.Command { return &cobra.Command{Use: "milestone", Short: "(stub)"} }
+func newMilestoneCmd() *cobra.Command { return milestoneCmd() }
 func newIssueCmd() *cobra.Command     { return &cobra.Command{Use: "issue", Short: "(stub)"} }
