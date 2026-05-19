@@ -1,63 +1,30 @@
 package cli
 
 import (
-	"fmt"
-	"os"
-	"os/exec"
-
-	"golang.org/x/term"
+	"github.com/alex/cliban/internal/issuebuf"
 )
 
+// ResolveEditor delegates to issuebuf.ResolveEditor.
 func ResolveEditor() string {
-	if v := os.Getenv("VISUAL"); v != "" {
-		return v
-	}
-	if v := os.Getenv("EDITOR"); v != "" {
-		return v
-	}
-	return "vi"
+	return issuebuf.ResolveEditor()
 }
 
+// EditorDisabled delegates to issuebuf.EditorDisabled.
 func EditorDisabled(noEditorFlag bool) bool {
-	if noEditorFlag {
-		return true
-	}
-	if os.Getenv("CLIBAN_NO_EDITOR") != "" {
-		return true
-	}
-	return false
+	return issuebuf.EditorDisabled(noEditorFlag)
 }
 
+// RequireTTY delegates to issuebuf.RequireTTY.
 func RequireTTY() error {
-	if os.Getenv("CLIBAN_FORCE_TTY") != "" {
-		return nil
-	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return fmt.Errorf("stdin is not a TTY; cannot open editor (pass --title/--description or --no-editor)")
-	}
-	return nil
+	return issuebuf.RequireTTY()
 }
 
-// RunEditor execs $EDITOR <path>, sharing the current TTY.
-// EDITOR may include args (e.g. "code --wait" or "sh -c 'echo >> $1' --").
+// RunEditor delegates to issuebuf.RunEditor.
 func RunEditor(path string) error {
-	editor := ResolveEditor()
-	cmd := exec.Command("sh", "-c", fmt.Sprintf("%s %q", editor, path))
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return issuebuf.RunEditor(path)
 }
 
-// WriteTempBuffer writes contents to a deterministically-named temp file and returns its path.
+// WriteTempBuffer delegates to issuebuf.WriteTempBuffer.
 func WriteTempBuffer(prefix, contents string) (string, error) {
-	f, err := os.CreateTemp("", prefix+"-*.md")
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	if _, err := f.WriteString(contents); err != nil {
-		return "", err
-	}
-	return f.Name(), nil
+	return issuebuf.WriteTempBuffer(prefix, contents)
 }

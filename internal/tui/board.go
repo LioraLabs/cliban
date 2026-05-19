@@ -24,6 +24,7 @@ type boardModel struct {
 	filter         string
 	openDetailKey  *domain.IssueKey
 	showMilestones bool
+	editorErr      error
 }
 
 func newBoardModel(s *store.Store, key string) boardModel {
@@ -62,6 +63,17 @@ func (m boardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.KeyMsg:
 		return m.handleKey(v)
+	case editorFinishedMsg:
+		if v.err != nil {
+			m.editorErr = v.err
+			return m, m.Init() // still refresh in case of partial state
+		}
+		if applyErr := applyBufferToStore(m.store, m.projectKey, v.editKey, v.tempPath); applyErr != nil {
+			m.editorErr = applyErr
+		} else {
+			m.editorErr = nil
+		}
+		return m, m.Init()
 	}
 	return m, nil
 }
@@ -138,6 +150,14 @@ func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "m":
 		m.showMilestones = !m.showMilestones
+	case "e":
+		sel := m.selected()
+		if sel != nil {
+			k := domain.IssueKey{Project: m.projectKey, Seq: sel.Seq}
+			return m, openEditorForIssue(m.store, k)
+		}
+	case "n":
+		return m, openEditorForNew(m.store, m.projectKey, domain.AllStatuses()[m.colCursor])
 	}
 	return m, nil
 }
@@ -280,6 +300,9 @@ func (m boardModel) View() string {
 	helpText := "hjkl move  enter detail  e edit  n new  Space mv  / filter  r refresh  q quit"
 	if m.filter != "" || m.filtering {
 		helpText = fmt.Sprintf("filter: %s  | %s", m.filter, helpText)
+	}
+	if m.editorErr != nil {
+		helpText = "ERR: " + m.editorErr.Error() + " | " + helpText
 	}
 	help := StyleStatusBar.Render(helpText)
 	base := StyleTitle.Render(fmt.Sprintf("cliban — %s", m.projectKey)) + "\n" + body + "\n" + help
