@@ -11,15 +11,19 @@ import (
 )
 
 type boardModel struct {
-	store        *store.Store
-	projectKey   string
-	columns      [5][]*domain.Issue
-	colCursor    int
-	rowCursor    [5]int
-	width        int
-	back         bool
-	err          error
-	awaitingMove bool
+	store          *store.Store
+	projectKey     string
+	columns        [5][]*domain.Issue
+	colCursor      int
+	rowCursor      [5]int
+	width          int
+	back           bool
+	err            error
+	awaitingMove   bool
+	filtering      bool
+	filter         string
+	openDetailKey  *domain.IssueKey
+	showMilestones bool
 }
 
 func newBoardModel(s *store.Store, key string) boardModel {
@@ -63,6 +67,24 @@ func (m boardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.filtering {
+		switch k.String() {
+		case "esc":
+			m.filtering = false
+			m.filter = ""
+		case "enter":
+			m.filtering = false
+		case "backspace":
+			if len(m.filter) > 0 {
+				m.filter = m.filter[:len(m.filter)-1]
+			}
+		default:
+			if len(k.String()) == 1 {
+				m.filter += k.String()
+			}
+		}
+		return m, nil
+	}
 	if m.awaitingMove {
 		m.awaitingMove = false
 		st, ok := statusForKey(k.String())
@@ -106,6 +128,16 @@ func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.awaitingMove = true
 	case "r":
 		return m, m.Init()
+	case "/":
+		m.filtering = true
+	case "enter":
+		sel := m.selected()
+		if sel != nil {
+			key := domain.IssueKey{Project: m.projectKey, Seq: sel.Seq}
+			m.openDetailKey = &key
+		}
+	case "m":
+		m.showMilestones = !m.showMilestones
 	}
 	return m, nil
 }
@@ -208,15 +240,35 @@ func (m boardModel) View() string {
 			colWidth = 14
 		}
 	}
+
+	filtered := m.columns
+	if m.filter != "" {
+		var fcols [5][]*domain.Issue
+		needle := strings.ToLower(m.filter)
+		for col := 0; col < 5; col++ {
+			for _, issue := range m.columns[col] {
+				if strings.Contains(strings.ToLower(issue.Title), needle) {
+					fcols[col] = append(fcols[col], issue)
+				}
+			}
+		}
+		filtered = fcols
+	}
+
 	cols := make([]string, 5)
 	for i := 0; i < 5; i++ {
+		// Clamp cursor if filter shrinks column.
+		rowCursor := m.rowCursor[i]
+		if len(filtered[i]) > 0 && rowCursor >= len(filtered[i]) {
+			rowCursor = len(filtered[i]) - 1
+		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "%s (%d)\n", headers[i], len(m.columns[i]))
-		for r, issue := range m.columns[i] {
+		fmt.Fprintf(&b, "%s (%d)\n", headers[i], len(filtered[i]))
+		for r, issue := range filtered[i] {
 			card := fmt.Sprintf("%s-%d %s\n  %s",
 				m.projectKey, issue.Seq, PriorityDot(string(issue.Priority)),
 				truncate(issue.Title, colWidth-2))
-			if i == m.colCursor && r == m.rowCursor[i] {
+			if i == m.colCursor && r == rowCursor {
 				card = StyleSelected.Render(card)
 			}
 			b.WriteString(card + "\n")
@@ -224,8 +276,18 @@ func (m boardModel) View() string {
 		cols[i] = StyleColumn.Width(colWidth).Render(b.String())
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
-	help := StyleStatusBar.Render("hjkl move  enter detail  e edit  n new  Space mv  / filter  r refresh  q quit")
-	return StyleTitle.Render(fmt.Sprintf("cliban — %s", m.projectKey)) + "\n" + body + "\n" + help
+
+	helpText := "hjkl move  enter detail  e edit  n new  Space mv  / filter  r refresh  q quit"
+	if m.filter != "" || m.filtering {
+		helpText = fmt.Sprintf("filter: %s  | %s", m.filter, helpText)
+	}
+	help := StyleStatusBar.Render(helpText)
+	base := StyleTitle.Render(fmt.Sprintf("cliban — %s", m.projectKey)) + "\n" + body + "\n" + help
+
+	if m.showMilestones {
+		return base + "\n" + renderMilestoneOverlay(m.store, m.projectKey)
+	}
+	return base
 }
 
 func truncate(s string, n int) string {

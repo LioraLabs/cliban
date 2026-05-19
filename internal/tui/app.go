@@ -60,10 +60,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.view = viewProjects
 			m.board.back = false
 		}
+		if m.board.openDetailKey != nil {
+			m.issue = newIssueModel(m.store, *m.board.openDetailKey)
+			m.board.openDetailKey = nil
+			m.view = viewIssue
+			return m, m.issue.Init()
+		}
 	case viewIssue:
 		var nm tea.Model
 		nm, cmd = m.issue.Update(msg)
 		m.issue = nm.(issueModel)
+		if m.issue.back {
+			m.view = viewBoard
+			m.issue.back = false
+		}
 	}
 	return m, cmd
 }
@@ -81,11 +91,4 @@ func (m Model) View() string {
 	}
 }
 
-// Stubs — fully implemented in Tasks 17-19.
-
-type issueModel struct{}
-
-func (issueModel) Init() tea.Cmd                           { return nil }
-func (m issueModel) Update(_ tea.Msg) (tea.Model, tea.Cmd) { return m, nil }
-func (issueModel) View() string                            { return "" }
 
