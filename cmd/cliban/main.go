@@ -1,7 +1,15 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+
+	"github.com/alex/cliban/internal/cli"
+)
 
 func main() {
-	fmt.Println("cliban")
+	if err := cli.NewRoot().Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(cli.ExitCodeFor(err))
+	}
 }
