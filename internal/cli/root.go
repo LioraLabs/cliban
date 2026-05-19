@@ -21,7 +21,7 @@ func NewRoot() *cobra.Command {
 		Use:           "cliban",
 		Short:         "AI-agent-first kanban board for the terminal",
 		SilenceUsage:  true,
-		SilenceErrors: false,
+		SilenceErrors: true,
 	}
 	root.PersistentFlags().StringVar(&G.DBPath, "db", "", "path to SQLite DB (default: $CLIBAN_DB or $XDG_DATA_HOME/cliban/cliban.db)")
 	root.AddCommand(NewInit(), NewVersion(), newProjectCmd(), newMilestoneCmd(), newIssueCmd(), newTUICmd())
