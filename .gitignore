@@ -1,0 +1,8 @@
+/cliban
+/dist/
+*.db
+*.db-wal
+*.db-shm
+.idea/
+.vscode/
+.DS_Store
