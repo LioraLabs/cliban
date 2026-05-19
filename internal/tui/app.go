@@ -89,25 +89,3 @@ func (issueModel) Init() tea.Cmd                           { return nil }
 func (m issueModel) Update(_ tea.Msg) (tea.Model, tea.Cmd) { return m, nil }
 func (issueModel) View() string                            { return "" }
 
-type boardModel struct {
-	store      *store.Store
-	projectKey string
-	back       bool
-}
-
-func newBoardModel(s *store.Store, key string) boardModel {
-	return boardModel{store: s, projectKey: key}
-}
-
-func (m boardModel) Init() tea.Cmd { return nil }
-
-func (m boardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok && (k.String() == "q" || k.String() == "esc") {
-		m.back = true
-	}
-	return m, nil
-}
-
-func (m boardModel) View() string {
-	return "Board for " + m.projectKey + " (q to go back)"
-}
