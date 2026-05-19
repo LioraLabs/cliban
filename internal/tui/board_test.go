@@ -39,3 +39,22 @@ func TestBoardRendersColumns(t *testing.T) {
 	tm.Send(tea.QuitMsg{})
 	tm.WaitFinished(t, teatest.WithFinalTimeout(2*time.Second))
 }
+
+func TestBoardSpaceMovesIssueToDone(t *testing.T) {
+	s := newStore(t)
+	_, _ = s.CreateProject("CLI", "Cliban", "")
+	_, _ = s.CreateIssue(store.CreateIssueParams{ProjectKey: "CLI", Title: "first"})
+
+	m := newBoardModel(s, "CLI")
+	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 30))
+	teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
+		return strings.Contains(string(b), "first")
+	}, teatest.WithCheckInterval(50*time.Millisecond), teatest.WithDuration(2*time.Second))
+	tm.Send(tea.KeyMsg{Type: tea.KeySpace})
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
+		return strings.Contains(string(b), "DONE (1)")
+	}, teatest.WithCheckInterval(50*time.Millisecond), teatest.WithDuration(2*time.Second))
+	tm.Send(tea.QuitMsg{})
+	tm.WaitFinished(t, teatest.WithFinalTimeout(2*time.Second))
+}

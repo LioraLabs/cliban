@@ -11,14 +11,15 @@ import (
 )
 
 type boardModel struct {
-	store      *store.Store
-	projectKey string
-	columns    [5][]*domain.Issue
-	colCursor  int
-	rowCursor  [5]int
-	width      int
-	back       bool
-	err        error
+	store        *store.Store
+	projectKey   string
+	columns      [5][]*domain.Issue
+	colCursor    int
+	rowCursor    [5]int
+	width        int
+	back         bool
+	err          error
+	awaitingMove bool
 }
 
 func newBoardModel(s *store.Store, key string) boardModel {
@@ -38,16 +39,7 @@ func (m boardModel) Init() tea.Cmd {
 		if err != nil {
 			return boardLoadedMsg{err: err}
 		}
-		var cols [5][]*domain.Issue
-		statuses := domain.AllStatuses()
-		for _, i := range all {
-			for idx, s := range statuses {
-				if i.Status == s {
-					cols[idx] = append(cols[idx], i)
-				}
-			}
-		}
-		return boardLoadedMsg{cols: cols}
+		return groupIssuesByStatus(all)
 	}
 }
 
@@ -71,6 +63,14 @@ func (m boardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.awaitingMove {
+		m.awaitingMove = false
+		st, ok := statusForKey(k.String())
+		if !ok {
+			return m, nil
+		}
+		return m, m.moveSelectedTo(st)
+	}
 	switch k.String() {
 	case "q", "esc":
 		m.back = true
@@ -90,10 +90,113 @@ func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.rowCursor[m.colCursor] > 0 {
 			m.rowCursor[m.colCursor]--
 		}
+	case "H":
+		if cur := m.selected(); cur != nil && m.colCursor > 0 {
+			return m, m.moveSelectedTo(domain.AllStatuses()[m.colCursor-1])
+		}
+	case "L":
+		if cur := m.selected(); cur != nil && m.colCursor < 4 {
+			return m, m.moveSelectedTo(domain.AllStatuses()[m.colCursor+1])
+		}
+	case "J":
+		return m, m.shuffleSelected(+1)
+	case "K":
+		return m, m.shuffleSelected(-1)
+	case " ":
+		m.awaitingMove = true
 	case "r":
 		return m, m.Init()
 	}
 	return m, nil
+}
+
+func (m boardModel) selected() *domain.Issue {
+	col := m.columns[m.colCursor]
+	if len(col) == 0 {
+		return nil
+	}
+	if m.rowCursor[m.colCursor] >= len(col) {
+		return nil
+	}
+	return col[m.rowCursor[m.colCursor]]
+}
+
+func (m boardModel) moveSelectedTo(st domain.Status) tea.Cmd {
+	sel := m.selected()
+	if sel == nil {
+		return nil
+	}
+	key := domain.IssueKey{Project: m.projectKey, Seq: sel.Seq}
+	storeRef := m.store
+	pk := m.projectKey
+	return func() tea.Msg {
+		if err := storeRef.MoveIssue(key, st); err != nil {
+			return boardLoadedMsg{err: err}
+		}
+		all, err := storeRef.ListIssues(store.ListIssuesFilter{ProjectKey: pk})
+		if err != nil {
+			return boardLoadedMsg{err: err}
+		}
+		return groupIssuesByStatus(all)
+	}
+}
+
+func (m boardModel) shuffleSelected(delta int) tea.Cmd {
+	col := m.columns[m.colCursor]
+	idx := m.rowCursor[m.colCursor]
+	target := idx + delta
+	if target < 0 || target >= len(col) {
+		return nil
+	}
+	sel := col[idx]
+	other := col[target]
+	storeRef := m.store
+	pk := m.projectKey
+	a := domain.IssueKey{Project: pk, Seq: sel.Seq}
+	b := domain.IssueKey{Project: pk, Seq: other.Seq}
+	posA, posB := sel.Position, other.Position
+	return func() tea.Msg {
+		if err := storeRef.SetIssuePosition(a, posB); err != nil {
+			return boardLoadedMsg{err: err}
+		}
+		if err := storeRef.SetIssuePosition(b, posA); err != nil {
+			return boardLoadedMsg{err: err}
+		}
+		all, err := storeRef.ListIssues(store.ListIssuesFilter{ProjectKey: pk})
+		if err != nil {
+			return boardLoadedMsg{err: err}
+		}
+		return groupIssuesByStatus(all)
+	}
+}
+
+func groupIssuesByStatus(all []*domain.Issue) boardLoadedMsg {
+	var cols [5][]*domain.Issue
+	statuses := domain.AllStatuses()
+	for _, i := range all {
+		for idx, s := range statuses {
+			if i.Status == s {
+				cols[idx] = append(cols[idx], i)
+			}
+		}
+	}
+	return boardLoadedMsg{cols: cols}
+}
+
+func statusForKey(s string) (domain.Status, bool) {
+	switch s {
+	case "b":
+		return domain.StatusBacklog, true
+	case "i":
+		return domain.StatusInProgress, true
+	case "k":
+		return domain.StatusBlocked, true
+	case "r":
+		return domain.StatusInReview, true
+	case "d":
+		return domain.StatusDone, true
+	}
+	return "", false
 }
 
 func (m boardModel) View() string {
