@@ -79,6 +79,67 @@ func TestBoardCursorFollowsMove(t *testing.T) {
 	}
 }
 
+// TestBoardMilestoneFilterCycles verifies that pressing 'M' cycles through
+// All → v0.1 → v0.2 → All and the board content is filtered accordingly.
+func TestBoardMilestoneFilterCycles(t *testing.T) {
+	s := newStore(t)
+	_, _ = s.CreateProject("CLI", "Cliban", "")
+	_, _ = s.CreateMilestone("CLI", "v0.1", "", nil)
+	_, _ = s.CreateMilestone("CLI", "v0.2", "", nil)
+	_, _ = s.CreateIssue(store.CreateIssueParams{ProjectKey: "CLI", Title: "in v0.1", MilestoneName: "v0.1"})
+	_, _ = s.CreateIssue(store.CreateIssueParams{ProjectKey: "CLI", Title: "in v0.2", MilestoneName: "v0.2"})
+	_, _ = s.CreateIssue(store.CreateIssueParams{ProjectKey: "CLI", Title: "no milestone"})
+
+	m := newBoardModel(s, "CLI")
+	updated, _ := m.Update(m.Init()())
+	m = updated.(boardModel)
+
+	totalVisible := func() int {
+		n := 0
+		for _, col := range m.columns {
+			n += len(col)
+		}
+		return n
+	}
+	if got := totalVisible(); got != 3 {
+		t.Fatalf("initial visible=%d, want 3 (no filter)", got)
+	}
+
+	press := func() {
+		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'M'}})
+		m = updated.(boardModel)
+		if cmd == nil {
+			t.Fatal("expected cmd after M press")
+		}
+		updated, _ = m.Update(cmd())
+		m = updated.(boardModel)
+	}
+
+	press()
+	if m.milestoneFilter != "v0.1" {
+		t.Errorf("after press 1: filter=%q want v0.1", m.milestoneFilter)
+	}
+	if got := totalVisible(); got != 1 {
+		t.Errorf("v0.1 visible=%d want 1", got)
+	}
+
+	press()
+	if m.milestoneFilter != "v0.2" {
+		t.Errorf("after press 2: filter=%q want v0.2", m.milestoneFilter)
+	}
+	if got := totalVisible(); got != 1 {
+		t.Errorf("v0.2 visible=%d want 1", got)
+	}
+
+	press()
+	if m.milestoneFilter != "" {
+		t.Errorf("after press 3: filter=%q want '' (cycled to All)", m.milestoneFilter)
+	}
+	if got := totalVisible(); got != 3 {
+		t.Errorf("all visible=%d want 3", got)
+	}
+}
+
 func TestBoardSpaceMovesIssueToDone(t *testing.T) {
 	s := newStore(t)
 	_, _ = s.CreateProject("CLI", "Cliban", "")

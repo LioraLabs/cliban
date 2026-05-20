@@ -25,6 +25,9 @@ type boardModel struct {
 	openDetailKey  *domain.IssueKey
 	showMilestones bool
 	editorErr      error
+	// milestoneFilter narrows the board to a single milestone when non-empty.
+	// Cycled by pressing 'M' (uppercase).
+	milestoneFilter string
 	// followKey is set before any mutation that may move the selected issue
 	// (status change, within-column reorder). When the next boardLoadedMsg
 	// arrives, the cursor is repositioned onto that issue's new row/column.
@@ -43,8 +46,9 @@ type boardLoadedMsg struct {
 func (m boardModel) Init() tea.Cmd {
 	storeRef := m.store
 	pk := m.projectKey
+	milestone := m.milestoneFilter
 	return func() tea.Msg {
-		all, err := storeRef.ListIssues(store.ListIssuesFilter{ProjectKey: pk})
+		all, err := storeRef.ListIssues(store.ListIssuesFilter{ProjectKey: pk, MilestoneName: milestone})
 		if err != nil {
 			return boardLoadedMsg{err: err}
 		}
@@ -172,6 +176,27 @@ func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "m":
 		m.showMilestones = !m.showMilestones
+	case "M":
+		milestones, _ := m.store.ListMilestones(m.projectKey, "")
+		if len(milestones) == 0 {
+			return m, nil
+		}
+		next := ""
+		found := false
+		for i, ms := range milestones {
+			if ms.Name == m.milestoneFilter {
+				if i+1 < len(milestones) {
+					next = milestones[i+1].Name
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			next = milestones[0].Name
+		}
+		m.milestoneFilter = next
+		return m, m.Init()
 	case "e":
 		sel := m.selected()
 		if sel != nil {
@@ -345,7 +370,10 @@ func (m boardModel) View() string {
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
 
-	helpText := "hjkl move  enter detail  e edit  n new  Space mv  a archive  / filter  r refresh  q quit"
+	helpText := "hjkl move  enter detail  e edit  n new  Space mv  a archive  M milestone  / filter  r refresh  q quit"
+	if m.milestoneFilter != "" {
+		helpText = fmt.Sprintf("milestone: %s  | %s", m.milestoneFilter, helpText)
+	}
 	if m.filter != "" || m.filtering {
 		helpText = fmt.Sprintf("filter: %s  | %s", m.filter, helpText)
 	}
