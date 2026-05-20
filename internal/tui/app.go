@@ -39,6 +39,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
+	case marqueeTickMsg:
+		// Always route the marquee tick to the board, regardless of which
+		// view is currently visible, so the tick chain survives while the
+		// issue detail view is open and resumes seamlessly on return.
+		nm, cmd := m.board.Update(msg)
+		m.board = nm.(boardModel)
+		return m, cmd
 	}
 	var cmd tea.Cmd
 	switch m.view {
@@ -48,9 +55,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.projects = nm.(projectsModel)
 		if m.projects.selected != "" {
 			m.board = newBoardModel(m.store, m.projects.selected)
+			// Bubble Tea only sends WindowSizeMsg on terminal resize, so a
+			// view created mid-session never learns its size on its own.
+			// Hand it the cached dimensions so scrolling math works on the
+			// first render rather than only after the next resize.
+			m.board.width = m.width
+			m.board.height = m.height
 			m.view = viewBoard
 			m.projects.selected = ""
-			return m, m.board.Init()
+			return m, tea.Batch(m.board.Init(), marqueeTick())
 		}
 	case viewBoard:
 		var nm tea.Model

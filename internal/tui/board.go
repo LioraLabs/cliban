@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/alex/cliban/internal/domain"
 	"github.com/alex/cliban/internal/store"
@@ -10,13 +11,30 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// boardColChrome is the column's non-content overhead: rounded border (2) +
+// horizontal padding (2). Only one column is ever visible at a time; it
+// expands to fill the terminal width, and h/l scroll through the strip.
+const (
+	boardColChrome = 4
+	// boardCardContentFallback is used before any WindowSizeMsg arrives.
+	boardCardContentFallback = 30
+)
+
 type boardModel struct {
-	store          *store.Store
-	projectKey     string
-	columns        [5][]*domain.Issue
-	colCursor      int
-	rowCursor      [5]int
-	width          int
+	store      *store.Store
+	projectKey string
+	columns    [5][]*domain.Issue
+	colCursor  int
+	rowCursor  [5]int
+	width      int
+	height     int
+	// colScrollH is the index of the leftmost visible column. Adjusted by
+	// clampScroll so the selected column is always rendered when the
+	// terminal can't fit all five.
+	colScrollH int
+	// rowScroll[i] is the index of the topmost visible card in column i.
+	// Adjusted by clampScroll so the selected card stays in view.
+	rowScroll      [5]int
 	back           bool
 	err            error
 	awaitingMove   bool
@@ -37,6 +55,23 @@ type boardModel struct {
 	// (status change, within-column reorder). When the next boardLoadedMsg
 	// arrives, the cursor is repositioned onto that issue's new row/column.
 	followKey *domain.IssueKey
+	// Marquee state: when the selected card's title overflows the column
+	// width, it scrolls horizontally one rune per tick so the rest can be
+	// read. marqueeKey tracks which issue is currently scrolling so the
+	// offset resets when selection moves.
+	marqueeOffset int
+	marqueePause  int
+	marqueeKey    *domain.IssueKey
+}
+
+type marqueeTickMsg struct{}
+
+// marqueeTickInterval controls scroll speed. Slow enough to read, fast enough
+// that long titles reveal themselves in a few seconds.
+const marqueeTickInterval = 200 * time.Millisecond
+
+func marqueeTick() tea.Cmd {
+	return tea.Tick(marqueeTickInterval, func(time.Time) tea.Msg { return marqueeTickMsg{} })
 }
 
 func newBoardModel(s *store.Store, key string) boardModel {
@@ -78,6 +113,8 @@ func (m boardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = v.Width
+		m.height = v.Height
+		m.clampScroll()
 	case boardLoadedMsg:
 		m.columns = v.cols
 		m.err = v.err
@@ -105,8 +142,25 @@ func (m boardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.followKey = nil
 		}
+		m.clampScroll()
+	case marqueeTickMsg:
+		selKey := m.selectedKey()
+		sameSel := selKey != nil && m.marqueeKey != nil && *selKey == *m.marqueeKey
+		if !sameSel {
+			m.marqueeKey = selKey
+			m.marqueeOffset = 0
+			m.marqueePause = 3 // ~600ms pause at the start so users can read
+		} else if m.marqueePause > 0 {
+			m.marqueePause--
+		} else {
+			m.marqueeOffset++
+		}
+		return m, marqueeTick()
 	case tea.KeyMsg:
-		return m.handleKey(v)
+		nm, cmd := m.handleKey(v)
+		nb := nm.(boardModel)
+		nb.clampScroll()
+		return nb, cmd
 	case editorFinishedMsg:
 		if v.err != nil {
 			m.editorErr = v.err
@@ -406,14 +460,116 @@ func statusForKey(s string) (domain.Status, bool) {
 	return "", false
 }
 
+// viewport returns the per-card content width, how many columns are visible
+// (always 1 — the single column fills the terminal width), and how many lines
+// are available for card content inside that column. Falls back to a roomy
+// default width before any WindowSizeMsg has been received.
+func (m boardModel) viewport() (cardWidth, colsToShow, rowBudget int) {
+	colsToShow = 1
+	cardWidth = boardCardContentFallback
+	if m.width > 0 {
+		cardWidth = m.width - boardColChrome
+		if cardWidth < 18 {
+			cardWidth = 18
+		}
+	}
+	rowBudget = 20
+	if m.height > 0 {
+		// title (1) + column borders top/bottom (2) + column header (1) +
+		// help bar (1) + safety margin for wrap (2).
+		rowBudget = m.height - 7
+		if rowBudget < 4 {
+			rowBudget = 4
+		}
+	}
+	return
+}
+
+// cardHeight returns the number of lines a card occupies when rendered.
+// Cards are 2 lines normally and 3 when a milestone tag is shown.
+func (m boardModel) cardHeight(issue *domain.Issue) int {
+	if issue.MilestoneID != nil {
+		if _, ok := m.milestonesByID[*issue.MilestoneID]; ok {
+			return 3
+		}
+	}
+	return 2
+}
+
+// clampScroll keeps colScrollH and rowScroll in a state where the current
+// cursor is on screen. Reserves space for "↑ N more" / "↓ N more" overflow
+// indicators so the row math doesn't have to know whether they'll be drawn.
+func (m *boardModel) clampScroll() {
+	_, colsToShow, rowBudget := m.viewport()
+
+	if m.colCursor < m.colScrollH {
+		m.colScrollH = m.colCursor
+	}
+	if m.colCursor >= m.colScrollH+colsToShow {
+		m.colScrollH = m.colCursor - colsToShow + 1
+	}
+	if m.colScrollH < 0 {
+		m.colScrollH = 0
+	}
+	maxScrollH := 5 - colsToShow
+	if maxScrollH < 0 {
+		maxScrollH = 0
+	}
+	if m.colScrollH > maxScrollH {
+		m.colScrollH = maxScrollH
+	}
+
+	cardBudget := rowBudget - 2
+	if cardBudget < 1 {
+		cardBudget = 1
+	}
+	for i := 0; i < 5; i++ {
+		cards := m.columns[i]
+		if len(cards) == 0 {
+			m.rowScroll[i] = 0
+			continue
+		}
+		cursor := m.rowCursor[i]
+		if cursor < 0 {
+			cursor = 0
+		}
+		if cursor >= len(cards) {
+			cursor = len(cards) - 1
+		}
+		if m.rowScroll[i] > cursor {
+			m.rowScroll[i] = cursor
+		}
+		if m.rowScroll[i] < 0 {
+			m.rowScroll[i] = 0
+		}
+		for m.rowScroll[i] < cursor {
+			used := 0
+			fits := false
+			for r := m.rowScroll[i]; r < len(cards); r++ {
+				ch := m.cardHeight(cards[r])
+				if used+ch > cardBudget {
+					break
+				}
+				used += ch
+				if r == cursor {
+					fits = true
+					break
+				}
+			}
+			if fits {
+				break
+			}
+			m.rowScroll[i]++
+		}
+	}
+}
+
 func (m boardModel) View() string {
 	headers := []string{"BACKLOG", "IN-PROG", "BLOCKED", "IN-REV", "DONE"}
-	colWidth := 22
-	if m.width > 0 {
-		colWidth = (m.width - 8) / 5
-		if colWidth < 14 {
-			colWidth = 14
-		}
+	cardWidth, colsToShow, rowBudget := m.viewport()
+	cardBudget := rowBudget - 2
+	if cardBudget < 1 {
+		cardBudget = 1
 	}
 
 	filtered := m.columns
@@ -430,36 +586,100 @@ func (m boardModel) View() string {
 		filtered = fcols
 	}
 
-	cols := make([]string, 5)
-	for i := 0; i < 5; i++ {
-		// Clamp cursor if filter shrinks column.
-		rowCursor := m.rowCursor[i]
-		if len(filtered[i]) > 0 && rowCursor >= len(filtered[i]) {
-			rowCursor = len(filtered[i]) - 1
+	visible := make([]string, 0, colsToShow)
+	for offset := 0; offset < colsToShow; offset++ {
+		i := m.colScrollH + offset
+		if i >= 5 {
+			break
 		}
+		cards := filtered[i]
+		cursor := m.rowCursor[i]
+		if len(cards) > 0 && cursor >= len(cards) {
+			cursor = len(cards) - 1
+		}
+
+		// When a filter is active the indices it produces don't match the
+		// stored rowScroll. Recompute a local scroll offset that keeps the
+		// (clamped) cursor visible without mutating model state.
+		scroll := m.rowScroll[i]
+		if m.filter != "" {
+			scroll = 0
+			for scroll < cursor {
+				used := 0
+				fits := false
+				for r := scroll; r < len(cards); r++ {
+					ch := m.cardHeight(cards[r])
+					if used+ch > cardBudget {
+						break
+					}
+					used += ch
+					if r == cursor {
+						fits = true
+						break
+					}
+				}
+				if fits {
+					break
+				}
+				scroll++
+			}
+		}
+		if scroll > 0 && scroll > cursor {
+			scroll = cursor
+		}
+		if scroll < 0 {
+			scroll = 0
+		}
+
 		var b strings.Builder
-		fmt.Fprintf(&b, "%s (%d)\n", headers[i], len(filtered[i]))
-		for r, issue := range filtered[i] {
-			titleLine := truncate(issue.Title, colWidth-2)
+		fmt.Fprintf(&b, "%s (%d)\n", headers[i], len(cards))
+		if scroll > 0 {
+			fmt.Fprintf(&b, "%s\n", StyleMuted.Render(fmt.Sprintf("↑ %d more", scroll)))
+		}
+
+		used := 0
+		lastVisible := scroll - 1
+		for r := scroll; r < len(cards); r++ {
+			issue := cards[r]
+			ch := m.cardHeight(issue)
+			if used+ch > cardBudget {
+				break
+			}
+			used += ch
+			lastVisible = r
+			titleWidth := cardWidth - 2
+			isSelected := i == m.colCursor && r == cursor
+			var titleLine string
+			if isSelected && m.marqueeKey != nil && m.marqueeKey.Seq == issue.Seq {
+				titleLine = renderMarquee(issue.Title, titleWidth, m.marqueeOffset)
+			} else {
+				titleLine = truncate(issue.Title, titleWidth)
+			}
 			milestoneLine := ""
 			if issue.MilestoneID != nil {
 				if name, ok := m.milestonesByID[*issue.MilestoneID]; ok {
-					milestoneLine = "\n  " + StyleMuted.Render("⟜ "+truncate(name, colWidth-4))
+					milestoneLine = "\n  " + StyleMuted.Render("⟜ "+truncate(name, cardWidth-4))
 				}
 			}
 			card := fmt.Sprintf("%s-%d %s\n  %s%s",
 				m.projectKey, issue.Seq, PriorityDot(string(issue.Priority)),
 				titleLine, milestoneLine)
-			if i == m.colCursor && r == rowCursor {
+			if i == m.colCursor && r == cursor {
 				card = StyleSelected.Render(card)
 			}
 			b.WriteString(card + "\n")
 		}
-		cols[i] = StyleColumn.Width(colWidth).Render(b.String())
+		if lastVisible+1 < len(cards) {
+			remaining := len(cards) - (lastVisible + 1)
+			fmt.Fprintf(&b, "%s", StyleMuted.Render(fmt.Sprintf("↓ %d more", remaining)))
+		}
+
+		visible = append(visible, StyleColumn.Width(cardWidth).Render(b.String()))
 	}
-	body := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, visible...)
 
 	helpText := "hjkl move  enter detail  e edit  n new  N ms+  t tag-ms  Space mv  a archive  M ms-filter  / filter  r refresh  q quit"
+	helpText = fmt.Sprintf("col %d/5  | %s", m.colCursor+1, helpText)
 	if m.milestoneFilter != "" {
 		helpText = fmt.Sprintf("milestone: %s  | %s", m.milestoneFilter, helpText)
 	}
@@ -476,6 +696,29 @@ func (m boardModel) View() string {
 		return base + "\n" + renderMilestoneOverlay(m.store, m.projectKey)
 	}
 	return base
+}
+
+// renderMarquee returns a width-wide window over a cyclic "title<sep>title<sep>…"
+// strip, advanced by offset runes. Titles that already fit are returned as-is.
+func renderMarquee(title string, width, offset int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(title)
+	if len(runes) <= width {
+		return title
+	}
+	sep := []rune("   •   ")
+	cycle := make([]rune, 0, len(runes)+len(sep))
+	cycle = append(cycle, runes...)
+	cycle = append(cycle, sep...)
+	n := len(cycle)
+	offset = ((offset % n) + n) % n
+	out := make([]rune, width)
+	for i := 0; i < width; i++ {
+		out[i] = cycle[(offset+i)%n]
+	}
+	return string(out)
 }
 
 func truncate(s string, n int) string {

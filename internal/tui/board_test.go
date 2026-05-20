@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -190,6 +191,139 @@ func TestBoardTagCyclesIssueMilestone(t *testing.T) {
 	if got := currentMilestone(); got != "" {
 		t.Errorf("after press 3: milestone=%q want '' (cleared)", got)
 	}
+}
+
+// TestBoardVerticalScrollAdjustsToCursor verifies that when a column has more
+// cards than fit in the viewport, moving the cursor downward scrolls the
+// column so the cursor stays visible.
+func TestBoardVerticalScrollAdjustsToCursor(t *testing.T) {
+	s := newStore(t)
+	_, _ = s.CreateProject("CLI", "Cliban", "")
+	for i := 0; i < 30; i++ {
+		_, _ = s.CreateIssue(store.CreateIssueParams{ProjectKey: "CLI", Title: fmt.Sprintf("t-%d", i)})
+	}
+
+	m := newBoardModel(s, "CLI")
+	m.width, m.height = 160, 16 // tight height → rowBudget ≈ 9, cardBudget ≈ 7
+	updated, _ := m.Update(m.Init()())
+	m = updated.(boardModel)
+	if m.rowScroll[0] != 0 {
+		t.Fatalf("initial rowScroll=%d, want 0", m.rowScroll[0])
+	}
+
+	for i := 0; i < 25; i++ {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		m = updated.(boardModel)
+	}
+	if m.rowCursor[0] != 25 {
+		t.Fatalf("rowCursor=%d, want 25", m.rowCursor[0])
+	}
+	if m.rowScroll[0] == 0 {
+		t.Errorf("rowScroll stayed 0 after moving cursor to row 25; column should have scrolled")
+	}
+	if m.rowScroll[0] > m.rowCursor[0] {
+		t.Errorf("rowScroll=%d past rowCursor=%d", m.rowScroll[0], m.rowCursor[0])
+	}
+
+	for i := 0; i < 25; i++ {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+		m = updated.(boardModel)
+	}
+	if m.rowScroll[0] != 0 {
+		t.Errorf("after scrolling back up rowScroll=%d, want 0", m.rowScroll[0])
+	}
+}
+
+// TestBoardHorizontalScrollAdjustsToCursor verifies that when fewer than five
+// columns fit in the terminal width, moving the column cursor right scrolls
+// the column strip so the selected column stays visible.
+func TestBoardHorizontalScrollAdjustsToCursor(t *testing.T) {
+	s := newStore(t)
+	_, _ = s.CreateProject("CLI", "Cliban", "")
+	_, _ = s.CreateIssue(store.CreateIssueParams{ProjectKey: "CLI", Title: "x"})
+
+	m := newBoardModel(s, "CLI")
+	m.width, m.height = 70, 30 // slot = 26+4 = 30, so only 2 columns fit
+	updated, _ := m.Update(m.Init()())
+	m = updated.(boardModel)
+
+	_, colsToShow, _ := m.viewport()
+	if colsToShow >= 5 {
+		t.Fatalf("expected fewer than 5 columns visible at width 70, got %d", colsToShow)
+	}
+	if m.colScrollH != 0 {
+		t.Fatalf("initial colScrollH=%d, want 0", m.colScrollH)
+	}
+
+	for i := 0; i < 4; i++ {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+		m = updated.(boardModel)
+	}
+	if m.colCursor != 4 {
+		t.Fatalf("colCursor=%d, want 4", m.colCursor)
+	}
+	if m.colScrollH == 0 {
+		t.Errorf("colScrollH stayed 0 after cursor reached col 4; strip should have scrolled")
+	}
+	if m.colCursor < m.colScrollH || m.colCursor >= m.colScrollH+colsToShow {
+		t.Errorf("colCursor=%d not in visible window [%d,%d)", m.colCursor, m.colScrollH, m.colScrollH+colsToShow)
+	}
+
+	for i := 0; i < 4; i++ {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+		m = updated.(boardModel)
+	}
+	if m.colScrollH != 0 {
+		t.Errorf("after returning cursor to col 0, colScrollH=%d, want 0", m.colScrollH)
+	}
+}
+
+func TestRenderMarquee(t *testing.T) {
+	t.Run("short title returned unchanged", func(t *testing.T) {
+		got := renderMarquee("hello", 10, 5)
+		if got != "hello" {
+			t.Errorf("got %q, want %q", got, "hello")
+		}
+	})
+	t.Run("equal-length title returned unchanged", func(t *testing.T) {
+		got := renderMarquee("0123456789", 10, 0)
+		if got != "0123456789" {
+			t.Errorf("got %q, want %q", got, "0123456789")
+		}
+	})
+	t.Run("overflow at offset 0 shows window start", func(t *testing.T) {
+		got := renderMarquee("Long title that doesn't fit", 10, 0)
+		want := "Long title"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+	t.Run("overflow advances by one rune per offset", func(t *testing.T) {
+		got := renderMarquee("Long title that doesn't fit", 10, 1)
+		want := "ong title "
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+	t.Run("cycle wraps with separator and repeats title", func(t *testing.T) {
+		// "abc" + "   •   " (7 runes) = 10-rune cycle. At offset 3 the window
+		// of width 10 covers separator + start of next title.
+		got := renderMarquee("abc", 3, 0) // short — returned as-is
+		if got != "abc" {
+			t.Errorf("short-title got %q, want %q", got, "abc")
+		}
+		// Force scrolling by passing a width smaller than the title.
+		got = renderMarquee("abcdef", 4, 6) // cycle is "abcdef   •   " (13 runes); offset 6 lands on separator start
+		want := "   •"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+	t.Run("width zero returns empty", func(t *testing.T) {
+		if got := renderMarquee("anything", 0, 0); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
 }
 
 func TestBoardSpaceMovesIssueToDone(t *testing.T) {
