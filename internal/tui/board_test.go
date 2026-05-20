@@ -40,6 +40,45 @@ func TestBoardRendersColumns(t *testing.T) {
 	tm.WaitFinished(t, teatest.WithFinalTimeout(2*time.Second))
 }
 
+// TestBoardCursorFollowsMove verifies that after moving an issue to a new
+// column, the cursor lands on that issue's new location instead of staying
+// in the old column on whatever happens to be there.
+func TestBoardCursorFollowsMove(t *testing.T) {
+	s := newStore(t)
+	_, _ = s.CreateProject("CLI", "Cliban", "")
+	a, _ := s.CreateIssue(store.CreateIssueParams{ProjectKey: "CLI", Title: "alpha"})
+	_, _ = s.CreateIssue(store.CreateIssueParams{ProjectKey: "CLI", Title: "beta"})
+
+	m := newBoardModel(s, "CLI")
+	loadCmd := m.Init()
+	updated, _ := m.Update(loadCmd())
+	m = updated.(boardModel)
+
+	if sel := m.selected(); sel == nil || sel.Seq != a.Seq {
+		t.Fatalf("initial selection: want alpha (seq %d), got %+v", a.Seq, sel)
+	}
+
+	// Press Space then 'd' to move alpha to DONE.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = updated.(boardModel)
+	updated, moveCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(boardModel)
+	if moveCmd == nil {
+		t.Fatal("expected a move command")
+	}
+	// Run the move command (talks to the store) and feed the result back in.
+	updated, _ = m.Update(moveCmd())
+	m = updated.(boardModel)
+
+	if m.colCursor != 4 {
+		t.Errorf("colCursor = %d, want 4 (DONE)", m.colCursor)
+	}
+	sel := m.selected()
+	if sel == nil || sel.Seq != a.Seq {
+		t.Errorf("selected after move = %+v, want alpha (seq %d)", sel, a.Seq)
+	}
+}
+
 func TestBoardSpaceMovesIssueToDone(t *testing.T) {
 	s := newStore(t)
 	_, _ = s.CreateProject("CLI", "Cliban", "")

@@ -25,6 +25,10 @@ type boardModel struct {
 	openDetailKey  *domain.IssueKey
 	showMilestones bool
 	editorErr      error
+	// followKey is set before any mutation that may move the selected issue
+	// (status change, within-column reorder). When the next boardLoadedMsg
+	// arrives, the cursor is repositioned onto that issue's new row/column.
+	followKey *domain.IssueKey
 }
 
 func newBoardModel(s *store.Store, key string) boardModel {
@@ -60,6 +64,19 @@ func (m boardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.rowCursor[i] >= len(m.columns[i]) {
 				m.rowCursor[i] = maxInt(0, len(m.columns[i])-1)
 			}
+		}
+		// If a recent action requested cursor-follow, locate the issue and snap to it.
+		if m.followKey != nil {
+			for col := 0; col < 5; col++ {
+				for row, issue := range m.columns[col] {
+					if issue.Seq == m.followKey.Seq {
+						m.colCursor = col
+						m.rowCursor[col] = row
+						break
+					}
+				}
+			}
+			m.followKey = nil
 		}
 	case tea.KeyMsg:
 		return m.handleKey(v)
@@ -103,6 +120,7 @@ func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
+		m.followKey = m.selectedKey()
 		return m, m.moveSelectedTo(st)
 	}
 	switch k.String() {
@@ -126,15 +144,19 @@ func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "H":
 		if cur := m.selected(); cur != nil && m.colCursor > 0 {
+			m.followKey = m.selectedKey()
 			return m, m.moveSelectedTo(domain.AllStatuses()[m.colCursor-1])
 		}
 	case "L":
 		if cur := m.selected(); cur != nil && m.colCursor < 4 {
+			m.followKey = m.selectedKey()
 			return m, m.moveSelectedTo(domain.AllStatuses()[m.colCursor+1])
 		}
 	case "J":
+		m.followKey = m.selectedKey()
 		return m, m.shuffleSelected(+1)
 	case "K":
+		m.followKey = m.selectedKey()
 		return m, m.shuffleSelected(-1)
 	case " ":
 		m.awaitingMove = true
@@ -171,6 +193,14 @@ func (m boardModel) selected() *domain.Issue {
 		return nil
 	}
 	return col[m.rowCursor[m.colCursor]]
+}
+
+func (m boardModel) selectedKey() *domain.IssueKey {
+	sel := m.selected()
+	if sel == nil {
+		return nil
+	}
+	return &domain.IssueKey{Project: m.projectKey, Seq: sel.Seq}
 }
 
 func (m boardModel) moveSelectedTo(st domain.Status) tea.Cmd {
