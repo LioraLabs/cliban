@@ -2,8 +2,11 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestIssueArchiveLifecycle(t *testing.T) {
@@ -120,5 +123,134 @@ func TestIssueLifecycle(t *testing.T) {
 	out, _, _ = runCLI(t, "issue", "ls", "--project", "CLI", "--json")
 	if strings.Count(out, `"key":`) != 0 {
 		t.Errorf("issues remained: %s", out)
+	}
+}
+
+func TestIssueLs_UpdatedSince_Duration(t *testing.T) {
+	if _, _, c := runCLI(t, "init"); c != 0 {
+		t.Fatal("init")
+	}
+	if _, _, c := runCLI(t, "project", "add", "USN", "--name", "UpdSince"); c != 0 {
+		t.Fatal("project add")
+	}
+	if _, _, c := runCLI(t, "issue", "add", "--project", "USN", "--title", "old issue"); c != 0 {
+		t.Fatal("old add")
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if _, _, c := runCLI(t, "issue", "add", "--project", "USN", "--title", "fresh issue"); c != 0 {
+		t.Fatal("fresh add")
+	}
+	out, _, c := runCLI(t, "issue", "ls", "--project", "USN", "--updated-since", "1s", "--json")
+	if c != 0 {
+		t.Fatalf("ls code=%d out=%s", c, out)
+	}
+	var titles []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		titles = append(titles, m["title"].(string))
+	}
+	if len(titles) != 1 || titles[0] != "fresh issue" {
+		t.Fatalf("expected exactly fresh issue; got %v", titles)
+	}
+}
+
+func TestIssueLs_UpdatedSince_Timestamp(t *testing.T) {
+	if _, _, c := runCLI(t, "init"); c != 0 {
+		t.Fatal("init")
+	}
+	if _, _, c := runCLI(t, "project", "add", "UST", "--name", "UpdSinceTs"); c != 0 {
+		t.Fatal("project add")
+	}
+	if _, _, c := runCLI(t, "issue", "add", "--project", "UST", "--title", "issue 1"); c != 0 {
+		t.Fatal("add 1")
+	}
+	cutoff := time.Now().UTC().Format(time.RFC3339)
+	time.Sleep(1100 * time.Millisecond)
+	if _, _, c := runCLI(t, "issue", "add", "--project", "UST", "--title", "issue 2"); c != 0 {
+		t.Fatal("add 2")
+	}
+	out, _, c := runCLI(t, "issue", "ls", "--project", "UST", "--updated-since", cutoff, "--json")
+	if c != 0 {
+		t.Fatalf("ls code=%d", c)
+	}
+	if !strings.Contains(out, "issue 2") || strings.Contains(out, "issue 1") {
+		t.Fatalf("expected only issue 2; got %s", out)
+	}
+}
+
+// writeIssueDesc creates a tempfile with the given body and adds an issue
+// whose description is read from that file. Returns the resulting issue key.
+func writeIssueDesc(t *testing.T, project, title, body string) {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "desc.md")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatalf("write desc: %v", err)
+	}
+	if _, _, c := runCLI(t, "issue", "add", "--project", project, "--title", title, "--description-file", p); c != 0 {
+		t.Fatalf("issue add code=%d", c)
+	}
+}
+
+func TestIssueShow_Section_Spec(t *testing.T) {
+	if _, _, c := runCLI(t, "init"); c != 0 {
+		t.Fatal("init")
+	}
+	if _, _, c := runCLI(t, "project", "add", "SEC", "--name", "Sect"); c != 0 {
+		t.Fatal("project add")
+	}
+	body := "## Spec\n\nthe spec body\n\n## Plan\n\n### Task 1: foo\n\n- [ ] **Step 1: a**\n"
+	writeIssueDesc(t, "SEC", "test", body)
+	out, _, c := runCLI(t, "issue", "show", "SEC-1", "--section", "spec")
+	if c != 0 {
+		t.Fatalf("show code=%d out=%s", c, out)
+	}
+	if !strings.Contains(out, "the spec body") {
+		t.Fatalf("expected spec body in output; got %q", out)
+	}
+	if strings.Contains(out, "the spec body\n\n## Plan") {
+		t.Fatalf("section output should stop at next H2; got %q", out)
+	}
+}
+
+func TestIssueShow_Section_NotFound(t *testing.T) {
+	if _, _, c := runCLI(t, "init"); c != 0 {
+		t.Fatal("init")
+	}
+	if _, _, c := runCLI(t, "project", "add", "SEC2", "--name", "Sect2"); c != 0 {
+		t.Fatal("project add")
+	}
+	writeIssueDesc(t, "SEC2", "no plan", "## Spec\n\njust spec\n")
+	_, errOut, c := runCLI(t, "issue", "show", "SEC2-1", "--section", "plan")
+	if c == 0 {
+		t.Fatal("expected non-zero exit for missing plan section")
+	}
+	if !strings.Contains(errOut, "no ## Plan section") {
+		t.Fatalf("expected no-plan error; got %q", errOut)
+	}
+}
+
+func TestIssueShow_Pager_FallbackPlainOutput(t *testing.T) {
+	// Use 'cat' as PAGER so the pipe is non-interactive and ends up on stdout.
+	os.Setenv("PAGER", "cat")
+	t.Cleanup(func() { os.Unsetenv("PAGER") })
+	if _, _, c := runCLI(t, "init"); c != 0 {
+		t.Fatal("init")
+	}
+	if _, _, c := runCLI(t, "project", "add", "PGR", "--name", "Pager"); c != 0 {
+		t.Fatal("project add")
+	}
+	writeIssueDesc(t, "PGR", "showme", "## Spec\n\nbody\n")
+	out, _, c := runCLI(t, "issue", "show", "PGR-1", "--pager")
+	if c != 0 {
+		t.Fatalf("show code=%d", c)
+	}
+	if !strings.Contains(out, "body") {
+		t.Fatalf("expected body in piped output, got:\n%s", out)
 	}
 }

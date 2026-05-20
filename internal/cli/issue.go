@@ -2,14 +2,17 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/alex/cliban/internal/descmd"
 	"github.com/alex/cliban/internal/domain"
 	"github.com/alex/cliban/internal/store"
 	"github.com/spf13/cobra"
@@ -18,7 +21,8 @@ import (
 func issueCmd() *cobra.Command {
 	c := &cobra.Command{Use: "issue", Short: "Manage issues"}
 	c.AddCommand(issueAddCmd(), issueListCmd(), issueShowCmd(), issueEditCmd(), issueMvCmd(), issueRmCmd(),
-		issueArchiveCmd(), issueUnarchiveCmd(), issueArchiveDoneCmd(), issueImportCmd(), issueBlockedCmd())
+		issueArchiveCmd(), issueUnarchiveCmd(), issueArchiveDoneCmd(), issueImportCmd(), issueBlockedCmd(),
+		issueCurrentCmd(), issueTickCmd(), issueLogCmd(), issuePromoteCmd())
 	return c
 }
 
@@ -318,6 +322,7 @@ func printIssueResult(w io.Writer, s *store.Store, projectKey string, issue *dom
 
 func issueListCmd() *cobra.Command {
 	var project, status, priority, milestone, parent, sortBy string
+	var updatedSinceFlag string
 	var labels []string
 	var noSubs, asJSON, includeArchived bool
 	c := &cobra.Command{
@@ -356,6 +361,13 @@ func issueListCmd() *cobra.Command {
 					return err
 				}
 				f.ParentKey = &k
+			}
+			if updatedSinceFlag != "" {
+				ts, err := parseUpdatedSince(updatedSinceFlag, time.Now())
+				if err != nil {
+					return err
+				}
+				f.UpdatedSince = &ts
 			}
 			issues, err := s.ListIssues(f)
 			if err != nil {
@@ -403,6 +415,7 @@ func issueListCmd() *cobra.Command {
 	c.Flags().BoolVar(&noSubs, "no-subs", false, "exclude sub-issues")
 	c.Flags().BoolVar(&asJSON, "json", false, "NDJSON output (one compact JSON object per line)")
 	c.Flags().BoolVar(&includeArchived, "archived", false, "include archived issues")
+	c.Flags().StringVar(&updatedSinceFlag, "updated-since", "", "filter issues updated within a duration (e.g. 4h) or since an RFC3339 timestamp")
 	return c
 }
 
@@ -466,6 +479,21 @@ func sortIssues(issues []*domain.Issue, spec string) error {
 	return nil
 }
 
+// parseUpdatedSince accepts either a duration ("4h", "30m") or an
+// RFC3339 timestamp and returns the absolute UTC time to filter from.
+func parseUpdatedSince(s string, now time.Time) (time.Time, error) {
+	if d, err := time.ParseDuration(s); err == nil {
+		return now.UTC().Add(-d), nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC(), nil
+	}
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t.UTC(), nil
+	}
+	return time.Time{}, fmt.Errorf("%w: invalid --updated-since %q (want duration like 4h or RFC3339 timestamp)", store.ErrValidation, s)
+}
+
 func projectKeysByID(s *store.Store) map[int64]string {
 	out := map[int64]string{}
 	ps, err := s.ListProjects(true)
@@ -478,8 +506,25 @@ func projectKeysByID(s *store.Store) map[int64]string {
 	return out
 }
 
+// sectionAnchor maps a --section short name to the canonical H2 anchor text.
+func sectionAnchor(s string) (string, error) {
+	switch s {
+	case "spec":
+		return "Spec", nil
+	case "plan":
+		return "Plan", nil
+	case "activity":
+		return "Activity Log", nil
+	case "notes":
+		return "Notes", nil
+	default:
+		return "", fmt.Errorf("%w: invalid --section %q (want spec|plan|activity|notes)", store.ErrValidation, s)
+	}
+}
+
 func issueShowCmd() *cobra.Command {
-	var asJSON bool
+	var asJSON, usePager bool
+	var section string
 	c := &cobra.Command{
 		Use:   "show <KEY>",
 		Short: "Show an issue",
@@ -498,19 +543,54 @@ func issueShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// --section is mutually exclusive with --json and --pager; it's a
+			// targeted machine read.
+			if section != "" {
+				anchor, err := sectionAnchor(section)
+				if err != nil {
+					return err
+				}
+				start, end, ok := descmd.FindSection(issue.Description, anchor)
+				if !ok {
+					return fmt.Errorf("%w: no ## %s section in %s", store.ErrNotFound, anchor, args[0])
+				}
+				fmt.Fprint(cmd.OutOrStdout(), issue.Description[start:end])
+				return nil
+			}
 			projects := projectKeysByID(s)
 			if asJSON {
 				return WriteIssueJSON(cmd.OutOrStdout(), issueJSONInputs(s, projects, k.Project, issue))
 			}
 			parentKey, msName := resolveIssueRefs(s, projects, issue)
-			fmt.Fprintf(cmd.OutOrStdout(), "%s — %s\nstatus:    %s\npriority:  %s\nmilestone: %s\nparent:    %s\n\n%s\n",
+			body := fmt.Sprintf("%s — %s\nstatus:    %s\npriority:  %s\nmilestone: %s\nparent:    %s\n\n%s\n",
 				k, issue.Title, issue.Status, issue.Priority,
 				dashIfEmpty(msName), dashIfEmpty(parentKey), issue.Description)
+			if usePager {
+				return runPager(cmd.OutOrStdout(), []byte(body))
+			}
+			fmt.Fprint(cmd.OutOrStdout(), body)
 			return nil
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
+	c.Flags().StringVar(&section, "section", "", "show only one section: spec|plan|activity|notes")
+	c.Flags().BoolVar(&usePager, "pager", false, "pipe human-readable output through $PAGER")
 	return c
+}
+
+// runPager pipes the given bytes through $PAGER. If $PAGER is unset, falls
+// back to writing directly to fallback (the command's stdout).
+func runPager(fallback io.Writer, content []byte) error {
+	pager := os.Getenv("PAGER")
+	if pager == "" {
+		_, err := fallback.Write(content)
+		return err
+	}
+	cmd := exec.Command("sh", "-c", pager)
+	cmd.Stdin = bytes.NewReader(content)
+	cmd.Stdout = fallback
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func issueEditCmd() *cobra.Command {

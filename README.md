@@ -51,6 +51,55 @@ cliban completion powershell | Out-String | Invoke-Expression
 - Implementation plan: `docs/plans/2026-05-19-cliban.md`
 - Skill bundle for Claude Code: `skill/cliban-skill/SKILL.md`
 
+## Description contract
+
+Some cliban commands (`issue tick`, `issue promote`, `issue log`, `issue show --section`) parse the markdown structure of an issue's `description` field. They expect a small, well-defined contract:
+
+### Top-level sections
+
+The following H2 anchors are reserved. The exact heading text matters; cliban looks up sections by exact match.
+
+- `## Spec` — the design/brainstorm output for this issue
+- `## Plan` — the implementation plan
+- `## Activity Log` — chronological events
+- `## Notes` — long-lived notes (mostly for project-level descriptions)
+
+Anything else in the description is preserved untouched.
+
+### Plan tasks and steps
+
+Within `## Plan`, tasks are numbered H3 headings:
+
+```markdown
+## Plan
+
+### Task 1: short title
+
+- [ ] **Step 1: ...**
+- [ ] **Step 2: ...**
+
+### Task 2: another short title
+
+- [ ] **Step 1: ...**
+```
+
+- Tasks are numbered (`### Task <N>:`). Numbers must be unique within the section.
+- Steps are GFM checkbox lines at column zero: `- [ ] ...` or `- [x] ...`. Indented child bullets are not parsed as steps.
+
+### Promotion suffix
+
+A step that has been split into its own issue is suffixed with ` → KEY`:
+
+```markdown
+- [ ] **Step 3: CSRF middleware** → CLI-18
+```
+
+This is produced by `cliban issue promote` and consumed by readers (humans, and any tooling that walks plans).
+
+### Failure mode
+
+If the description structure is violated (missing `## Plan` anchor, renamed `### Task N`, etc.), the workflow commands exit with code 2 and a clear error pointing at the structural problem. No best-effort recovery — fix the description and retry.
+
 ## Test
 
 ```bash

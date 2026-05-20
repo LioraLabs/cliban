@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alex/cliban/internal/descmd"
 	"github.com/alex/cliban/internal/domain"
 )
 
@@ -172,7 +173,8 @@ type ListIssuesFilter struct {
 	NoSubs          bool
 	IncludeArchived bool
 	// LabelNames filters to issues that have ALL of the given label names.
-	LabelNames []string
+	LabelNames   []string
+	UpdatedSince *time.Time // optional; if set, only issues with updated_at >= this UTC time
 }
 
 func (s *Store) ListIssues(f ListIssuesFilter) ([]*domain.Issue, error) {
@@ -212,6 +214,10 @@ func (s *Store) ListIssues(f ListIssuesFilter) ([]*domain.Issue, error) {
 			WHERE l.name = ?
 		)`)
 		args = append(args, lbl)
+	}
+	if f.UpdatedSince != nil {
+		conds = append(conds, "i.updated_at >= ?")
+		args = append(args, f.UpdatedSince.UTC().Format(time.RFC3339Nano))
 	}
 	for idx, c := range conds {
 		if idx == 0 {
@@ -446,4 +452,227 @@ func (s *Store) ArchiveDoneInProject(projectKey string) (int, error) {
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
+}
+
+// TickResult describes the outcome of a successful TickStep call.
+type TickResult struct {
+	Key       domain.IssueKey
+	TaskN     int
+	StepM     int
+	Checked   bool
+	UpdatedAt time.Time
+}
+
+// TickStep flips the M-th step of task N in the description of issue k from
+// unchecked to checked. The mutation is wrapped in a single SQL transaction
+// so concurrent ticks are serialized by SQLite. Returns ErrValidation if the
+// description's ## Plan / Task N / Step M structure is malformed, the task
+// or step is missing, or the step is already checked.
+func (s *Store) TickStep(k domain.IssueKey, taskN, stepM int) (*TickResult, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	defer tx.Rollback()
+
+	var id int64
+	var desc string
+	if err := tx.QueryRow(`SELECT i.id, i.description FROM issue i JOIN project p ON p.id=i.project_id WHERE p.key=? AND i.seq=?`, k.Project, k.Seq).
+		Scan(&id, &desc); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	newDesc, err := descmd.TickStep(desc, taskN, stepM)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	now := s.nowISO()
+	if _, err := tx.Exec(`UPDATE issue SET description=?, updated_at=? WHERE id=?`, newDesc, now, id); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	ts, _ := time.Parse(time.RFC3339Nano, now)
+	return &TickResult{Key: k, TaskN: taskN, StepM: stepM, Checked: true, UpdatedAt: ts}, nil
+}
+
+type PromoteMode string
+
+const (
+	PromoteAsSubIssue PromoteMode = "sub-issue"
+	PromoteAsRelated  PromoteMode = "related"
+)
+
+type PromoteParams struct {
+	Parent domain.IssueKey
+	TaskN  int
+	StepM  int
+	Title  string
+	Mode   PromoteMode
+}
+
+type PromoteResult struct {
+	NewKey domain.IssueKey
+	Parent domain.IssueKey
+	TaskN  int
+	StepM  int
+}
+
+// PromoteStep creates a new issue (sub-issue or top-level w/ related_to) and
+// rewrites the step line in the parent's plan to reference the new issue.
+// All effects happen in a single transaction.
+func (s *Store) PromoteStep(p PromoteParams) (*PromoteResult, error) {
+	if p.Title == "" {
+		return nil, fmt.Errorf("%w: --title required", ErrValidation)
+	}
+	switch p.Mode {
+	case PromoteAsSubIssue, PromoteAsRelated:
+	default:
+		return nil, fmt.Errorf("%w: invalid --as %q (want sub-issue|related)", ErrValidation, p.Mode)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	defer tx.Rollback()
+
+	// 1. Read parent issue + project.
+	var parentID, projID int64
+	var parentDesc string
+	var parentParent sql.NullInt64
+	var issueSeq int64
+	if err := tx.QueryRow(`SELECT i.id, i.project_id, i.description, i.parent_id, p.issue_seq FROM issue i JOIN project p ON p.id=i.project_id WHERE p.key=? AND i.seq=?`,
+		p.Parent.Project, p.Parent.Seq).Scan(&parentID, &projID, &parentDesc, &parentParent, &issueSeq); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	if p.Mode == PromoteAsSubIssue && parentParent.Valid {
+		return nil, fmt.Errorf("%w: cannot promote as sub-issue of a sub-issue (would exceed depth 2)", ErrValidation)
+	}
+
+	// 2. Allocate new issue seq and insert.
+	newSeq := issueSeq + 1
+	var maxPos sql.NullFloat64
+	_ = tx.QueryRow(`SELECT MAX(position) FROM issue WHERE project_id=? AND status=?`, projID, string(domain.StatusBacklog)).Scan(&maxPos)
+	pos := 1000.0
+	if maxPos.Valid {
+		pos = maxPos.Float64 + 1000.0
+	}
+	now := s.nowISO()
+	var subParent any
+	if p.Mode == PromoteAsSubIssue {
+		subParent = parentID
+	}
+	res, err := tx.Exec(`INSERT INTO issue(project_id,milestone_id,parent_id,seq,title,description,status,priority,position,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		projID, nil, subParent, newSeq, p.Title, "", string(domain.StatusBacklog), string(domain.PriorityNone), pos, now, now)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	newID, _ := res.LastInsertId()
+	if _, err := tx.Exec(`UPDATE project SET issue_seq=?, updated_at=? WHERE id=?`, newSeq, now, projID); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+
+	// 3. If related mode, insert a related_to relation in BOTH directions
+	// (matches AddRelation's symmetric-edge convention so future reads from
+	// either side see the relation).
+	if p.Mode == PromoteAsRelated {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO issue_relation(from_issue_id,to_issue_id,type,created_at) VALUES(?,?,?,?)`,
+			newID, parentID, "related_to", now); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO issue_relation(from_issue_id,to_issue_id,type,created_at) VALUES(?,?,?,?)`,
+			parentID, newID, "related_to", now); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+		}
+	}
+
+	// 4. Rewrite the parent's step line.
+	step, ok := findStepForRewrite(parentDesc, p.TaskN, p.StepM)
+	if !ok {
+		return nil, fmt.Errorf("%w: cannot find Task %d Step %d in parent description", ErrValidation, p.TaskN, p.StepM)
+	}
+	newKey := domain.IssueKey{Project: p.Parent.Project, Seq: newSeq}
+	newLine := buildPromotedLine(step.Raw, p.Title, newKey)
+	newDesc, err := descmd.RewriteStepLine(parentDesc, p.TaskN, p.StepM, newLine)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	if _, err := tx.Exec(`UPDATE issue SET description=?, updated_at=? WHERE id=?`, newDesc, now, parentID); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	return &PromoteResult{NewKey: newKey, Parent: p.Parent, TaskN: p.TaskN, StepM: p.StepM}, nil
+}
+
+// findStepForRewrite is a thin wrapper around descmd.FindSection + FindTask +
+// FindStep used here to keep the existing Plan/Task/Step lookup contained.
+func findStepForRewrite(desc string, taskN, stepM int) (descmd.Step, bool) {
+	planStart, planEnd, ok := descmd.FindSection(desc, "Plan")
+	if !ok {
+		return descmd.Step{}, false
+	}
+	planBody := desc[planStart:planEnd]
+	taskStart, taskEnd, ok := descmd.FindTask(planBody, taskN)
+	if !ok {
+		return descmd.Step{}, false
+	}
+	return descmd.FindStep(planBody[taskStart:taskEnd], stepM)
+}
+
+// buildPromotedLine produces the rewritten step line with the "→ KEY"
+// suffix. If the original line already had a "→ ..." suffix, it's replaced.
+func buildPromotedLine(originalLine, newTitle string, newKey domain.IssueKey) string {
+	trimmed := strings.TrimRight(originalLine, "\n")
+	if idx := strings.LastIndex(trimmed, " → "); idx >= 0 {
+		trimmed = trimmed[:idx]
+	}
+	return fmt.Sprintf("%s → %s\n", trimmed, newKey.String())
+}
+
+type LogResult struct {
+	Key       domain.IssueKey
+	Entry     string
+	Timestamp time.Time
+}
+
+// AppendActivityLog atomically appends a chronological entry to the
+// ## Activity Log section of the issue's description, creating the section
+// if absent.
+func (s *Store) AppendActivityLog(k domain.IssueKey, message string) (*LogResult, error) {
+	if message == "" {
+		return nil, fmt.Errorf("%w: message required", ErrValidation)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	defer tx.Rollback()
+
+	var id int64
+	var desc string
+	if err := tx.QueryRow(`SELECT i.id, i.description FROM issue i JOIN project p ON p.id=i.project_id WHERE p.key=? AND i.seq=?`, k.Project, k.Seq).
+		Scan(&id, &desc); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	now := s.now().UTC()
+	newDesc := descmd.AppendActivityLog(desc, message, now)
+	if _, err := tx.Exec(`UPDATE issue SET description=?, updated_at=? WHERE id=?`, newDesc, now.Format(time.RFC3339Nano), id); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	return &LogResult{Key: k, Entry: message, Timestamp: now}, nil
 }

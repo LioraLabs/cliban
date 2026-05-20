@@ -28,7 +28,7 @@ func parseTarget(s string) (*time.Time, error) {
 }
 
 func milestoneAddCmd() *cobra.Command {
-	var project, name, desc, target string
+	var project, name, desc, descFile, target string
 	var asJSON bool
 	c := &cobra.Command{
 		Use:   "add",
@@ -43,7 +43,13 @@ func milestoneAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			m, err := s.CreateMilestone(strings.ToUpper(project), name, desc, tgt)
+			descChanged := cmd.Flags().Changed("description")
+			descFileChanged := cmd.Flags().Changed("description-file")
+			effDesc, _, err := resolveDescription(desc, descFile, descChanged, descFileChanged)
+			if err != nil {
+				return err
+			}
+			m, err := s.CreateMilestone(strings.ToUpper(project), name, effDesc, tgt)
 			if err != nil {
 				return err
 			}
@@ -57,6 +63,7 @@ func milestoneAddCmd() *cobra.Command {
 	c.Flags().StringVar(&project, "project", "", "project key (required)")
 	c.Flags().StringVar(&name, "name", "", "milestone name (required)")
 	c.Flags().StringVar(&desc, "description", "", "description")
+	c.Flags().StringVar(&descFile, "description-file", "", "read description from a file (use '-' for stdin)")
 	c.Flags().StringVar(&target, "target", "", "target date YYYY-MM-DD")
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 	_ = c.MarkFlagRequired("project")
@@ -186,7 +193,7 @@ func milestoneShowCmd() *cobra.Command {
 }
 
 func milestoneEditCmd() *cobra.Command {
-	var project, name, rename, desc, status, target string
+	var project, name, rename, desc, descFile, status, target string
 	var clearTarget bool
 	c := &cobra.Command{
 		Use:   "edit",
@@ -201,8 +208,14 @@ func milestoneEditCmd() *cobra.Command {
 			if cmd.Flags().Changed("rename") {
 				params.NewName = &rename
 			}
-			if cmd.Flags().Changed("description") {
-				params.Description = &desc
+			descChanged := cmd.Flags().Changed("description")
+			descFileChanged := cmd.Flags().Changed("description-file")
+			effDesc, descSet, err := resolveDescription(desc, descFile, descChanged, descFileChanged)
+			if err != nil {
+				return err
+			}
+			if descSet {
+				params.Description = &effDesc
 			}
 			if cmd.Flags().Changed("status") {
 				params.Status = &status
@@ -223,6 +236,7 @@ func milestoneEditCmd() *cobra.Command {
 	c.Flags().StringVar(&name, "name", "", "milestone name (required)")
 	c.Flags().StringVar(&rename, "rename", "", "new name")
 	c.Flags().StringVar(&desc, "description", "", "new description")
+	c.Flags().StringVar(&descFile, "description-file", "", "read description from a file (use '-' for stdin)")
 	c.Flags().StringVar(&status, "status", "", "new status (open|completed|cancelled)")
 	c.Flags().StringVar(&target, "target", "", "new target date YYYY-MM-DD")
 	c.Flags().BoolVar(&clearTarget, "clear-target", false, "clear target date")
