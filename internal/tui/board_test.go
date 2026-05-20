@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alex/cliban/internal/domain"
 	"github.com/alex/cliban/internal/store"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/exp/teatest"
@@ -137,6 +138,57 @@ func TestBoardMilestoneFilterCycles(t *testing.T) {
 	}
 	if got := totalVisible(); got != 3 {
 		t.Errorf("all visible=%d want 3", got)
+	}
+}
+
+// TestBoardTagCyclesIssueMilestone verifies 't' cycles the selected card's
+// milestone through none → v0.1 → v0.2 → none.
+func TestBoardTagCyclesIssueMilestone(t *testing.T) {
+	s := newStore(t)
+	_, _ = s.CreateProject("CLI", "Cliban", "")
+	_, _ = s.CreateMilestone("CLI", "v0.1", "", nil)
+	_, _ = s.CreateMilestone("CLI", "v0.2", "", nil)
+	i, _ := s.CreateIssue(store.CreateIssueParams{ProjectKey: "CLI", Title: "alpha"})
+
+	m := newBoardModel(s, "CLI")
+	updated, _ := m.Update(m.Init()())
+	m = updated.(boardModel)
+
+	currentMilestone := func() string {
+		got, err := s.GetIssueByKey(domain.IssueKey{Project: "CLI", Seq: i.Seq})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.MilestoneID == nil {
+			return ""
+		}
+		return m.milestonesByID[*got.MilestoneID]
+	}
+
+	press := func() {
+		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+		m = updated.(boardModel)
+		if cmd == nil {
+			t.Fatal("expected cmd after 't' press")
+		}
+		updated, _ = m.Update(cmd())
+		m = updated.(boardModel)
+	}
+
+	if currentMilestone() != "" {
+		t.Fatalf("initial milestone=%q want empty", currentMilestone())
+	}
+	press()
+	if got := currentMilestone(); got != "v0.1" {
+		t.Errorf("after press 1: milestone=%q want v0.1", got)
+	}
+	press()
+	if got := currentMilestone(); got != "v0.2" {
+		t.Errorf("after press 2: milestone=%q want v0.2", got)
+	}
+	press()
+	if got := currentMilestone(); got != "" {
+		t.Errorf("after press 3: milestone=%q want '' (cleared)", got)
 	}
 }
 

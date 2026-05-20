@@ -28,6 +28,11 @@ type boardModel struct {
 	// milestoneFilter narrows the board to a single milestone when non-empty.
 	// Cycled by pressing 'M' (uppercase).
 	milestoneFilter string
+	// milestonesOrdered lists every milestone in the current project in name order;
+	// used to cycle the SELECTED card's milestone with 't', and to render milestone
+	// names on cards. Refreshed by Init.
+	milestonesOrdered []milestoneRef
+	milestonesByID    map[int64]string
 	// followKey is set before any mutation that may move the selected issue
 	// (status change, within-column reorder). When the next boardLoadedMsg
 	// arrives, the cursor is repositioned onto that issue's new row/column.
@@ -38,9 +43,15 @@ func newBoardModel(s *store.Store, key string) boardModel {
 	return boardModel{store: s, projectKey: key}
 }
 
+type milestoneRef struct {
+	ID   int64
+	Name string
+}
+
 type boardLoadedMsg struct {
-	cols [5][]*domain.Issue
-	err  error
+	cols       [5][]*domain.Issue
+	milestones []milestoneRef
+	err        error
 }
 
 func (m boardModel) Init() tea.Cmd {
@@ -52,7 +63,14 @@ func (m boardModel) Init() tea.Cmd {
 		if err != nil {
 			return boardLoadedMsg{err: err}
 		}
-		return groupIssuesByStatus(all)
+		ms, _ := storeRef.ListMilestones(pk, "")
+		refs := make([]milestoneRef, 0, len(ms))
+		for _, m := range ms {
+			refs = append(refs, milestoneRef{ID: m.ID, Name: m.Name})
+		}
+		msg := groupIssuesByStatus(all)
+		msg.milestones = refs
+		return msg
 	}
 }
 
@@ -63,6 +81,11 @@ func (m boardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case boardLoadedMsg:
 		m.columns = v.cols
 		m.err = v.err
+		m.milestonesOrdered = v.milestones
+		m.milestonesByID = make(map[int64]string, len(v.milestones))
+		for _, r := range v.milestones {
+			m.milestonesByID[r.ID] = r.Name
+		}
 		// Clamp cursors in case columns shrank.
 		for i := 0; i < 5; i++ {
 			if m.rowCursor[i] >= len(m.columns[i]) {
@@ -218,6 +241,52 @@ func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, openEditorForNew(m.store, m.projectKey, domain.AllStatuses()[m.colCursor])
 	case "N":
 		return m, openEditorForNewMilestone(m.projectKey)
+	case "t":
+		sel := m.selected()
+		if sel == nil {
+			return m, nil
+		}
+		// Build the cycle: [none, ms1, ms2, ...]. Find current index, advance.
+		curIdx := 0 // 0 = no milestone
+		if sel.MilestoneID != nil {
+			for i, r := range m.milestonesOrdered {
+				if r.ID == *sel.MilestoneID {
+					curIdx = i + 1
+					break
+				}
+			}
+		}
+		nextIdx := (curIdx + 1) % (len(m.milestonesOrdered) + 1)
+		key := domain.IssueKey{Project: m.projectKey, Seq: sel.Seq}
+		m.followKey = &key
+		var params store.UpdateIssueParams
+		if nextIdx == 0 {
+			params.ClearMilestone = true
+		} else {
+			name := m.milestonesOrdered[nextIdx-1].Name
+			params.Milestone = &name
+		}
+		storeRef := m.store
+		pk := m.projectKey
+		ms := m.milestoneFilter
+		return m, func() tea.Msg {
+			if err := storeRef.UpdateIssue(key, params); err != nil {
+				return boardLoadedMsg{err: err}
+			}
+			all, err := storeRef.ListIssues(store.ListIssuesFilter{ProjectKey: pk, MilestoneName: ms})
+			if err != nil {
+				return boardLoadedMsg{err: err}
+			}
+			out := groupIssuesByStatus(all)
+			// Carry milestones through so they don't get wiped on this reload.
+			mls, _ := storeRef.ListMilestones(pk, "")
+			refs := make([]milestoneRef, 0, len(mls))
+			for _, m := range mls {
+				refs = append(refs, milestoneRef{ID: m.ID, Name: m.Name})
+			}
+			out.milestones = refs
+			return out
+		}
 	case "a":
 		sel := m.selected()
 		if sel == nil {
@@ -371,9 +440,16 @@ func (m boardModel) View() string {
 		var b strings.Builder
 		fmt.Fprintf(&b, "%s (%d)\n", headers[i], len(filtered[i]))
 		for r, issue := range filtered[i] {
-			card := fmt.Sprintf("%s-%d %s\n  %s",
+			titleLine := truncate(issue.Title, colWidth-2)
+			milestoneLine := ""
+			if issue.MilestoneID != nil {
+				if name, ok := m.milestonesByID[*issue.MilestoneID]; ok {
+					milestoneLine = "\n  " + StyleMuted.Render("⟜ "+truncate(name, colWidth-4))
+				}
+			}
+			card := fmt.Sprintf("%s-%d %s\n  %s%s",
 				m.projectKey, issue.Seq, PriorityDot(string(issue.Priority)),
-				truncate(issue.Title, colWidth-2))
+				titleLine, milestoneLine)
 			if i == m.colCursor && r == rowCursor {
 				card = StyleSelected.Render(card)
 			}
@@ -383,7 +459,7 @@ func (m boardModel) View() string {
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
 
-	helpText := "hjkl move  enter detail  e edit  n new  N milestone+  Space mv  a archive  M milestone-filter  / filter  r refresh  q quit"
+	helpText := "hjkl move  enter detail  e edit  n new  N ms+  t tag-ms  Space mv  a archive  M ms-filter  / filter  r refresh  q quit"
 	if m.milestoneFilter != "" {
 		helpText = fmt.Sprintf("milestone: %s  | %s", m.milestoneFilter, helpText)
 	}
