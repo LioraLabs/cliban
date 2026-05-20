@@ -96,3 +96,51 @@ func TestDeleteIssueCascadesSubIssues(t *testing.T) {
 		t.Errorf("after cascading delete, len=%d want 0", len(all))
 	}
 }
+
+func TestArchiveIssueHidesFromDefaultList(t *testing.T) {
+	s := newTestStore(t)
+	mustProj(t, s)
+	a, _ := s.CreateIssue(CreateIssueParams{ProjectKey: "CLI", Title: "a"})
+	_, _ = s.CreateIssue(CreateIssueParams{ProjectKey: "CLI", Title: "b"})
+	if err := s.SetIssueArchived(domain.IssueKey{Project: "CLI", Seq: a.Seq}, true); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	defaultList, _ := s.ListIssues(ListIssuesFilter{ProjectKey: "CLI"})
+	if len(defaultList) != 1 {
+		t.Errorf("default list len=%d want 1 (archived hidden)", len(defaultList))
+	}
+	full, _ := s.ListIssues(ListIssuesFilter{ProjectKey: "CLI", IncludeArchived: true})
+	if len(full) != 2 {
+		t.Errorf("include-archived list len=%d want 2", len(full))
+	}
+	got, _ := s.GetIssueByKey(domain.IssueKey{Project: "CLI", Seq: a.Seq})
+	if !got.Archived {
+		t.Errorf("Archived=%v want true", got.Archived)
+	}
+}
+
+func TestArchiveDoneInProject(t *testing.T) {
+	s := newTestStore(t)
+	mustProj(t, s)
+	d1, _ := s.CreateIssue(CreateIssueParams{ProjectKey: "CLI", Title: "d1"})
+	d2, _ := s.CreateIssue(CreateIssueParams{ProjectKey: "CLI", Title: "d2"})
+	_, _ = s.CreateIssue(CreateIssueParams{ProjectKey: "CLI", Title: "todo"})
+	_ = s.MoveIssue(domain.IssueKey{Project: "CLI", Seq: d1.Seq}, domain.StatusDone)
+	_ = s.MoveIssue(domain.IssueKey{Project: "CLI", Seq: d2.Seq}, domain.StatusDone)
+	n, err := s.ArchiveDoneInProject("CLI")
+	if err != nil {
+		t.Fatalf("ArchiveDoneInProject: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("archived count = %d, want 2", n)
+	}
+	// Running again should archive 0 more.
+	n2, _ := s.ArchiveDoneInProject("CLI")
+	if n2 != 0 {
+		t.Errorf("second archive run = %d, want 0", n2)
+	}
+	visible, _ := s.ListIssues(ListIssuesFilter{ProjectKey: "CLI"})
+	if len(visible) != 1 {
+		t.Errorf("visible after archive-done = %d, want 1 (just the todo)", len(visible))
+	}
+}

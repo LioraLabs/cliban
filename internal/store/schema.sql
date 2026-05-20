@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS issue (
     status       TEXT    NOT NULL DEFAULT 'backlog',
     priority     TEXT    NOT NULL DEFAULT 'none',
     position     REAL    NOT NULL,
+    archived     INTEGER NOT NULL DEFAULT 0,
     created_at   TEXT    NOT NULL,
     updated_at   TEXT    NOT NULL,
     completed_at TEXT,

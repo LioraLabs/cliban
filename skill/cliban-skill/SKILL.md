@@ -83,6 +83,22 @@ cliban issue show CLI-42 --json
 cliban issue rm CLI-12
 ```
 
+### Archive a single issue (hide from default board/list)
+```bash
+cliban issue archive CLI-12
+cliban issue unarchive CLI-12        # restore
+```
+
+### Sweep all done issues out of a project board
+```bash
+cliban issue archive-done --project CLI --json
+```
+
+### Query archived issues
+```bash
+cliban issue ls --project CLI --archived --json
+```
+
 ## Exit codes
 
 - `0` success
@@ -95,6 +111,7 @@ cliban issue rm CLI-12
 - Don't invoke `cliban issue add --project X` with no `--title` — that triggers the editor and will hang in agent contexts. Always pass `--title` (and `--description`/`--priority` as needed).
 - Don't try to parse the table output of `ls`/`show`. Use `--json` (NDJSON for lists, single JSON object for `show`).
 - Don't nest sub-issues three levels deep; the CLI returns exit code 2.
+- Don't filter on archived state by hand — pass `--archived` to `ls` to include them; otherwise they are excluded.
 - Don't assume timestamps are in the local timezone — they are UTC ISO-8601.
 - Don't try to mutate via `cliban issue edit CLI-42` with no flags. That triggers the editor. Pass `--title`/`--description`/etc. or use `--no-editor` to fail fast.
 

@@ -43,6 +43,7 @@ type Issue struct {
 	Status      Status
 	Priority    Priority
 	Position    float64
+	Archived    bool
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	CompletedAt *time.Time

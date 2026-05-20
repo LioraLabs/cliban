@@ -29,4 +29,18 @@ set -e
 remaining=$(./cliban issue ls --project CLI --json | wc -l)
 [ "$remaining" -eq 0 ] || { echo "cascading delete failed: $remaining lines"; exit 1; }
 
+# archive
+./cliban project add ARC --name "Archive demo"
+./cliban issue add --project ARC --title "done1"
+./cliban issue add --project ARC --title "done2"
+./cliban issue add --project ARC --title "open"
+./cliban issue mv ARC-1 done
+./cliban issue mv ARC-2 done
+n=$(./cliban issue archive-done --project ARC --json | grep -o '"archived": [0-9]*' | grep -o '[0-9]*$')
+[ "$n" = "2" ] || { echo "expected archive-done=2, got $n"; exit 1; }
+visible=$(./cliban issue ls --project ARC --json | grep -c '"key":')
+[ "$visible" -eq 1 ] || { echo "expected 1 visible after archive-done, got $visible"; exit 1; }
+all=$(./cliban issue ls --project ARC --archived --json | grep -c '"key":')
+[ "$all" -eq 3 ] || { echo "expected 3 with --archived, got $all"; exit 1; }
+
 echo "smoke ok"

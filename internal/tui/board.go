@@ -180,6 +180,24 @@ func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "n":
 		return m, openEditorForNew(m.store, m.projectKey, domain.AllStatuses()[m.colCursor])
+	case "a":
+		sel := m.selected()
+		if sel == nil {
+			return m, nil
+		}
+		key := domain.IssueKey{Project: m.projectKey, Seq: sel.Seq}
+		storeRef := m.store
+		pk := m.projectKey
+		return m, func() tea.Msg {
+			if err := storeRef.SetIssueArchived(key, true); err != nil {
+				return boardLoadedMsg{err: err}
+			}
+			all, err := storeRef.ListIssues(store.ListIssuesFilter{ProjectKey: pk})
+			if err != nil {
+				return boardLoadedMsg{err: err}
+			}
+			return groupIssuesByStatus(all)
+		}
 	}
 	return m, nil
 }
@@ -327,7 +345,7 @@ func (m boardModel) View() string {
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
 
-	helpText := "hjkl move  enter detail  e edit  n new  Space mv  / filter  r refresh  q quit"
+	helpText := "hjkl move  enter detail  e edit  n new  Space mv  a archive  / filter  r refresh  q quit"
 	if m.filter != "" || m.filtering {
 		helpText = fmt.Sprintf("filter: %s  | %s", m.filter, helpText)
 	}

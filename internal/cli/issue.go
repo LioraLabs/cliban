@@ -13,7 +13,8 @@ import (
 
 func issueCmd() *cobra.Command {
 	c := &cobra.Command{Use: "issue", Short: "Manage issues"}
-	c.AddCommand(issueAddCmd(), issueListCmd(), issueShowCmd(), issueEditCmd(), issueMvCmd(), issueRmCmd())
+	c.AddCommand(issueAddCmd(), issueListCmd(), issueShowCmd(), issueEditCmd(), issueMvCmd(), issueRmCmd(),
+		issueArchiveCmd(), issueUnarchiveCmd(), issueArchiveDoneCmd())
 	return c
 }
 
@@ -162,7 +163,7 @@ func issueAddCmd() *cobra.Command {
 
 func issueListCmd() *cobra.Command {
 	var project, status, priority, milestone, parent string
-	var noSubs, asJSON bool
+	var noSubs, asJSON, includeArchived bool
 	c := &cobra.Command{
 		Use:   "ls",
 		Short: "List issues",
@@ -173,9 +174,10 @@ func issueListCmd() *cobra.Command {
 			}
 			defer s.Close()
 			f := store.ListIssuesFilter{
-				ProjectKey:    strings.ToUpper(project),
-				MilestoneName: milestone,
-				NoSubs:        noSubs,
+				ProjectKey:      strings.ToUpper(project),
+				MilestoneName:   milestone,
+				NoSubs:          noSubs,
+				IncludeArchived: includeArchived,
 			}
 			if status != "" {
 				st, err := domain.ParseStatus(status)
@@ -233,6 +235,7 @@ func issueListCmd() *cobra.Command {
 	c.Flags().StringVar(&parent, "parent", "", "list sub-issues of this parent key")
 	c.Flags().BoolVar(&noSubs, "no-subs", false, "exclude sub-issues")
 	c.Flags().BoolVar(&asJSON, "json", false, "NDJSON output")
+	c.Flags().BoolVar(&includeArchived, "archived", false, "include archived issues")
 	return c
 }
 
@@ -475,4 +478,73 @@ func issueRmCmd() *cobra.Command {
 			return s.DeleteIssue(k)
 		},
 	}
+}
+
+func issueArchiveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "archive <KEY>",
+		Short: "Archive an issue (hides it from the default board and lists)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := openStore()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			k, err := domain.ParseIssueKey(args[0])
+			if err != nil {
+				return err
+			}
+			return s.SetIssueArchived(k, true)
+		},
+	}
+}
+
+func issueUnarchiveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "unarchive <KEY>",
+		Short: "Unarchive an issue",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := openStore()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			k, err := domain.ParseIssueKey(args[0])
+			if err != nil {
+				return err
+			}
+			return s.SetIssueArchived(k, false)
+		},
+	}
+}
+
+func issueArchiveDoneCmd() *cobra.Command {
+	var project string
+	var asJSON bool
+	c := &cobra.Command{
+		Use:   "archive-done",
+		Short: "Archive every done issue in a project (bulk board cleanup)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := openStore()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			n, err := s.ArchiveDoneInProject(strings.ToUpper(project))
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				return WriteJSON(cmd.OutOrStdout(), map[string]any{"archived": n})
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "archived %d done issue(s) in %s\n", n, strings.ToUpper(project))
+			return nil
+		},
+	}
+	c.Flags().StringVar(&project, "project", "", "project key (required)")
+	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
+	_ = c.MarkFlagRequired("project")
+	return c
 }

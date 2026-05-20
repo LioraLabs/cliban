@@ -10,9 +10,9 @@ import (
 	"github.com/alex/cliban/internal/domain"
 )
 
-const issueSelectCols = `id,project_id,milestone_id,parent_id,seq,title,description,status,priority,position,created_at,updated_at,completed_at`
+const issueSelectCols = `id,project_id,milestone_id,parent_id,seq,title,description,status,priority,position,archived,created_at,updated_at,completed_at`
 
-const issueSelectColsJoined = `i.id,i.project_id,i.milestone_id,i.parent_id,i.seq,i.title,i.description,i.status,i.priority,i.position,i.created_at,i.updated_at,i.completed_at`
+const issueSelectColsJoined = `i.id,i.project_id,i.milestone_id,i.parent_id,i.seq,i.title,i.description,i.status,i.priority,i.position,i.archived,i.created_at,i.updated_at,i.completed_at`
 
 type CreateIssueParams struct {
 	ProjectKey    string
@@ -126,8 +126,9 @@ func scanIssue(r interface{ Scan(...any) error }) (*domain.Issue, error) {
 	var i domain.Issue
 	var milestone, parent sql.NullInt64
 	var status, priority, created, updated string
+	var archived int
 	var completed sql.NullString
-	if err := r.Scan(&i.ID, &i.ProjectID, &milestone, &parent, &i.Seq, &i.Title, &i.Description, &status, &priority, &i.Position, &created, &updated, &completed); err != nil {
+	if err := r.Scan(&i.ID, &i.ProjectID, &milestone, &parent, &i.Seq, &i.Title, &i.Description, &status, &priority, &i.Position, &archived, &created, &updated, &completed); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -143,6 +144,7 @@ func scanIssue(r interface{ Scan(...any) error }) (*domain.Issue, error) {
 	}
 	i.Status = domain.Status(status)
 	i.Priority = domain.Priority(priority)
+	i.Archived = archived != 0
 	i.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 	i.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
 	if completed.Valid {
@@ -153,12 +155,13 @@ func scanIssue(r interface{ Scan(...any) error }) (*domain.Issue, error) {
 }
 
 type ListIssuesFilter struct {
-	ProjectKey    string
-	Status        domain.Status
-	Priority      domain.Priority
-	MilestoneName string
-	ParentKey     *domain.IssueKey
-	NoSubs        bool
+	ProjectKey      string
+	Status          domain.Status
+	Priority        domain.Priority
+	MilestoneName   string
+	ParentKey       *domain.IssueKey
+	NoSubs          bool
+	IncludeArchived bool
 }
 
 func (s *Store) ListIssues(f ListIssuesFilter) ([]*domain.Issue, error) {
@@ -187,6 +190,9 @@ func (s *Store) ListIssues(f ListIssuesFilter) ([]*domain.Issue, error) {
 	}
 	if f.NoSubs {
 		conds = append(conds, "i.parent_id IS NULL")
+	}
+	if !f.IncludeArchived {
+		conds = append(conds, "i.archived = 0")
 	}
 	for idx, c := range conds {
 		if idx == 0 {
@@ -384,4 +390,32 @@ func (s *Store) SetIssuePosition(k domain.IssueKey, newPos float64) error {
 // GetIssueByID returns an issue by its internal ID.
 func (s *Store) GetIssueByID(id int64) (*domain.Issue, error) {
 	return s.getIssueByID(id)
+}
+
+func (s *Store) SetIssueArchived(k domain.IssueKey, archived bool) error {
+	v := 0
+	if archived {
+		v = 1
+	}
+	res, err := s.db.Exec(`UPDATE issue SET archived=?, updated_at=? WHERE id = (SELECT i.id FROM issue i JOIN project p ON p.id=i.project_id WHERE p.key=? AND i.seq=?)`,
+		v, s.nowISO(), k.Project, k.Seq)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ArchiveDoneInProject archives every non-archived done issue in a project.
+// Returns the number of issues archived.
+func (s *Store) ArchiveDoneInProject(projectKey string) (int, error) {
+	res, err := s.db.Exec(`UPDATE issue SET archived=1, updated_at=? WHERE archived=0 AND status='done' AND project_id = (SELECT id FROM project WHERE key=?)`,
+		s.nowISO(), projectKey)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }

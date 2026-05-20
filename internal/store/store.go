@@ -36,7 +36,35 @@ func (s *Store) Migrate() error {
 	if _, err := s.db.Exec(schemaSQL); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
+	if err := s.ensureIssueArchivedColumn(); err != nil {
+		return fmt.Errorf("migrate archived col: %w", err)
+	}
 	return nil
+}
+
+func (s *Store) ensureIssueArchivedColumn() error {
+	rows, err := s.db.Query(`PRAGMA table_info(issue)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == "archived" {
+			return nil // already present
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE issue ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`)
+	return err
 }
 
 func (s *Store) nowISO() string {

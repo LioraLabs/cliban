@@ -25,6 +25,7 @@ func IssueToJSON(projectKey string, i *domain.Issue, parent string, milestone st
 		"status":      string(i.Status),
 		"priority":    string(i.Priority),
 		"position":    i.Position,
+		"archived":    i.Archived,
 		"created_at":  i.CreatedAt,
 		"updated_at":  i.UpdatedAt,
 	}
