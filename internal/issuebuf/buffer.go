@@ -43,30 +43,10 @@ func ParseIssueBuffer(src string) (IssueBuffer, error) {
 	if strings.TrimSpace(src) == "" {
 		return IssueBuffer{}, fmt.Errorf("buffer is empty")
 	}
-	lines := strings.Split(src, "\n")
-	firstDelim := -1
-	for i, l := range lines {
-		if strings.TrimSpace(l) == "---" {
-			firstDelim = i
-			break
-		}
+	frontMatter, body, err := splitFrontmatter(src)
+	if err != nil {
+		return IssueBuffer{}, err
 	}
-	if firstDelim < 0 {
-		return IssueBuffer{}, fmt.Errorf("missing opening '---' line")
-	}
-	rest := lines[firstDelim+1:]
-	secondDelim := -1
-	for i, l := range rest {
-		if strings.TrimSpace(l) == "---" {
-			secondDelim = i
-			break
-		}
-	}
-	if secondDelim < 0 {
-		return IssueBuffer{}, fmt.Errorf("missing closing '---' line")
-	}
-	frontMatter := strings.Join(rest[:secondDelim], "\n")
-	body := strings.Join(rest[secondDelim+1:], "\n")
 
 	var b IssueBuffer
 	if err := yaml.Unmarshal([]byte(frontMatter), &b); err != nil {

@@ -95,6 +95,17 @@ func (m boardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.editorErr = nil
 		}
 		return m, m.Init()
+	case milestoneEditorFinishedMsg:
+		if v.err != nil {
+			m.editorErr = v.err
+			return m, m.Init()
+		}
+		if applyErr := applyMilestoneBuffer(m.store, m.projectKey, v.tempPath); applyErr != nil {
+			m.editorErr = applyErr
+		} else {
+			m.editorErr = nil
+		}
+		return m, m.Init()
 	}
 	return m, nil
 }
@@ -205,6 +216,8 @@ func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "n":
 		return m, openEditorForNew(m.store, m.projectKey, domain.AllStatuses()[m.colCursor])
+	case "N":
+		return m, openEditorForNewMilestone(m.projectKey)
 	case "a":
 		sel := m.selected()
 		if sel == nil {
@@ -370,7 +383,7 @@ func (m boardModel) View() string {
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
 
-	helpText := "hjkl move  enter detail  e edit  n new  Space mv  a archive  M milestone  / filter  r refresh  q quit"
+	helpText := "hjkl move  enter detail  e edit  n new  N milestone+  Space mv  a archive  M milestone-filter  / filter  r refresh  q quit"
 	if m.milestoneFilter != "" {
 		helpText = fmt.Sprintf("milestone: %s  | %s", m.milestoneFilter, helpText)
 	}
