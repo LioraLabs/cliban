@@ -19,8 +19,8 @@ func TestMilestoneLifecycle(t *testing.T) {
 	if c != 0 {
 		t.Fatalf("ls code=%d", c)
 	}
-	if !strings.Contains(out, `"name": "v0.1"`) {
-		t.Errorf("missing v0.1: %s", out)
+	if !strings.Contains(out, `"name":"v0.1"`) {
+		t.Errorf("missing v0.1 in NDJSON output: %s", out)
 	}
 	if _, _, c := runCLI(t, "milestone", "edit", "--project", "CLI", "--name", "v0.1", "--status", "completed"); c != 0 {
 		t.Fatalf("edit code=%d", c)

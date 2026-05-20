@@ -12,7 +12,7 @@ import (
 func TestJSONIssue(t *testing.T) {
 	buf := &bytes.Buffer{}
 	i := &domain.Issue{Seq: 42, Title: "x", Status: domain.StatusBacklog, Priority: domain.PriorityHigh}
-	if err := WriteIssueJSON(buf, "CLI", i); err != nil {
+	if err := WriteIssueJSON(buf, IssueJSONInputs{ProjectKey: "CLI", Issue: i}); err != nil {
 		t.Fatal(err)
 	}
 	var got map[string]any
@@ -21,6 +21,15 @@ func TestJSONIssue(t *testing.T) {
 	}
 	if got["key"] != "CLI-42" || got["title"] != "x" || got["status"] != "backlog" {
 		t.Errorf("unexpected fields: %v", got)
+	}
+	if got["git_branch_name"] != "cli-42-x" {
+		t.Errorf("git_branch_name = %v, want cli-42-x", got["git_branch_name"])
+	}
+	if _, ok := got["milestone"]; !ok {
+		t.Errorf("milestone field missing")
+	}
+	if _, ok := got["parent"]; !ok {
+		t.Errorf("parent field missing")
 	}
 }
 

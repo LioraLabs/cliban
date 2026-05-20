@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/alex/cliban/internal/domain"
@@ -64,7 +65,7 @@ func projectListCmd() *cobra.Command {
 			}
 			if asJSON {
 				for _, p := range ps {
-					if err := WriteJSON(cmd.OutOrStdout(), projectToJSON(p)); err != nil {
+					if err := WriteJSONLine(cmd.OutOrStdout(), projectToJSON(p)); err != nil {
 						return err
 					}
 				}
@@ -113,7 +114,7 @@ func projectShowCmd() *cobra.Command {
 }
 
 func projectEditCmd() *cobra.Command {
-	var name, desc string
+	var name, desc, autoArchive string
 	c := &cobra.Command{
 		Use:   "edit <KEY>",
 		Short: "Edit a project",
@@ -135,12 +136,37 @@ func projectEditCmd() *cobra.Command {
 			if !cmd.Flags().Changed("description") {
 				desc = cur.Description
 			}
-			return s.UpdateProject(key, name, desc)
+			if err := s.UpdateProject(key, name, desc); err != nil {
+				return err
+			}
+			if cmd.Flags().Changed("auto-archive-done-after") {
+				days, err := parseDurationDays(autoArchive)
+				if err != nil {
+					return err
+				}
+				return s.SetAutoArchiveDoneAfter(key, days)
+			}
+			return nil
 		},
 	}
 	c.Flags().StringVar(&name, "name", "", "new name")
 	c.Flags().StringVar(&desc, "description", "", "new description")
+	c.Flags().StringVar(&autoArchive, "auto-archive-done-after", "", "auto-archive done issues older than this; e.g. 7d or 0 to disable")
 	return c
+}
+
+// parseDurationDays parses a simple Nd / N (days) string. Returns 0 to mean "disabled".
+func parseDurationDays(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "0" {
+		return 0, nil
+	}
+	trimmed := strings.TrimSuffix(s, "d")
+	n, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%w: invalid duration %q (use e.g. 7d or 0 to disable)", store.ErrValidation, s)
+	}
+	return n, nil
 }
 
 func projectArchiveCmd() *cobra.Command {
@@ -203,13 +229,18 @@ func projectRmCmd() *cobra.Command {
 }
 
 func projectToJSON(p *domain.Project) map[string]any {
-	return map[string]any{
-		"key":         p.Key,
-		"name":        p.Name,
-		"description": p.Description,
-		"archived":    p.Archived,
-		"issue_seq":   p.IssueSeq,
-		"created_at":  p.CreatedAt,
-		"updated_at":  p.UpdatedAt,
+	out := map[string]any{
+		"key":                          p.Key,
+		"name":                         p.Name,
+		"description":                  p.Description,
+		"archived":                     p.Archived,
+		"issue_seq":                    p.IssueSeq,
+		"auto_archive_done_after_days": nil,
+		"created_at":                   p.CreatedAt,
+		"updated_at":                   p.UpdatedAt,
 	}
+	if p.AutoArchiveDoneAfterDays != nil {
+		out["auto_archive_done_after_days"] = *p.AutoArchiveDoneAfterDays
+	}
+	return out
 }

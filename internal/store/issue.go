@@ -10,9 +10,9 @@ import (
 	"github.com/alex/cliban/internal/domain"
 )
 
-const issueSelectCols = `id,project_id,milestone_id,parent_id,seq,title,description,status,priority,position,archived,created_at,updated_at,completed_at`
+const issueSelectCols = `id,project_id,milestone_id,parent_id,seq,title,description,status,priority,position,archived,due_date,created_at,updated_at,completed_at`
 
-const issueSelectColsJoined = `i.id,i.project_id,i.milestone_id,i.parent_id,i.seq,i.title,i.description,i.status,i.priority,i.position,i.archived,i.created_at,i.updated_at,i.completed_at`
+const issueSelectColsJoined = `i.id,i.project_id,i.milestone_id,i.parent_id,i.seq,i.title,i.description,i.status,i.priority,i.position,i.archived,i.due_date,i.created_at,i.updated_at,i.completed_at`
 
 type CreateIssueParams struct {
 	ProjectKey    string
@@ -22,6 +22,7 @@ type CreateIssueParams struct {
 	Priority      domain.Priority
 	MilestoneName string
 	ParentKey     *domain.IssueKey
+	DueDate       *time.Time
 }
 
 func (s *Store) CreateIssue(p CreateIssueParams) (*domain.Issue, error) {
@@ -97,8 +98,12 @@ func (s *Store) CreateIssue(p CreateIssueParams) (*domain.Issue, error) {
 	}
 
 	now := s.nowISO()
-	res, err := tx.Exec(`INSERT INTO issue(project_id,milestone_id,parent_id,seq,title,description,status,priority,position,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-		projID, milestoneID, parentID, newSeq, p.Title, p.Description, string(status), string(priority), pos, now, now)
+	var dueDate any
+	if p.DueDate != nil {
+		dueDate = p.DueDate.UTC().Format("2006-01-02")
+	}
+	res, err := tx.Exec(`INSERT INTO issue(project_id,milestone_id,parent_id,seq,title,description,status,priority,position,due_date,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		projID, milestoneID, parentID, newSeq, p.Title, p.Description, string(status), string(priority), pos, dueDate, now, now)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
 	}
@@ -127,8 +132,8 @@ func scanIssue(r interface{ Scan(...any) error }) (*domain.Issue, error) {
 	var milestone, parent sql.NullInt64
 	var status, priority, created, updated string
 	var archived int
-	var completed sql.NullString
-	if err := r.Scan(&i.ID, &i.ProjectID, &milestone, &parent, &i.Seq, &i.Title, &i.Description, &status, &priority, &i.Position, &archived, &created, &updated, &completed); err != nil {
+	var due, completed sql.NullString
+	if err := r.Scan(&i.ID, &i.ProjectID, &milestone, &parent, &i.Seq, &i.Title, &i.Description, &status, &priority, &i.Position, &archived, &due, &created, &updated, &completed); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -145,6 +150,10 @@ func scanIssue(r interface{ Scan(...any) error }) (*domain.Issue, error) {
 	i.Status = domain.Status(status)
 	i.Priority = domain.Priority(priority)
 	i.Archived = archived != 0
+	if due.Valid {
+		t, _ := time.Parse("2006-01-02", due.String)
+		i.DueDate = &t
+	}
 	i.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 	i.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
 	if completed.Valid {
@@ -162,6 +171,8 @@ type ListIssuesFilter struct {
 	ParentKey       *domain.IssueKey
 	NoSubs          bool
 	IncludeArchived bool
+	// LabelNames filters to issues that have ALL of the given label names.
+	LabelNames []string
 }
 
 func (s *Store) ListIssues(f ListIssuesFilter) ([]*domain.Issue, error) {
@@ -193,6 +204,14 @@ func (s *Store) ListIssues(f ListIssuesFilter) ([]*domain.Issue, error) {
 	}
 	if !f.IncludeArchived {
 		conds = append(conds, "i.archived = 0")
+	}
+	for _, lbl := range f.LabelNames {
+		conds = append(conds, `i.id IN (
+			SELECT il.issue_id FROM issue_label il
+			JOIN label l ON l.id = il.label_id
+			WHERE l.name = ?
+		)`)
+		args = append(args, lbl)
 	}
 	for idx, c := range conds {
 		if idx == 0 {
@@ -230,6 +249,8 @@ type UpdateIssueParams struct {
 	ClearMilestone bool
 	Parent         *domain.IssueKey
 	ClearParent    bool
+	DueDate        *time.Time
+	ClearDueDate   bool
 }
 
 func (s *Store) UpdateIssue(k domain.IssueKey, p UpdateIssueParams) error {
@@ -282,6 +303,13 @@ func (s *Store) UpdateIssue(k domain.IssueKey, p UpdateIssueParams) error {
 		}
 		set = append(set, "milestone_id=?")
 		args = append(args, mid)
+	}
+	switch {
+	case p.ClearDueDate:
+		set = append(set, "due_date=NULL")
+	case p.DueDate != nil:
+		set = append(set, "due_date=?")
+		args = append(args, p.DueDate.UTC().Format("2006-01-02"))
 	}
 	switch {
 	case p.ClearParent:

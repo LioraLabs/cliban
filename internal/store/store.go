@@ -36,14 +36,21 @@ func (s *Store) Migrate() error {
 	if _, err := s.db.Exec(schemaSQL); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
-	if err := s.ensureIssueArchivedColumn(); err != nil {
+	if err := s.ensureColumn("issue", "archived", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return fmt.Errorf("migrate archived col: %w", err)
+	}
+	if err := s.ensureColumn("issue", "due_date", "TEXT"); err != nil {
+		return fmt.Errorf("migrate due_date col: %w", err)
+	}
+	if err := s.ensureColumn("project", "auto_archive_done_after_days", "INTEGER"); err != nil {
+		return fmt.Errorf("migrate auto_archive col: %w", err)
 	}
 	return nil
 }
 
-func (s *Store) ensureIssueArchivedColumn() error {
-	rows, err := s.db.Query(`PRAGMA table_info(issue)`)
+// ensureColumn adds a column to a table if it does not already exist.
+func (s *Store) ensureColumn(table, column, decl string) error {
+	rows, err := s.db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
 	if err != nil {
 		return err
 	}
@@ -56,14 +63,14 @@ func (s *Store) ensureIssueArchivedColumn() error {
 		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
 			return err
 		}
-		if name == "archived" {
-			return nil // already present
+		if name == column {
+			return nil
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`ALTER TABLE issue ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`)
+	_, err = s.db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, column, decl))
 	return err
 }
 

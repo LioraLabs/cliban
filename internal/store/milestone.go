@@ -58,6 +58,11 @@ func (s *Store) getMilestoneByID(id int64) (*domain.Milestone, error) {
 	return scanMilestone(row)
 }
 
+// GetMilestoneByID returns a milestone by its internal ID.
+func (s *Store) GetMilestoneByID(id int64) (*domain.Milestone, error) {
+	return s.getMilestoneByID(id)
+}
+
 func scanMilestone(r interface{ Scan(...any) error }) (*domain.Milestone, error) {
 	var m domain.Milestone
 	var target sql.NullString

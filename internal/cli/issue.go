@@ -1,10 +1,14 @@
 package cli
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/alex/cliban/internal/domain"
 	"github.com/alex/cliban/internal/store"
@@ -14,7 +18,7 @@ import (
 func issueCmd() *cobra.Command {
 	c := &cobra.Command{Use: "issue", Short: "Manage issues"}
 	c.AddCommand(issueAddCmd(), issueListCmd(), issueShowCmd(), issueEditCmd(), issueMvCmd(), issueRmCmd(),
-		issueArchiveCmd(), issueUnarchiveCmd(), issueArchiveDoneCmd())
+		issueArchiveCmd(), issueUnarchiveCmd(), issueArchiveDoneCmd(), issueImportCmd(), issueBlockedCmd())
 	return c
 }
 
@@ -30,12 +34,88 @@ func readMaybeStdin(v string) (string, error) {
 	return string(data), nil
 }
 
+// resolveDescription returns the effective description string considering
+// --description, --description-file and stdin ('-').
+func resolveDescription(desc, descFile string, descChanged, descFileChanged bool) (string, bool, error) {
+	if descFileChanged {
+		if descChanged {
+			return "", false, fmt.Errorf("%w: --description and --description-file are mutually exclusive", store.ErrValidation)
+		}
+		if descFile == "-" {
+			data, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return "", false, err
+			}
+			return string(data), true, nil
+		}
+		data, err := os.ReadFile(descFile)
+		if err != nil {
+			return "", false, fmt.Errorf("%w: %v", store.ErrValidation, err)
+		}
+		return string(data), true, nil
+	}
+	if descChanged {
+		v, err := readMaybeStdin(desc)
+		if err != nil {
+			return "", false, err
+		}
+		return v, true, nil
+	}
+	return "", false, nil
+}
+
+// resolveIssueRefs returns the parent issue key (e.g. "CLI-2") and milestone
+// name for an issue, looking them up in the store. Returns empty strings if
+// the corresponding field is not set or cannot be resolved.
+func resolveIssueRefs(s *store.Store, projects map[int64]string, i *domain.Issue) (parent, milestone string) {
+	if i.ParentID != nil {
+		if p, err := s.GetIssueByID(*i.ParentID); err == nil && p != nil {
+			if pk, ok := projects[p.ProjectID]; ok {
+				parent = fmt.Sprintf("%s-%d", pk, p.Seq)
+			}
+		}
+	}
+	if i.MilestoneID != nil {
+		if m, err := s.GetMilestoneByID(*i.MilestoneID); err == nil && m != nil {
+			milestone = m.Name
+		}
+	}
+	return
+}
+
+// issueJSONInputs builds an IssueJSONInputs for a given issue, resolving
+// milestone name, parent key, labels, relations, and the due date.
+func issueJSONInputs(s *store.Store, projects map[int64]string, projectKey string, i *domain.Issue) IssueJSONInputs {
+	parent, milestone := resolveIssueRefs(s, projects, i)
+	in := IssueJSONInputs{
+		ProjectKey: projectKey,
+		Issue:      i,
+		Parent:     parent,
+		Milestone:  milestone,
+	}
+	if i.DueDate != nil {
+		in.Due = i.DueDate.UTC().Format("2006-01-02")
+	}
+	if labels, err := s.LabelsForIssue(i.ID); err == nil {
+		in.Labels = labels
+	}
+	if rels, err := s.RelationsForIssue(i.ID); err == nil {
+		out := make([]IssueRelationOut, 0, len(rels))
+		for _, r := range rels {
+			out = append(out, IssueRelationOut{Type: string(r.Kind), Target: fmt.Sprintf("%s-%d", r.Target.Project, r.Target.Seq)})
+		}
+		in.Relations = out
+	}
+	return in
+}
+
 func issueAddCmd() *cobra.Command {
-	var project, title, desc, parent, milestone, priority, status string
-	var asJSON, noEditor bool
+	var project, title, desc, descFile, parent, milestone, priority, status, due string
+	var labels, blocks, blockedBy, relatedTo []string
+	var asJSON, noEditor, editorFlag bool
 	c := &cobra.Command{
 		Use:   "add",
-		Short: "Add an issue (no --title and no --description opens $EDITOR in Task 15)",
+		Short: "Add an issue (pass --editor to open $EDITOR for input)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := openStore()
 			if err != nil {
@@ -43,12 +123,17 @@ func issueAddCmd() *cobra.Command {
 			}
 			defer s.Close()
 
-			// Editor path: only triggered when no content flags supplied.
-			contentless := title == "" && desc == ""
-			if contentless {
-				if EditorDisabled(noEditor) {
-					return fmt.Errorf("%w: --title required when --no-editor or $CLIBAN_NO_EDITOR is set", store.ErrValidation)
-				}
+			descChanged := cmd.Flags().Changed("description")
+			descFileChanged := cmd.Flags().Changed("description-file")
+
+			descContent, descSet, err := resolveDescription(desc, descFile, descChanged, descFileChanged)
+			if err != nil {
+				return err
+			}
+			contentless := title == "" && !descSet
+			editorRequested := editorFlag && !EditorDisabled(noEditor)
+			// Editor path: only when explicitly requested and no title/desc supplied.
+			if contentless && editorRequested {
 				if err := RequireTTY(); err != nil {
 					return fmt.Errorf("%w: %v", store.ErrValidation, err)
 				}
@@ -98,16 +183,10 @@ func issueAddCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if asJSON {
-					return WriteIssueJSON(cmd.OutOrStdout(), params.ProjectKey, issue)
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "created %s-%d: %s\n", params.ProjectKey, issue.Seq, issue.Title)
-				return nil
+				return printIssueResult(cmd.OutOrStdout(), s, params.ProjectKey, issue, "created", asJSON)
 			}
-
-			descContent, err := readMaybeStdin(desc)
-			if err != nil {
-				return err
+			if contentless {
+				return fmt.Errorf("%w: --title required (pass --editor to open $EDITOR)", store.ErrValidation)
 			}
 
 			params := store.CreateIssueParams{
@@ -137,32 +216,109 @@ func issueAddCmd() *cobra.Command {
 				}
 				params.ParentKey = &k
 			}
+			if due != "" {
+				t, err := parseDueDate(due)
+				if err != nil {
+					return err
+				}
+				params.DueDate = t
+			}
 			issue, err := s.CreateIssue(params)
 			if err != nil {
 				return err
 			}
-			if asJSON {
-				return WriteIssueJSON(cmd.OutOrStdout(), params.ProjectKey, issue)
+			issueKey := domain.IssueKey{Project: params.ProjectKey, Seq: issue.Seq}
+			for _, lbl := range labels {
+				if err := s.AttachLabel(issueKey, lbl); err != nil {
+					return err
+				}
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "created %s-%d: %s\n", params.ProjectKey, issue.Seq, issue.Title)
-			return nil
+			if err := applyRelationFlags(s, issueKey, blocks, blockedBy, relatedTo); err != nil {
+				return err
+			}
+			// Reload to pick up relations/labels in JSON output.
+			fresh, _ := s.GetIssueByKey(issueKey)
+			if fresh != nil {
+				issue = fresh
+			}
+			return printIssueResult(cmd.OutOrStdout(), s, params.ProjectKey, issue, "created", asJSON)
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project key (required)")
 	c.Flags().StringVar(&title, "title", "", "issue title")
 	c.Flags().StringVar(&desc, "description", "", "description (use '-' to read from stdin)")
+	c.Flags().StringVar(&descFile, "description-file", "", "read description from a file (use '-' for stdin)")
 	c.Flags().StringVar(&parent, "parent", "", "parent issue key (sub-issue)")
 	c.Flags().StringVar(&milestone, "milestone", "", "milestone name")
 	c.Flags().StringVar(&priority, "priority", "", "priority")
 	c.Flags().StringVar(&status, "status", "", "status")
+	c.Flags().StringVar(&due, "due", "", "due date YYYY-MM-DD")
+	c.Flags().StringSliceVar(&labels, "label", nil, "label name (repeatable)")
+	c.Flags().StringSliceVar(&blocks, "blocks", nil, "this issue blocks KEY (repeatable)")
+	c.Flags().StringSliceVar(&blockedBy, "blocked-by", nil, "this issue is blocked by KEY (repeatable)")
+	c.Flags().StringSliceVar(&relatedTo, "related-to", nil, "this issue relates to KEY (repeatable)")
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
-	c.Flags().BoolVar(&noEditor, "no-editor", false, "fail rather than opening $EDITOR")
+	c.Flags().BoolVar(&editorFlag, "editor", false, "open $EDITOR for input when no --title supplied")
+	c.Flags().BoolVar(&noEditor, "no-editor", false, "deprecated: editor is opt-in via --editor; kept for backwards compatibility")
+	_ = c.Flags().MarkHidden("no-editor")
 	_ = c.MarkFlagRequired("project")
 	return c
 }
 
+// parseDueDate parses YYYY-MM-DD into a UTC time pointer.
+func parseDueDate(s string) (*time.Time, error) {
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid --due %q (want YYYY-MM-DD)", store.ErrValidation, s)
+	}
+	return &t, nil
+}
+
+// applyRelationFlags applies --blocks/--blocked-by/--related-to flags to an issue.
+func applyRelationFlags(s *store.Store, k domain.IssueKey, blocks, blockedBy, relatedTo []string) error {
+	for _, raw := range blocks {
+		other, err := domain.ParseIssueKey(raw)
+		if err != nil {
+			return err
+		}
+		if err := s.AddRelation(k, other, store.RelBlocks); err != nil {
+			return err
+		}
+	}
+	for _, raw := range blockedBy {
+		other, err := domain.ParseIssueKey(raw)
+		if err != nil {
+			return err
+		}
+		// blocked-by = other blocks this
+		if err := s.AddRelation(other, k, store.RelBlocks); err != nil {
+			return err
+		}
+	}
+	for _, raw := range relatedTo {
+		other, err := domain.ParseIssueKey(raw)
+		if err != nil {
+			return err
+		}
+		if err := s.AddRelation(k, other, store.RelRelatedTo); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func printIssueResult(w io.Writer, s *store.Store, projectKey string, issue *domain.Issue, verb string, asJSON bool) error {
+	if asJSON {
+		projects := projectKeysByID(s)
+		return WriteIssueJSON(w, issueJSONInputs(s, projects, projectKey, issue))
+	}
+	fmt.Fprintf(w, "%s %s-%d: %s\n", verb, projectKey, issue.Seq, issue.Title)
+	return nil
+}
+
 func issueListCmd() *cobra.Command {
-	var project, status, priority, milestone, parent string
+	var project, status, priority, milestone, parent, sortBy string
+	var labels []string
 	var noSubs, asJSON, includeArchived bool
 	c := &cobra.Command{
 		Use:   "ls",
@@ -176,6 +332,7 @@ func issueListCmd() *cobra.Command {
 			f := store.ListIssuesFilter{
 				ProjectKey:      strings.ToUpper(project),
 				MilestoneName:   milestone,
+				LabelNames:      labels,
 				NoSubs:          noSubs,
 				IncludeArchived: includeArchived,
 			}
@@ -204,11 +361,16 @@ func issueListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if sortBy != "" {
+				if err := sortIssues(issues, sortBy); err != nil {
+					return err
+				}
+			}
 			projects := projectKeysByID(s)
 			if asJSON {
 				for _, i := range issues {
 					pk := projects[i.ProjectID]
-					if err := WriteIssueJSON(cmd.OutOrStdout(), pk, i); err != nil {
+					if err := WriteIssueNDJSON(cmd.OutOrStdout(), issueJSONInputs(s, projects, pk, i)); err != nil {
 						return err
 					}
 				}
@@ -217,11 +379,14 @@ func issueListCmd() *cobra.Command {
 			rows := []ListIssueRow{}
 			for _, i := range issues {
 				pk := projects[i.ProjectID]
+				parentKey, msName := resolveIssueRefs(s, projects, i)
 				rows = append(rows, ListIssueRow{
-					Key:      fmt.Sprintf("%s-%d", pk, i.Seq),
-					Title:    i.Title,
-					Status:   string(i.Status),
-					Priority: string(i.Priority),
+					Key:       fmt.Sprintf("%s-%d", pk, i.Seq),
+					Title:     i.Title,
+					Status:    string(i.Status),
+					Priority:  string(i.Priority),
+					Milestone: msName,
+					Parent:    parentKey,
 				})
 			}
 			WriteIssueTable(cmd.OutOrStdout(), rows)
@@ -233,10 +398,72 @@ func issueListCmd() *cobra.Command {
 	c.Flags().StringVar(&priority, "priority", "", "priority filter")
 	c.Flags().StringVar(&milestone, "milestone", "", "milestone filter")
 	c.Flags().StringVar(&parent, "parent", "", "list sub-issues of this parent key")
+	c.Flags().StringVar(&sortBy, "sort", "", "sort key: priority|created|updated|position[:asc|desc]")
+	c.Flags().StringSliceVar(&labels, "label", nil, "filter to issues with ALL of these labels (repeatable)")
 	c.Flags().BoolVar(&noSubs, "no-subs", false, "exclude sub-issues")
-	c.Flags().BoolVar(&asJSON, "json", false, "NDJSON output")
+	c.Flags().BoolVar(&asJSON, "json", false, "NDJSON output (one compact JSON object per line)")
 	c.Flags().BoolVar(&includeArchived, "archived", false, "include archived issues")
 	return c
+}
+
+// sortIssues sorts issues in place by the given key. Accepts "<field>" or
+// "<field>:asc"/"<field>:desc". Default direction is asc, except for priority
+// which defaults to desc (urgent first).
+func sortIssues(issues []*domain.Issue, spec string) error {
+	field := spec
+	dir := ""
+	if idx := strings.Index(spec, ":"); idx >= 0 {
+		field = spec[:idx]
+		dir = spec[idx+1:]
+	}
+	desc := false
+	switch dir {
+	case "", "asc":
+		desc = false
+	case "desc":
+		desc = true
+	default:
+		return fmt.Errorf("%w: invalid sort direction %q (use asc or desc)", store.ErrValidation, dir)
+	}
+	switch field {
+	case "priority":
+		if dir == "" {
+			desc = true
+		}
+		less := func(a, b *domain.Issue) bool {
+			return domain.PriorityRank(a.Priority) < domain.PriorityRank(b.Priority)
+		}
+		sort.SliceStable(issues, func(a, b int) bool {
+			if desc {
+				return less(issues[b], issues[a])
+			}
+			return less(issues[a], issues[b])
+		})
+	case "created":
+		sort.SliceStable(issues, func(a, b int) bool {
+			if desc {
+				return issues[a].CreatedAt.After(issues[b].CreatedAt)
+			}
+			return issues[a].CreatedAt.Before(issues[b].CreatedAt)
+		})
+	case "updated":
+		sort.SliceStable(issues, func(a, b int) bool {
+			if desc {
+				return issues[a].UpdatedAt.After(issues[b].UpdatedAt)
+			}
+			return issues[a].UpdatedAt.Before(issues[b].UpdatedAt)
+		})
+	case "position":
+		sort.SliceStable(issues, func(a, b int) bool {
+			if desc {
+				return issues[a].Position > issues[b].Position
+			}
+			return issues[a].Position < issues[b].Position
+		})
+	default:
+		return fmt.Errorf("%w: invalid --sort field %q (priority|created|updated|position)", store.ErrValidation, field)
+	}
+	return nil
 }
 
 func projectKeysByID(s *store.Store) map[int64]string {
@@ -271,11 +498,14 @@ func issueShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			projects := projectKeysByID(s)
 			if asJSON {
-				return WriteIssueJSON(cmd.OutOrStdout(), k.Project, issue)
+				return WriteIssueJSON(cmd.OutOrStdout(), issueJSONInputs(s, projects, k.Project, issue))
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s — %s\nstatus:   %s\npriority: %s\n\n%s\n",
-				k, issue.Title, issue.Status, issue.Priority, issue.Description)
+			parentKey, msName := resolveIssueRefs(s, projects, issue)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s — %s\nstatus:    %s\npriority:  %s\nmilestone: %s\nparent:    %s\n\n%s\n",
+				k, issue.Title, issue.Status, issue.Priority,
+				dashIfEmpty(msName), dashIfEmpty(parentKey), issue.Description)
 			return nil
 		},
 	}
@@ -284,11 +514,12 @@ func issueShowCmd() *cobra.Command {
 }
 
 func issueEditCmd() *cobra.Command {
-	var title, desc, priority, milestone, parent string
-	var clearMilestone, clearParent, force, noEditor bool
+	var title, desc, descFile, priority, milestone, parent, due string
+	var addLabels, removeLabels, blocks, blockedBy, relatedTo, removeRelations []string
+	var clearMilestone, clearParent, clearDue, editorFlag, noEditor, asJSON bool
 	c := &cobra.Command{
 		Use:   "edit <KEY>",
-		Short: "Edit an issue (no edit flags opens $EDITOR in Task 15)",
+		Short: "Edit an issue (pass --editor to open $EDITOR)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := openStore()
@@ -304,12 +535,16 @@ func issueEditCmd() *cobra.Command {
 			if cmd.Flags().Changed("title") {
 				params.Title = &title
 			}
-			if cmd.Flags().Changed("description") {
-				v, err := readMaybeStdin(desc)
+			descChanged := cmd.Flags().Changed("description")
+			descFileChanged := cmd.Flags().Changed("description-file")
+			if descChanged || descFileChanged {
+				v, set, err := resolveDescription(desc, descFile, descChanged, descFileChanged)
 				if err != nil {
 					return err
 				}
-				params.Description = &v
+				if set {
+					params.Description = &v
+				}
 			}
 			if cmd.Flags().Changed("priority") {
 				p, err := domain.ParsePriority(priority)
@@ -332,13 +567,23 @@ func issueEditCmd() *cobra.Command {
 				}
 				params.Parent = &pk
 			}
-			noChanges := !cmd.Flags().Changed("title") && !cmd.Flags().Changed("description") &&
-				!cmd.Flags().Changed("priority") && !cmd.Flags().Changed("milestone") &&
-				!cmd.Flags().Changed("parent") && !clearMilestone && !clearParent
-			if noChanges && !force {
-				if EditorDisabled(noEditor) {
-					return fmt.Errorf("%w: no edits requested and editor disabled", store.ErrValidation)
+			if clearDue {
+				params.ClearDueDate = true
+			} else if cmd.Flags().Changed("due") {
+				t, err := parseDueDate(due)
+				if err != nil {
+					return err
 				}
+				params.DueDate = t
+			}
+			anyChange := cmd.Flags().Changed("title") || descChanged || descFileChanged ||
+				cmd.Flags().Changed("priority") || cmd.Flags().Changed("milestone") ||
+				cmd.Flags().Changed("parent") || clearMilestone || clearParent ||
+				cmd.Flags().Changed("due") || clearDue ||
+				len(addLabels) > 0 || len(removeLabels) > 0 ||
+				len(blocks) > 0 || len(blockedBy) > 0 || len(relatedTo) > 0 || len(removeRelations) > 0
+			editorRequested := editorFlag && !EditorDisabled(noEditor)
+			if !anyChange && editorRequested {
 				if err := RequireTTY(); err != nil {
 					return fmt.Errorf("%w: %v", store.ErrValidation, err)
 				}
@@ -354,18 +599,13 @@ func issueEditCmd() *cobra.Command {
 					Description: cur.Description,
 				}
 				if cur.MilestoneID != nil {
-					ms, _ := s.ListMilestones(k.Project, "")
-					for _, m := range ms {
-						if m.ID == *cur.MilestoneID {
-							bf.Milestone = m.Name
-							break
-						}
+					if m, err := s.GetMilestoneByID(*cur.MilestoneID); err == nil && m != nil {
+						bf.Milestone = m.Name
 					}
 				}
 				if cur.ParentID != nil {
-					parent, err := s.GetIssueByID(*cur.ParentID)
-					if err == nil && parent != nil {
-						bf.Parent = fmt.Sprintf("%s-%d", k.Project, parent.Seq)
+					if p, err := s.GetIssueByID(*cur.ParentID); err == nil && p != nil {
+						bf.Parent = fmt.Sprintf("%s-%d", k.Project, p.Seq)
 					}
 				}
 				path, err := WriteTempBuffer(fmt.Sprintf("cliban-issue-%s-%d", k.Project, k.Seq), bf.Serialize())
@@ -419,20 +659,70 @@ func issueEditCmd() *cobra.Command {
 						return err
 					}
 				}
-				return s.UpdateIssue(k, up)
+				if err := s.UpdateIssue(k, up); err != nil {
+					return err
+				}
+				updated, err := s.GetIssueByKey(k)
+				if err != nil {
+					return err
+				}
+				return printIssueResult(cmd.OutOrStdout(), s, k.Project, updated, "updated", asJSON)
 			}
-			return s.UpdateIssue(k, params)
+			if !anyChange {
+				return fmt.Errorf("%w: no edits requested (pass a flag or --editor)", store.ErrValidation)
+			}
+			if err := s.UpdateIssue(k, params); err != nil {
+				return err
+			}
+			for _, lbl := range addLabels {
+				if err := s.AttachLabel(k, lbl); err != nil {
+					return err
+				}
+			}
+			for _, lbl := range removeLabels {
+				if err := s.DetachLabel(k, lbl); err != nil {
+					return err
+				}
+			}
+			if err := applyRelationFlags(s, k, blocks, blockedBy, relatedTo); err != nil {
+				return err
+			}
+			for _, raw := range removeRelations {
+				other, err := domain.ParseIssueKey(raw)
+				if err != nil {
+					return err
+				}
+				_ = s.RemoveRelation(k, other, store.RelBlocks)
+				_ = s.RemoveRelation(other, k, store.RelBlocks)
+				_ = s.RemoveRelation(k, other, store.RelRelatedTo)
+			}
+			updated, err := s.GetIssueByKey(k)
+			if err != nil {
+				return err
+			}
+			return printIssueResult(cmd.OutOrStdout(), s, k.Project, updated, "updated", asJSON)
 		},
 	}
 	c.Flags().StringVar(&title, "title", "", "new title")
 	c.Flags().StringVar(&desc, "description", "", "new description (use '-' for stdin)")
+	c.Flags().StringVar(&descFile, "description-file", "", "read description from a file (use '-' for stdin)")
 	c.Flags().StringVar(&priority, "priority", "", "new priority")
 	c.Flags().StringVar(&milestone, "milestone", "", "new milestone")
 	c.Flags().BoolVar(&clearMilestone, "clear-milestone", false, "clear milestone")
 	c.Flags().StringVar(&parent, "parent", "", "new parent key")
 	c.Flags().BoolVar(&clearParent, "clear-parent", false, "clear parent")
-	c.Flags().BoolVarP(&force, "edit", "e", false, "force editor open (no-op until Task 15)")
-	c.Flags().BoolVar(&noEditor, "no-editor", false, "never open $EDITOR")
+	c.Flags().StringVar(&due, "due", "", "new due date YYYY-MM-DD")
+	c.Flags().BoolVar(&clearDue, "clear-due", false, "clear due date")
+	c.Flags().StringSliceVar(&addLabels, "label", nil, "add label (repeatable)")
+	c.Flags().StringSliceVar(&removeLabels, "remove-label", nil, "remove label (repeatable)")
+	c.Flags().StringSliceVar(&blocks, "blocks", nil, "add 'blocks' relation to KEY (repeatable)")
+	c.Flags().StringSliceVar(&blockedBy, "blocked-by", nil, "add 'blocked by' relation from KEY (repeatable)")
+	c.Flags().StringSliceVar(&relatedTo, "related-to", nil, "add 'related to' relation to KEY (repeatable)")
+	c.Flags().StringSliceVar(&removeRelations, "remove-relation", nil, "remove any relation involving KEY (repeatable)")
+	c.Flags().BoolVarP(&editorFlag, "editor", "e", false, "open $EDITOR for full edit")
+	c.Flags().BoolVar(&noEditor, "no-editor", false, "deprecated: editor is opt-in via --editor")
+	_ = c.Flags().MarkHidden("no-editor")
+	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 	return c
 }
 
@@ -522,16 +812,30 @@ func issueUnarchiveCmd() *cobra.Command {
 
 func issueArchiveDoneCmd() *cobra.Command {
 	var project string
-	var asJSON bool
+	var asJSON, auto bool
 	c := &cobra.Command{
 		Use:   "archive-done",
-		Short: "Archive every done issue in a project (bulk board cleanup)",
+		Short: "Archive done issues. By default archives every done issue in --project; --auto honors each project's auto_archive_done_after_days policy.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := openStore()
 			if err != nil {
 				return err
 			}
 			defer s.Close()
+			if auto {
+				n, err := s.SweepAutoArchive()
+				if err != nil {
+					return err
+				}
+				if asJSON {
+					return WriteJSON(cmd.OutOrStdout(), map[string]any{"archived": n, "mode": "auto"})
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "archived %d done issue(s) (auto sweep)\n", n)
+				return nil
+			}
+			if project == "" {
+				return fmt.Errorf("%w: --project is required (or use --auto for the per-project policy)", store.ErrValidation)
+			}
 			n, err := s.ArchiveDoneInProject(strings.ToUpper(project))
 			if err != nil {
 				return err
@@ -543,8 +847,176 @@ func issueArchiveDoneCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().StringVar(&project, "project", "", "project key (required)")
+	c.Flags().StringVar(&project, "project", "", "project key")
+	c.Flags().BoolVar(&auto, "auto", false, "sweep every project per its auto_archive_done_after_days policy")
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
-	_ = c.MarkFlagRequired("project")
+	return c
+}
+
+// IssueImportSpec is the per-line schema accepted by `cliban issue import`.
+type IssueImportSpec struct {
+	Project     string   `json:"project"`
+	Title       string   `json:"title"`
+	Description string   `json:"description,omitempty"`
+	Status      string   `json:"status,omitempty"`
+	Priority    string   `json:"priority,omitempty"`
+	Milestone   string   `json:"milestone,omitempty"`
+	Parent      string   `json:"parent,omitempty"`
+	Labels      []string `json:"labels,omitempty"`
+}
+
+func issueImportCmd() *cobra.Command {
+	var file, defaultProject string
+	var asJSON bool
+	c := &cobra.Command{
+		Use:   "import [file]",
+		Short: "Bulk-create issues from an NDJSON file (or stdin with '-')",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := file
+			if len(args) == 1 {
+				path = args[0]
+			}
+			var src io.Reader
+			if path == "" || path == "-" {
+				src = os.Stdin
+			} else {
+				f, err := os.Open(path)
+				if err != nil {
+					return err
+				}
+				defer f.Close()
+				src = f
+			}
+			s, err := openStore()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			projects := projectKeysByID(s)
+			scanner := bufio.NewScanner(src)
+			scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+			lineNo := 0
+			created := 0
+			out := cmd.OutOrStdout()
+			for scanner.Scan() {
+				lineNo++
+				line := strings.TrimSpace(scanner.Text())
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				var spec IssueImportSpec
+				if err := json.Unmarshal([]byte(line), &spec); err != nil {
+					return fmt.Errorf("line %d: invalid JSON: %w", lineNo, err)
+				}
+				if spec.Project == "" {
+					spec.Project = defaultProject
+				}
+				if spec.Project == "" {
+					return fmt.Errorf("%w: line %d: project required (set per-record or pass --project)", store.ErrValidation, lineNo)
+				}
+				params := store.CreateIssueParams{
+					ProjectKey:    strings.ToUpper(spec.Project),
+					Title:         spec.Title,
+					Description:   spec.Description,
+					MilestoneName: spec.Milestone,
+				}
+				if spec.Status != "" {
+					st, err := domain.ParseStatus(spec.Status)
+					if err != nil {
+						return fmt.Errorf("line %d: %w", lineNo, err)
+					}
+					params.Status = st
+				}
+				if spec.Priority != "" {
+					pr, err := domain.ParsePriority(spec.Priority)
+					if err != nil {
+						return fmt.Errorf("line %d: %w", lineNo, err)
+					}
+					params.Priority = pr
+				}
+				if spec.Parent != "" {
+					pk, err := domain.ParseIssueKey(spec.Parent)
+					if err != nil {
+						return fmt.Errorf("line %d: %w", lineNo, err)
+					}
+					params.ParentKey = &pk
+				}
+				issue, err := s.CreateIssue(params)
+				if err != nil {
+					return fmt.Errorf("line %d: %w", lineNo, err)
+				}
+				for _, lbl := range spec.Labels {
+					if err := s.AttachLabel(domain.IssueKey{Project: params.ProjectKey, Seq: issue.Seq}, lbl); err != nil {
+						return fmt.Errorf("line %d: attach label %q: %w", lineNo, lbl, err)
+					}
+				}
+				created++
+				if asJSON {
+					if err := WriteIssueNDJSON(out, issueJSONInputs(s, projects, params.ProjectKey, issue)); err != nil {
+						return err
+					}
+				}
+			}
+			if err := scanner.Err(); err != nil {
+				return err
+			}
+			if !asJSON {
+				fmt.Fprintf(out, "imported %d issue(s)\n", created)
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&file, "file", "", "NDJSON file path (default: stdin)")
+	c.Flags().StringVar(&defaultProject, "project", "", "default project key for records that omit it")
+	c.Flags().BoolVar(&asJSON, "json", false, "emit each created issue as a JSON line")
+	return c
+}
+
+func issueBlockedCmd() *cobra.Command {
+	var project string
+	var asJSON bool
+	c := &cobra.Command{
+		Use:   "blocked",
+		Short: "List issues that have at least one open blocker",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := openStore()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			projects := projectKeysByID(s)
+			issues, err := s.ListBlockedIssues(strings.ToUpper(project))
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				for _, i := range issues {
+					pk := projects[i.ProjectID]
+					if err := WriteIssueNDJSON(cmd.OutOrStdout(), issueJSONInputs(s, projects, pk, i)); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+			rows := []ListIssueRow{}
+			for _, i := range issues {
+				pk := projects[i.ProjectID]
+				parentKey, msName := resolveIssueRefs(s, projects, i)
+				rows = append(rows, ListIssueRow{
+					Key:       fmt.Sprintf("%s-%d", pk, i.Seq),
+					Title:     i.Title,
+					Status:    string(i.Status),
+					Priority:  string(i.Priority),
+					Milestone: msName,
+					Parent:    parentKey,
+				})
+			}
+			WriteIssueTable(cmd.OutOrStdout(), rows)
+			return nil
+		},
+	}
+	c.Flags().StringVar(&project, "project", "", "project key filter")
+	c.Flags().BoolVar(&asJSON, "json", false, "NDJSON output")
 	return c
 }

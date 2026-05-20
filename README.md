@@ -18,7 +18,32 @@ go build -o cliban ./cmd/cliban
 
 ## Editor integration
 
-`cliban issue add --project CLI` with no `--title` opens `$EDITOR` (`$VISUAL` first, fall back to `vi`) with a YAML-frontmatter + markdown buffer. Same flow inside the TUI: select a card and press `e`. Pass `--no-editor` or set `$CLIBAN_NO_EDITOR=1` to disable the editor (useful for agents that should never block).
+By default `cliban issue add` and `cliban issue edit` never open an editor —
+they fail fast if no content flags are supplied, which is the right behavior
+for agents. Pass `--editor` to opt in to the YAML-frontmatter + markdown
+buffer in `$EDITOR` (`$VISUAL` first, falls back to `vi`). Inside the TUI,
+select a card and press `e`.
+
+## Shell completion
+
+cliban prints completion scripts via the standard `completion` subcommand. To
+install, pick the one-liner for your shell:
+
+```bash
+# bash (system-wide)
+cliban completion bash | sudo tee /etc/bash_completion.d/cliban > /dev/null
+
+# zsh (user)
+mkdir -p ~/.zsh/completions
+cliban completion zsh > ~/.zsh/completions/_cliban
+# then add `fpath=(~/.zsh/completions $fpath)` and `autoload -U compinit && compinit` to ~/.zshrc
+
+# fish
+cliban completion fish > ~/.config/fish/completions/cliban.fish
+
+# PowerShell
+cliban completion powershell | Out-String | Invoke-Expression
+```
 
 ## Documentation
 

@@ -28,3 +28,19 @@ func ParsePriority(s string) (Priority, error) {
 	}
 	return "", fmt.Errorf("invalid priority %q (valid: none, low, medium, high, urgent)", s)
 }
+
+// PriorityRank returns an integer used for sorting. urgent > high > medium > low > none.
+func PriorityRank(p Priority) int {
+	switch p {
+	case PriorityUrgent:
+		return 4
+	case PriorityHigh:
+		return 3
+	case PriorityMedium:
+		return 2
+	case PriorityLow:
+		return 1
+	default:
+		return 0
+	}
+}

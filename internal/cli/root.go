@@ -24,7 +24,7 @@ func NewRoot() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().StringVar(&G.DBPath, "db", "", "path to SQLite DB (default: $CLIBAN_DB or $XDG_DATA_HOME/cliban/cliban.db)")
-	root.AddCommand(NewInit(), NewVersion(), newProjectCmd(), newMilestoneCmd(), newIssueCmd(), newTUICmd())
+	root.AddCommand(NewInit(), NewVersion(), newProjectCmd(), newMilestoneCmd(), newIssueCmd(), newLabelCmd(), newTUICmd())
 	root.RunE = func(cmd *cobra.Command, args []string) error {
 		return RunTUI()
 	}

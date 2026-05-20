@@ -9,8 +9,12 @@ type Project struct {
 	Description string
 	Archived    bool
 	IssueSeq    int64
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// AutoArchiveDoneAfterDays, when non-nil, instructs cleanup operations
+	// (e.g. `archive-done --auto`) to archive done issues older than this
+	// many days since they were completed.
+	AutoArchiveDoneAfterDays *int64
+	CreatedAt                time.Time
+	UpdatedAt                time.Time
 }
 
 type MilestoneStatus string
@@ -44,6 +48,7 @@ type Issue struct {
 	Priority    Priority
 	Position    float64
 	Archived    bool
+	DueDate     *time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	CompletedAt *time.Time

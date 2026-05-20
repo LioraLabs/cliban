@@ -55,8 +55,8 @@ func TestProjectAddAndList(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("ls code=%d", code)
 	}
-	if !strings.Contains(out, `"key": "CLI"`) {
-		t.Errorf("missing CLI in output: %s", out)
+	if !strings.Contains(out, `"key":"CLI"`) {
+		t.Errorf("missing CLI in NDJSON output: %s", out)
 	}
 	var arr []map[string]any
 	dec := json.NewDecoder(strings.NewReader(out))

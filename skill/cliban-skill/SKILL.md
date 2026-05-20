@@ -5,7 +5,9 @@ description: Drive the local cliban kanban board via its CLI. Use when the user 
 
 # Using cliban
 
-`cliban` is a self-hosted, terminal-first kanban board with a flat CLI. **Always use `--json` for reads** — never parse the human table format. **Always pass content flags on mutations** — never let the editor open (or pass `--no-editor`) so the agent never hangs on an interactive editor.
+`cliban` is a self-hosted, terminal-first kanban board with a flat CLI.
+**Always use `--json` for reads** — never parse the human table format. The
+default no longer opens an editor; mutations are safe to run unattended.
 
 ## Vocabulary
 
@@ -13,6 +15,37 @@ description: Drive the local cliban kanban board via its CLI. Use when the user 
 - **Priorities**: `none` | `low` | `medium` | `high` | `urgent`
 - **Issue keys**: `{PROJECT}-{N}` like `CLI-42` (project key is uppercase letters/digits, 2-10 chars starting with a letter).
 - **Sub-issues**: depth limited to 2 — a sub-issue cannot have its own children. The CLI returns exit code 2 if you try to nest a third level.
+- **Relations**: `blocks`, `blocked_by` (reverse of `blocks`), `related_to` (symmetric).
+- **Labels**: free-form tags per project. Create with `cliban label add`, attach via `--label` on `issue add`/`edit`/`import`.
+
+## JSON shapes
+
+The agent-facing JSON shape is stable. Optional refs are `null` (never omitted) so destructuring is safe:
+
+```json
+{
+  "key":            "CLI-42",
+  "title":          "...",
+  "description":    "...",
+  "status":         "backlog",
+  "priority":       "high",
+  "position":       12000.5,
+  "archived":       false,
+  "milestone":      "v0.1" | null,
+  "parent":         "CLI-3" | null,
+  "due_date":       "2026-06-01" | null,
+  "labels":         ["bug", "ui"],
+  "relations":      [{"type": "blocks", "target": "CLI-9"}, {"type": "blocked_by", "target": "CLI-3"}],
+  "git_branch_name":"cli-42-fix-column-ordering",
+  "created_at":     "2026-...Z",
+  "updated_at":     "2026-...Z",
+  "completed_at":   "2026-...Z" | (absent when not done)
+}
+```
+
+`cliban issue show KEY --json` returns one pretty-printed object.
+`cliban issue ls --json` emits one **compact** JSON object per line (NDJSON).
+Parse with `for line in stdout.splitlines(): json.loads(line)` (or `jq -c`).
 
 ## DB location
 
@@ -25,7 +58,7 @@ description: Drive the local cliban kanban board via its CLI. Use when the user 
 cliban project add CLI --name "Cliban" --description "kanban board"
 ```
 
-### List projects (machine-readable)
+### List projects (NDJSON)
 ```bash
 cliban project ls --json
 ```
@@ -35,8 +68,23 @@ cliban project ls --json
 cliban issue add --project CLI \
   --title "Fix the kanban column ordering" \
   --description "When more than 5 cards exist in IN-REVIEW, positions go negative." \
-  --priority high --json
+  --priority high --due 2026-06-01 \
+  --label bug --label ui \
+  --blocked-by CLI-3 --related-to CLI-7 \
+  --json
 ```
+
+### Bulk-import issues from NDJSON
+```bash
+cat <<'EOF' > /tmp/imp.ndjson
+{"project":"CLI","title":"alpha","priority":"high","labels":["bug"]}
+{"project":"CLI","title":"beta","milestone":"v0.1","blocked_by":"CLI-1"}
+EOF
+cliban issue import /tmp/imp.ndjson --json
+# or stream:
+cliban issue import - < /tmp/imp.ndjson --json
+```
+Each input line is a `{project, title, [description, status, priority, milestone, parent, labels]}` object. With `--project KEY`, records may omit `project`.
 
 ### Add a sub-issue
 ```bash
@@ -44,9 +92,11 @@ cliban issue add --project CLI --parent CLI-12 \
   --title "Repro test" --priority medium --json
 ```
 
-### List blocked issues across all projects
+### Read multi-line description from a file
 ```bash
-cliban issue ls --status blocked --json
+cliban issue add --project CLI --title "Plan" --description-file ./plan.md
+# stdin still works:
+cliban issue edit CLI-12 --description - < /tmp/desc.md
 ```
 
 ### Move work along
@@ -59,6 +109,7 @@ cliban issue mv CLI-12 done
 ### Set or clear a milestone
 ```bash
 cliban milestone add --project CLI --name "v0.1" --target 2026-06-01
+cliban milestone show v0.1 --project CLI --with-issues --json   # positional NAME
 cliban issue edit CLI-12 --milestone "v0.1"
 cliban issue edit CLI-12 --clear-milestone
 ```
@@ -68,9 +119,31 @@ cliban issue edit CLI-12 --clear-milestone
 cliban issue edit CLI-12 --clear-parent
 ```
 
-### Pipe a multi-line description from a file
+### Labels
 ```bash
-cliban issue edit CLI-12 --description - < /tmp/desc.md
+cliban label add bug --project CLI
+cliban label ls --project CLI --json
+cliban issue edit CLI-12 --label bug --label cook-cc
+cliban issue ls --project CLI --label bug --json   # filter (all-of semantics)
+cliban issue edit CLI-12 --remove-label cook-cc
+```
+
+### Issue relations
+```bash
+cliban issue edit CLI-12 --blocks CLI-9
+cliban issue edit CLI-12 --blocked-by CLI-3
+cliban issue edit CLI-12 --related-to CLI-7
+
+cliban issue blocked --project CLI --json    # issues with an open blocker
+cliban issue edit CLI-12 --remove-relation CLI-9
+```
+
+### Sorting
+```bash
+cliban issue ls --project CLI --sort priority --json          # urgent first (default desc)
+cliban issue ls --project CLI --sort created:asc --json
+cliban issue ls --project CLI --sort updated:desc --json
+cliban issue ls --project CLI --sort position --json
 ```
 
 ### Inspect a single issue (full detail)
@@ -89,10 +162,14 @@ cliban issue archive CLI-12
 cliban issue unarchive CLI-12        # restore
 ```
 
-### Sweep all done issues out of a project board
+### Sweep done issues out of a project board
 ```bash
 cliban issue archive-done --project CLI --json
+# Or run the auto sweep that honors each project's policy:
+cliban project edit CLI --auto-archive-done-after 7d
+cliban issue archive-done --auto --json
 ```
+Setting `--auto-archive-done-after 0` disables the policy.
 
 ### Query archived issues
 ```bash
@@ -108,12 +185,19 @@ cliban issue ls --project CLI --archived --json
 
 ## What NOT to do
 
-- Don't invoke `cliban issue add --project X` with no `--title` — that triggers the editor and will hang in agent contexts. Always pass `--title` (and `--description`/`--priority` as needed).
-- Don't try to parse the table output of `ls`/`show`. Use `--json` (NDJSON for lists, single JSON object for `show`).
+- Don't try to parse the table output of `ls`/`show`. Use `--json`.
 - Don't nest sub-issues three levels deep; the CLI returns exit code 2.
 - Don't filter on archived state by hand — pass `--archived` to `ls` to include them; otherwise they are excluded.
 - Don't assume timestamps are in the local timezone — they are UTC ISO-8601.
-- Don't try to mutate via `cliban issue edit CLI-42` with no flags. That triggers the editor. Pass `--title`/`--description`/etc. or use `--no-editor` to fail fast.
+- Don't pass `--editor` in an agent context unless you actually have a TTY; it will fail with exit code 2 if stdin isn't a TTY.
+
+## Editor behavior (agent-safe)
+
+`cliban issue add` and `cliban issue edit` **never open an editor by default**.
+You must pass `--editor` (or `-e` for `edit`) to opt in. Without `--editor`,
+`add` requires `--title`; `edit` requires at least one mutation flag — both
+fail with exit code 2 otherwise. The legacy `--no-editor` flag is still
+accepted as a no-op for backwards compatibility.
 
 ## Discovery checklist
 
@@ -123,4 +207,5 @@ When the user gives a vague kanban-related task, run these reads first to ground
 cliban project ls --json
 cliban issue ls --status in-progress --json
 cliban issue ls --status blocked --json
+cliban issue blocked --json            # what's stuck on something
 ```

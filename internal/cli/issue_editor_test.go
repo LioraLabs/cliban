@@ -24,7 +24,7 @@ func TestIssueAddOpensEditor(t *testing.T) {
 	}()
 	defer os.Unsetenv("EDITOR")
 	defer os.Unsetenv("CLIBAN_FORCE_TTY")
-	_, _, c := runCLI(t, "issue", "add", "--project", "CLI")
+	_, _, c := runCLI(t, "issue", "add", "--project", "CLI", "--editor")
 	if c != 0 {
 		t.Fatalf("issue add via editor code=%d", c)
 	}

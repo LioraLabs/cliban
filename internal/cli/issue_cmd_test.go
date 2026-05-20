@@ -63,7 +63,7 @@ func TestIssueArchiveDone(t *testing.T) {
 		t.Errorf("expected archived count 1: %s", out)
 	}
 	out, _, _ = runCLI(t, "issue", "ls", "--project", "CLI", "--json")
-	if !strings.Contains(out, `"title": "b"`) || strings.Contains(out, `"title": "a"`) {
+	if !strings.Contains(out, `"title":"b"`) || strings.Contains(out, `"title":"a"`) {
 		t.Errorf("after archive-done expected only 'b': %s", out)
 	}
 }
