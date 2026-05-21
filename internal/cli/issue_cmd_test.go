@@ -235,6 +235,47 @@ func TestIssueShow_Section_NotFound(t *testing.T) {
 	}
 }
 
+func TestIssueLs_SearchReturnsScoredJSON(t *testing.T) {
+	if _, _, c := runCLI(t, "init"); c != 0 {
+		t.Fatal("init failed")
+	}
+	if _, _, c := runCLI(t, "project", "add", "AAA", "--name", "A"); c != 0 {
+		t.Fatal("project add failed")
+	}
+	if _, _, c := runCLI(t, "issue", "add", "--project", "AAA", "--title", "fuzzy ticket finder"); c != 0 {
+		t.Fatal("issue add failed")
+	}
+	if _, _, c := runCLI(t, "issue", "add", "--project", "AAA", "--title", "decoy"); c != 0 {
+		t.Fatal("decoy add failed")
+	}
+	out, _, c := runCLI(t, "issue", "ls", "--project", "AAA", "--search", "fuzzy", "--json")
+	if c != 0 {
+		t.Fatalf("ls --search code=%d out=%s", c, out)
+	}
+	if !strings.Contains(out, `"key":"AAA-1"`) {
+		t.Fatalf("expected AAA-1 in output: %s", out)
+	}
+	if !strings.Contains(out, `"score":`) {
+		t.Fatalf("expected score field in NDJSON: %s", out)
+	}
+	// The decoy ranks lower or doesn't appear — verify AAA-1 comes BEFORE AAA-2 in the output.
+	iAAA1 := strings.Index(out, `"key":"AAA-1"`)
+	iAAA2 := strings.Index(out, `"key":"AAA-2"`)
+	if iAAA2 >= 0 && iAAA1 > iAAA2 {
+		t.Fatalf("AAA-1 should rank above AAA-2: out=%s", out)
+	}
+}
+
+func TestIssueLs_EmptySearchErrors(t *testing.T) {
+	if _, _, c := runCLI(t, "init"); c != 0 {
+		t.Fatal("init failed")
+	}
+	_, _, c := runCLI(t, "issue", "ls", "--search", "  ")
+	if c == 0 {
+		t.Fatal("expected non-zero exit for whitespace-only --search")
+	}
+}
+
 func TestIssueShow_Pager_FallbackPlainOutput(t *testing.T) {
 	// Use 'cat' as PAGER so the pipe is non-interactive and ends up on stdout.
 	os.Setenv("PAGER", "cat")
@@ -252,5 +293,27 @@ func TestIssueShow_Pager_FallbackPlainOutput(t *testing.T) {
 	}
 	if !strings.Contains(out, "body") {
 		t.Fatalf("expected body in piped output, got:\n%s", out)
+	}
+}
+
+func TestIssueLs_SearchPlusSortWarns(t *testing.T) {
+	if _, _, c := runCLI(t, "init"); c != 0 {
+		t.Fatal("init failed")
+	}
+	if _, _, c := runCLI(t, "project", "add", "AAA", "--name", "A"); c != 0 {
+		t.Fatal("project add failed")
+	}
+	if _, _, c := runCLI(t, "issue", "add", "--project", "AAA", "--title", "fuzzy"); c != 0 {
+		t.Fatal("issue add failed")
+	}
+	stdout, stderr, code := runCLI(t, "issue", "ls", "--project", "AAA", "--search", "fuzzy", "--sort", "priority")
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stderr, "ignored") {
+		t.Fatalf("expected stderr to mention --sort being ignored; got %q", stderr)
+	}
+	if !strings.Contains(stdout, "AAA-1") {
+		t.Fatalf("expected result in stdout despite warning; got %q", stdout)
 	}
 }

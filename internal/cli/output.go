@@ -94,12 +94,44 @@ func WriteIssueNDJSON(w io.Writer, in IssueJSONInputs) error {
 	return writeJSONLine(w, IssueToJSON(in))
 }
 
+// WriteSearchMatchNDJSON writes a single NDJSON line for a search match,
+// adding a "score" field to the standard issue JSON shape.
+func WriteSearchMatchNDJSON(w io.Writer, in IssueJSONInputs, score int) error {
+	out := IssueToJSON(in)
+	out["score"] = score
+	return writeJSONLine(w, out)
+}
+
 func WriteIssueTable(w io.Writer, rows []ListIssueRow) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "KEY\tTITLE\tSTATUS\tPRIORITY\tMILESTONE\tPARENT")
 	for _, r := range rows {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			r.Key, r.Title, r.Status, r.Priority, dashIfEmpty(r.Milestone), dashIfEmpty(r.Parent))
+	}
+	tw.Flush()
+}
+
+// ListSearchRow mirrors ListIssueRow with an extra Score column for fuzzy
+// search output.
+type ListSearchRow struct {
+	Score     int    `json:"score"`
+	Key       string `json:"key"`
+	Title     string `json:"title"`
+	Status    string `json:"status"`
+	Priority  string `json:"priority"`
+	Milestone string `json:"milestone,omitempty"`
+	Parent    string `json:"parent,omitempty"`
+}
+
+// WriteSearchTable renders fuzzy search rows as a human-readable table with a
+// leading SCORE column.
+func WriteSearchTable(w io.Writer, rows []ListSearchRow) {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "SCORE\tKEY\tTITLE\tSTATUS\tPRIORITY\tMILESTONE\tPARENT")
+	for _, r := range rows {
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			r.Score, r.Key, r.Title, r.Status, r.Priority, dashIfEmpty(r.Milestone), dashIfEmpty(r.Parent))
 	}
 	tw.Flush()
 }

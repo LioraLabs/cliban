@@ -118,3 +118,62 @@ func TestListIssues(t *testing.T) {
 		t.Errorf("in-progress len=%d want 1", len(inProg))
 	}
 }
+
+func TestListIssues_MultiProject(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.CreateProject("AAA", "A", ""); err != nil {
+		t.Fatalf("CreateProject AAA: %v", err)
+	}
+	if _, err := s.CreateProject("BBB", "B", ""); err != nil {
+		t.Fatalf("CreateProject BBB: %v", err)
+	}
+	if _, err := s.CreateProject("CCC", "C", ""); err != nil {
+		t.Fatalf("CreateProject CCC: %v", err)
+	}
+	if _, err := s.CreateIssue(CreateIssueParams{ProjectKey: "AAA", Title: "first"}); err != nil {
+		t.Fatalf("CreateIssue: %v", err)
+	}
+	if _, err := s.CreateIssue(CreateIssueParams{ProjectKey: "BBB", Title: "second"}); err != nil {
+		t.Fatalf("CreateIssue: %v", err)
+	}
+	if _, err := s.CreateIssue(CreateIssueParams{ProjectKey: "AAA", Title: "third"}); err != nil {
+		t.Fatalf("CreateIssue: %v", err)
+	}
+	if _, err := s.CreateIssue(CreateIssueParams{ProjectKey: "CCC", Title: "fourth"}); err != nil {
+		t.Fatalf("CreateIssue: %v", err)
+	}
+
+	got, err := s.ListIssues(ListIssuesFilter{Projects: []string{"AAA", "BBB"}})
+	if err != nil {
+		t.Fatalf("ListIssues AAA+BBB: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("want 3 issues across AAA+BBB, got %d", len(got))
+	}
+
+	got, err = s.ListIssues(ListIssuesFilter{Projects: []string{"AAA"}})
+	if err != nil {
+		t.Fatalf("ListIssues AAA: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 issues for AAA, got %d", len(got))
+	}
+
+	// When Projects is non-empty, the legacy ProjectKey field must be ignored.
+	got, err = s.ListIssues(ListIssuesFilter{ProjectKey: "CCC", Projects: []string{"AAA"}})
+	if err != nil {
+		t.Fatalf("ListIssues mixed: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("Projects must override ProjectKey: want 2, got %d", len(got))
+	}
+
+	// When Projects is empty, the legacy ProjectKey field continues to work.
+	got, err = s.ListIssues(ListIssuesFilter{ProjectKey: "CCC"})
+	if err != nil {
+		t.Fatalf("ListIssues legacy: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("ProjectKey fallback: want 1, got %d", len(got))
+	}
+}

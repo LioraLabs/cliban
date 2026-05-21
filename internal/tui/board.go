@@ -38,8 +38,10 @@ type boardModel struct {
 	back           bool
 	err            error
 	awaitingMove   bool
-	filtering      bool
-	filter         string
+	// picker is the fuzzy finder overlay (Task 10). Non-nil means the
+	// overlay is open and consumes keypresses; Enter snaps the board cursor
+	// onto the picked card and clears the field, Esc clears without moving.
+	picker         *PickerModel
 	openDetailKey  *domain.IssueKey
 	showMilestones bool
 	editorErr      error
@@ -157,6 +159,24 @@ func (m boardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, marqueeTick()
 	case tea.KeyMsg:
+		// While the fuzzy picker overlay is open, all key events go to it.
+		// Enter snaps the board cursor onto the chosen card; Esc closes
+		// without moving. Otherwise let the picker update its visible set.
+		if m.picker != nil {
+			next, cmd := m.picker.Update(v)
+			pm := next.(PickerModel)
+			m.picker = &pm
+			if pm.Cancelled() {
+				m.picker = nil
+				return m, nil
+			}
+			if sel := pm.Selected(); sel != nil {
+				m.picker = nil
+				m.snapCursorToKey(sel.Key)
+				return m, nil
+			}
+			return m, cmd
+		}
 		nm, cmd := m.handleKey(v)
 		nb := nm.(boardModel)
 		nb.clampScroll()
@@ -188,24 +208,6 @@ func (m boardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.filtering {
-		switch k.String() {
-		case "esc":
-			m.filtering = false
-			m.filter = ""
-		case "enter":
-			m.filtering = false
-		case "backspace":
-			if len(m.filter) > 0 {
-				m.filter = m.filter[:len(m.filter)-1]
-			}
-		default:
-			if len(k.String()) == 1 {
-				m.filter += k.String()
-			}
-		}
-		return m, nil
-	}
 	if m.awaitingMove {
 		m.awaitingMove = false
 		st, ok := statusForKey(k.String())
@@ -255,7 +257,10 @@ func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		return m, m.Init()
 	case "/":
-		m.filtering = true
+		items := m.buildPickerItems()
+		pm := NewPickerModel(items)
+		m.picker = &pm
+		return m, pm.Init()
 	case "enter":
 		sel := m.selected()
 		if sel != nil {
@@ -361,6 +366,71 @@ func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// buildPickerItems walks every card on the current board (all 5 status
+// columns) and produces a flat slice of PickerItem rows for the fuzzy picker
+// overlay. Labels are loaded in one bulk query so even larger projects don't
+// pay an N+1 cost when opening the picker.
+func (m boardModel) buildPickerItems() []PickerItem {
+	var total int
+	for i := 0; i < 5; i++ {
+		total += len(m.columns[i])
+	}
+	if total == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, total)
+	for i := 0; i < 5; i++ {
+		for _, iss := range m.columns[i] {
+			ids = append(ids, iss.ID)
+		}
+	}
+	labelsByID := map[int64][]string{}
+	if m.store != nil {
+		if lbls, err := m.store.LabelsForIssues(ids); err == nil {
+			labelsByID = lbls
+		}
+	}
+	items := make([]PickerItem, 0, total)
+	for i := 0; i < 5; i++ {
+		statusName := string(domain.AllStatuses()[i])
+		for _, iss := range m.columns[i] {
+			items = append(items, PickerItem{
+				Key:      fmt.Sprintf("%s-%d", m.projectKey, iss.Seq),
+				Title:    iss.Title,
+				Project:  m.projectKey,
+				Status:   statusName,
+				Priority: string(iss.Priority),
+				Labels:   labelsByID[iss.ID],
+			})
+		}
+	}
+	return items
+}
+
+// snapCursorToKey moves the board cursor onto the card identified by key
+// (e.g. "CLI-7"), adjusting both the column cursor and the per-column row
+// cursor, and scrolling so the card is visible. A key that isn't on the
+// current board (wrong project, archived, or filtered out) is a silent no-op.
+func (m *boardModel) snapCursorToKey(key string) {
+	parsed, err := domain.ParseIssueKey(key)
+	if err != nil {
+		return
+	}
+	if parsed.Project != m.projectKey {
+		return
+	}
+	for col := 0; col < 5; col++ {
+		for row, iss := range m.columns[col] {
+			if iss.Seq == parsed.Seq {
+				m.colCursor = col
+				m.rowCursor[col] = row
+				m.clampScroll()
+				return
+			}
+		}
+	}
 }
 
 func (m boardModel) selected() *domain.Issue {
@@ -565,25 +635,18 @@ func (m *boardModel) clampScroll() {
 }
 
 func (m boardModel) View() string {
+	// When the fuzzy picker overlay is open, take over the screen entirely.
+	// A true overlay would render the picker centred over a dimmed board; a
+	// full-screen takeover is simpler and feels modal in the same way fzf does.
+	if m.picker != nil {
+		return m.picker.View()
+	}
+
 	headers := []string{"BACKLOG", "IN-PROG", "BLOCKED", "IN-REV", "DONE"}
 	cardWidth, colsToShow, rowBudget := m.viewport()
 	cardBudget := rowBudget - 2
 	if cardBudget < 1 {
 		cardBudget = 1
-	}
-
-	filtered := m.columns
-	if m.filter != "" {
-		var fcols [5][]*domain.Issue
-		needle := strings.ToLower(m.filter)
-		for col := 0; col < 5; col++ {
-			for _, issue := range m.columns[col] {
-				if strings.Contains(strings.ToLower(issue.Title), needle) {
-					fcols[col] = append(fcols[col], issue)
-				}
-			}
-		}
-		filtered = fcols
 	}
 
 	visible := make([]string, 0, colsToShow)
@@ -592,38 +655,13 @@ func (m boardModel) View() string {
 		if i >= 5 {
 			break
 		}
-		cards := filtered[i]
+		cards := m.columns[i]
 		cursor := m.rowCursor[i]
 		if len(cards) > 0 && cursor >= len(cards) {
 			cursor = len(cards) - 1
 		}
 
-		// When a filter is active the indices it produces don't match the
-		// stored rowScroll. Recompute a local scroll offset that keeps the
-		// (clamped) cursor visible without mutating model state.
 		scroll := m.rowScroll[i]
-		if m.filter != "" {
-			scroll = 0
-			for scroll < cursor {
-				used := 0
-				fits := false
-				for r := scroll; r < len(cards); r++ {
-					ch := m.cardHeight(cards[r])
-					if used+ch > cardBudget {
-						break
-					}
-					used += ch
-					if r == cursor {
-						fits = true
-						break
-					}
-				}
-				if fits {
-					break
-				}
-				scroll++
-			}
-		}
 		if scroll > 0 && scroll > cursor {
 			scroll = cursor
 		}
@@ -678,13 +716,10 @@ func (m boardModel) View() string {
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, visible...)
 
-	helpText := "hjkl move  enter detail  e edit  n new  N ms+  t tag-ms  Space mv  a archive  M ms-filter  / filter  r refresh  q quit"
+	helpText := "hjkl move  enter detail  e edit  n new  N ms+  t tag-ms  Space mv  a archive  M ms-filter  / find  r refresh  q quit"
 	helpText = fmt.Sprintf("col %d/5  | %s", m.colCursor+1, helpText)
 	if m.milestoneFilter != "" {
 		helpText = fmt.Sprintf("milestone: %s  | %s", m.milestoneFilter, helpText)
-	}
-	if m.filter != "" || m.filtering {
-		helpText = fmt.Sprintf("filter: %s  | %s", m.filter, helpText)
 	}
 	if m.editorErr != nil {
 		helpText = "ERR: " + m.editorErr.Error() + " | " + helpText

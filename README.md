@@ -100,6 +100,16 @@ This is produced by `cliban issue promote` and consumed by readers (humans, and 
 
 If the description structure is violated (missing `## Plan` anchor, renamed `### Task N`, etc.), the workflow commands exit with code 2 and a clear error pointing at the structural problem. No best-effort recovery — fix the description and retry.
 
+## Fuzzy-find tickets
+
+Three coordinated surfaces share one matcher (powered by `github.com/sahilm/fuzzy`):
+
+- `cliban issue ls --search QUERY` — pipeable. Adds a `score` field in `--json` output; respects every existing `ls` filter (`--project`, `--label`, `--milestone`, `--status`, `--priority`, `--archived`, `--no-subs`, `--parent`). `--limit N` caps results (default 50 when `--search` is set).
+- `cliban fff [QUERY]` — interactive Bubble Tea picker; prints the selected key to stdout so you can compose: `cliban issue show $(cliban fff)`. Same filter flags as `ls`. Falls back to batch NDJSON mode when stdin is not a TTY (great for `cliban fff foo | jq`).
+- `/` inside `cliban tui` — fuzzy filter overlay; selecting a card snaps the board cursor onto it.
+
+The matcher weights matches across title (×3.0), key (×2.5), labels (×2.0), and description (×1.0). Default scope is all non-archived issues across all projects; narrow with `--project`, `--label`, etc.
+
 ## Test
 
 ```bash

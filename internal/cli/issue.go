@@ -14,6 +14,7 @@ import (
 
 	"github.com/alex/cliban/internal/descmd"
 	"github.com/alex/cliban/internal/domain"
+	"github.com/alex/cliban/internal/search"
 	"github.com/alex/cliban/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -322,18 +323,40 @@ func printIssueResult(w io.Writer, s *store.Store, projectKey string, issue *dom
 
 func issueListCmd() *cobra.Command {
 	var project, status, priority, milestone, parent, sortBy string
-	var updatedSinceFlag string
+	var updatedSinceFlag, searchQuery string
 	var labels []string
 	var noSubs, asJSON, includeArchived bool
+	var limit int
 	c := &cobra.Command{
 		Use:   "ls",
 		Short: "List issues",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("search") && strings.TrimSpace(searchQuery) == "" {
+				return fmt.Errorf("%w: --search requires a non-empty query", store.ErrValidation)
+			}
 			s, err := openStore()
 			if err != nil {
 				return err
 			}
 			defer s.Close()
+			if strings.TrimSpace(searchQuery) != "" {
+				if cmd.Flags().Changed("sort") {
+					fmt.Fprintf(cmd.ErrOrStderr(), "note: --sort is ignored when --search is set\n")
+				}
+				return runIssueSearch(cmd, s, issueSearchInputs{
+					query:           searchQuery,
+					project:         project,
+					status:          status,
+					priority:        priority,
+					milestone:       milestone,
+					parent:          parent,
+					labels:          labels,
+					includeArchived: includeArchived,
+					noSubs:          noSubs,
+					limit:           limit,
+					asJSON:          asJSON,
+				})
+			}
 			f := store.ListIssuesFilter{
 				ProjectKey:      strings.ToUpper(project),
 				MilestoneName:   milestone,
@@ -416,7 +439,88 @@ func issueListCmd() *cobra.Command {
 	c.Flags().BoolVar(&asJSON, "json", false, "NDJSON output (one compact JSON object per line)")
 	c.Flags().BoolVar(&includeArchived, "archived", false, "include archived issues")
 	c.Flags().StringVar(&updatedSinceFlag, "updated-since", "", "filter issues updated within a duration (e.g. 4h) or since an RFC3339 timestamp")
+	c.Flags().StringVar(&searchQuery, "search", "", "fuzzy search query across title/key/labels/description")
+	c.Flags().IntVar(&limit, "limit", 0, "cap result count (default 50 when --search is set; ignored otherwise)")
 	return c
+}
+
+// issueSearchInputs bundles the resolved CLI flags for the --search branch
+// of `issue ls` so the helper signature stays compact.
+type issueSearchInputs struct {
+	query           string
+	project         string
+	status          string
+	priority        string
+	milestone       string
+	parent          string
+	labels          []string
+	includeArchived bool
+	noSubs          bool
+	limit           int
+	asJSON          bool
+}
+
+// runIssueSearch performs a fuzzy search using internal/search and writes the
+// results either as NDJSON (with a `score` field per row) or as a tabular
+// listing with a leading SCORE column.
+func runIssueSearch(cmd *cobra.Command, s *store.Store, in issueSearchInputs) error {
+	effectiveLimit := in.limit
+	if effectiveLimit == 0 {
+		effectiveLimit = 50
+	}
+	opts := search.Options{
+		Query:           in.query,
+		Projects:        singletonOrNil(strings.ToUpper(in.project)),
+		Labels:          in.labels,
+		Milestones:      singletonOrNil(in.milestone),
+		Statuses:        singletonOrNil(in.status),
+		Priorities:      singletonOrNil(in.priority),
+		IncludeArchived: in.includeArchived,
+		ExcludeSubs:     in.noSubs,
+		ParentKey:       in.parent,
+		Limit:           effectiveLimit,
+	}
+	matches, err := search.Search(cmd.Context(), s, opts)
+	if err != nil {
+		return err
+	}
+	projects := projectKeysByID(s)
+	out := cmd.OutOrStdout()
+	if in.asJSON {
+		for _, m := range matches {
+			pk := projects[m.Issue.ProjectID]
+			if err := WriteSearchMatchNDJSON(out, issueJSONInputs(s, projects, pk, m.Issue), m.Score); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	rows := make([]ListSearchRow, 0, len(matches))
+	for _, m := range matches {
+		pk := projects[m.Issue.ProjectID]
+		parentKey, msName := resolveIssueRefs(s, projects, m.Issue)
+		rows = append(rows, ListSearchRow{
+			Score:     m.Score,
+			Key:       fmt.Sprintf("%s-%d", pk, m.Issue.Seq),
+			Title:     m.Issue.Title,
+			Status:    string(m.Issue.Status),
+			Priority:  string(m.Issue.Priority),
+			Milestone: msName,
+			Parent:    parentKey,
+		})
+	}
+	WriteSearchTable(out, rows)
+	return nil
+}
+
+// singletonOrNil returns nil for an empty string, else a one-element slice.
+// Used to translate CLI string flags into the slice-shaped filter fields of
+// search.Options.
+func singletonOrNil(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return []string{s}
 }
 
 // sortIssues sorts issues in place by the given key. Accepts "<field>" or

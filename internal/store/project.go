@@ -98,6 +98,31 @@ func (s *Store) ListProjects(includeArchived bool) ([]*domain.Project, error) {
 	return out, nil
 }
 
+// ProjectsByID returns a map of project ID -> project key for every
+// project, fetched in a single query. Used by callers that need to attach
+// the human-readable key to issues that only carry ProjectID, without
+// issuing N lookups.
+func (s *Store) ProjectsByID() (map[int64]string, error) {
+	rows, err := s.db.Query(`SELECT id, key FROM project`)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	defer rows.Close()
+	out := map[int64]string{}
+	for rows.Next() {
+		var id int64
+		var key string
+		if err := rows.Scan(&id, &key); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+		}
+		out[id] = key
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	return out, nil
+}
+
 func (s *Store) UpdateProject(key, name, description string) error {
 	if name == "" {
 		return fmt.Errorf("%w: name required", ErrValidation)

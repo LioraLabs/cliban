@@ -165,7 +165,12 @@ func scanIssue(r interface{ Scan(...any) error }) (*domain.Issue, error) {
 }
 
 type ListIssuesFilter struct {
-	ProjectKey      string
+	// ProjectKey is the legacy single-project filter; it is ignored when
+	// Projects is non-empty.
+	ProjectKey string
+	// Projects, when non-empty, restricts results to issues whose project
+	// key is in the set, OR'd via an IN(...) clause.
+	Projects        []string
 	Status          domain.Status
 	Priority        domain.Priority
 	MilestoneName   string
@@ -181,7 +186,15 @@ func (s *Store) ListIssues(f ListIssuesFilter) ([]*domain.Issue, error) {
 	q := `SELECT ` + issueSelectColsJoined + ` FROM issue i JOIN project p ON p.id = i.project_id`
 	var args []any
 	var conds []string
-	if f.ProjectKey != "" {
+	switch {
+	case len(f.Projects) > 0:
+		placeholders := strings.Repeat("?,", len(f.Projects))
+		placeholders = strings.TrimRight(placeholders, ",")
+		conds = append(conds, "p.key IN ("+placeholders+")")
+		for _, k := range f.Projects {
+			args = append(args, k)
+		}
+	case f.ProjectKey != "":
 		conds = append(conds, "p.key = ?")
 		args = append(args, f.ProjectKey)
 	}

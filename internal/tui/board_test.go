@@ -326,6 +326,51 @@ func TestRenderMarquee(t *testing.T) {
 	})
 }
 
+// TestBoardSnapCursorToKey verifies that snapCursorToKey moves colCursor and
+// rowCursor onto the card whose key matches the argument, regardless of which
+// column it currently lives in. Constructs a boardModel literal with
+// pre-populated columns to avoid DB bootstrap.
+func TestBoardSnapCursorToKey(t *testing.T) {
+	m := boardModel{
+		projectKey: "XX",
+		columns: [5][]*domain.Issue{
+			0: {{Seq: 1, Title: "a"}},
+			1: {{Seq: 2, Title: "b"}},
+			2: {{Seq: 3, Title: "c"}},
+		},
+	}
+	m.snapCursorToKey("XX-2")
+	if m.colCursor != 1 {
+		t.Fatalf("expected col=1, got %d", m.colCursor)
+	}
+	if m.rowCursor[1] != 0 {
+		t.Fatalf("expected row=0, got %d", m.rowCursor[1])
+	}
+
+	// Snap to a key in a different column resets the cursor accordingly.
+	m.snapCursorToKey("XX-3")
+	if m.colCursor != 2 {
+		t.Fatalf("expected col=2 after snapping to XX-3, got %d", m.colCursor)
+	}
+	if m.rowCursor[2] != 0 {
+		t.Fatalf("expected row=0 in col 2, got %d", m.rowCursor[2])
+	}
+
+	// Snapping to a missing key is a silent no-op.
+	prevCol, prevRow := m.colCursor, m.rowCursor[m.colCursor]
+	m.snapCursorToKey("XX-99")
+	if m.colCursor != prevCol || m.rowCursor[m.colCursor] != prevRow {
+		t.Fatalf("missing key changed cursor: col %d->%d row %d->%d",
+			prevCol, m.colCursor, prevRow, m.rowCursor[m.colCursor])
+	}
+
+	// Snapping to a key from a different project is also a no-op.
+	m.snapCursorToKey("YY-1")
+	if m.colCursor != prevCol {
+		t.Fatalf("cross-project key changed cursor: col %d->%d", prevCol, m.colCursor)
+	}
+}
+
 func TestBoardSpaceMovesIssueToDone(t *testing.T) {
 	s := newStore(t)
 	_, _ = s.CreateProject("CLI", "Cliban", "")

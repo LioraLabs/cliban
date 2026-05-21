@@ -145,3 +145,43 @@ func (s *Store) LabelsForIssue(issueID int64) ([]string, error) {
 	}
 	return out, rows.Err()
 }
+
+// LabelsForIssues bulk-fetches label names for the given issue IDs in a
+// single query, avoiding N+1 lookups. The returned map keys are issue IDs;
+// each value is the sorted list of label names attached to that issue.
+// Issues with no labels are absent from the map. Empty input returns an
+// empty map without touching the database.
+func (s *Store) LabelsForIssues(ids []int64) (map[int64][]string, error) {
+	if len(ids) == 0 {
+		return map[int64][]string{}, nil
+	}
+	placeholders := strings.Repeat("?,", len(ids))
+	placeholders = strings.TrimRight(placeholders, ",")
+	q := `SELECT il.issue_id, l.name
+		FROM issue_label il
+		JOIN label l ON l.id = il.label_id
+		WHERE il.issue_id IN (` + placeholders + `)
+		ORDER BY il.issue_id, l.name`
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	defer rows.Close()
+	out := map[int64][]string{}
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+		}
+		out[id] = append(out[id], name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInternal, err)
+	}
+	return out, nil
+}

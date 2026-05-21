@@ -43,4 +43,40 @@ visible=$(./cliban issue ls --project ARC --json | grep -c '"key":')
 all=$(./cliban issue ls --project ARC --archived --json | grep -c '"key":')
 [ "$all" -eq 3 ] || { echo "expected 3 with --archived, got $all"; exit 1; }
 
+# fuzzy search
+./cliban project add FFF --name "Fuzzy demo"
+./cliban issue add --project FFF --title "fuzzy ticket finder"
+./cliban issue add --project FFF --title "decoy ticket"
+
+# issue ls --search returns a score field in NDJSON
+score_line=$(./cliban issue ls --project FFF --search fuzzy --json | grep '"key":"FFF-1"' || true)
+[ -n "$score_line" ] || { echo "ls --search missing FFF-1"; exit 1; }
+echo "$score_line" | grep -q '"score":' || { echo "ls --search missing score field"; exit 1; }
+
+# empty --search errors with non-zero exit
+set +e
+./cliban issue ls --search "  " >/dev/null 2>&1
+code=$?
+set -e
+[ "$code" -ne 0 ] || { echo "expected non-zero exit for empty --search"; exit 1; }
+
+# fff batch mode (stdin not a TTY because we're in a shell pipeline)
+fff_out=$(./cliban fff fuzzy </dev/null)
+echo "$fff_out" | grep -q '"key":"FFF-1"' || { echo "fff batch missing FFF-1"; exit 1; }
+echo "$fff_out" | grep -q '"score":' || { echo "fff batch missing score"; exit 1; }
+
+# fff with no QUERY in non-TTY mode errors
+set +e
+./cliban fff </dev/null >/dev/null 2>&1
+code=$?
+set -e
+[ "$code" -ne 0 ] || { echo "expected non-zero exit for fff with no QUERY (non-TTY)"; exit 1; }
+
+# --show/--edit/--json mutex
+set +e
+./cliban fff --show --edit foo >/dev/null 2>&1
+code=$?
+set -e
+[ "$code" -ne 0 ] || { echo "expected non-zero exit for fff with mutex flags"; exit 1; }
+
 echo "smoke ok"
