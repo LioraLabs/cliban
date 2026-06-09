@@ -86,6 +86,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.issue.back {
 			m.view = viewBoard
 			m.issue.back = false
+			// Refresh the board so edits made in the detail view show up.
+			return m, tea.Batch(cmd, m.board.Init())
 		}
 	}
 	return m, cmd
@@ -103,5 +105,3 @@ func (m Model) View() string {
 		return fmt.Sprintf("unknown view")
 	}
 }
-
-

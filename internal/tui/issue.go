@@ -48,9 +48,19 @@ func (m issueModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case issueLoadedMsg:
 		m.issue, m.subs, m.err = v.issue, v.subs, v.err
+	case editorFinishedMsg:
+		if v.err != nil {
+			m.err = v.err
+			return m, m.Init()
+		}
+		m.err = applyBufferToStore(m.store, m.key.Project, v.editKey, v.tempPath)
+		return m, m.Init()
 	case tea.KeyMsg:
-		if v.String() == "q" || v.String() == "esc" {
+		switch v.String() {
+		case "q", "esc":
 			m.back = true
+		case "e":
+			return m, openEditorForIssue(m.store, m.key)
 		}
 	}
 	return m, nil

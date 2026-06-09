@@ -34,17 +34,20 @@ type boardModel struct {
 	colScrollH int
 	// rowScroll[i] is the index of the topmost visible card in column i.
 	// Adjusted by clampScroll so the selected card stays in view.
-	rowScroll      [5]int
-	back           bool
-	err            error
-	awaitingMove   bool
+	rowScroll    [5]int
+	back         bool
+	err          error
+	awaitingMove bool
 	// picker is the fuzzy finder overlay (Task 10). Non-nil means the
 	// overlay is open and consumes keypresses; Enter snaps the board cursor
 	// onto the picked card and clears the field, Esc clears without moving.
 	picker         *PickerModel
 	openDetailKey  *domain.IssueKey
 	showMilestones bool
-	editorErr      error
+	// msCursor is the highlighted row in the milestone overlay. While the
+	// overlay is open it captures j/k/E; esc/m/q close it.
+	msCursor  int
+	editorErr error
 	// milestoneFilter narrows the board to a single milestone when non-empty.
 	// Cycled by pressing 'M' (uppercase).
 	milestoneFilter string
@@ -197,7 +200,25 @@ func (m boardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.editorErr = v.err
 			return m, m.Init()
 		}
-		if applyErr := applyMilestoneBuffer(m.store, m.projectKey, v.tempPath); applyErr != nil {
+		if v.editName != "" {
+			newName, applyErr := applyMilestoneEditBuffer(m.store, m.projectKey, v.editName, v.tempPath)
+			m.editorErr = applyErr
+			// Keep an active filter pointing at the milestone across a rename.
+			if applyErr == nil && m.milestoneFilter == v.editName {
+				m.milestoneFilter = newName
+			}
+		} else if applyErr := applyMilestoneBuffer(m.store, m.projectKey, v.tempPath); applyErr != nil {
+			m.editorErr = applyErr
+		} else {
+			m.editorErr = nil
+		}
+		return m, m.Init()
+	case projectEditorFinishedMsg:
+		if v.err != nil {
+			m.editorErr = v.err
+			return m, m.Init()
+		}
+		if applyErr := applyProjectBuffer(m.store, m.projectKey, v.tempPath); applyErr != nil {
 			m.editorErr = applyErr
 		} else {
 			m.editorErr = nil
@@ -208,6 +229,25 @@ func (m boardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.showMilestones {
+		switch k.String() {
+		case "j", "down":
+			if m.msCursor < len(m.milestonesOrdered)-1 {
+				m.msCursor++
+			}
+		case "k", "up":
+			if m.msCursor > 0 {
+				m.msCursor--
+			}
+		case "E":
+			if m.msCursor < len(m.milestonesOrdered) {
+				return m, openEditorForMilestone(m.store, m.projectKey, m.milestonesOrdered[m.msCursor].Name)
+			}
+		case "m", "esc", "q":
+			m.showMilestones = false
+		}
+		return m, nil
+	}
 	if m.awaitingMove {
 		m.awaitingMove = false
 		st, ok := statusForKey(k.String())
@@ -268,7 +308,8 @@ func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.openDetailKey = &key
 		}
 	case "m":
-		m.showMilestones = !m.showMilestones
+		m.showMilestones = true
+		m.msCursor = 0
 	case "M":
 		milestones, _ := m.store.ListMilestones(m.projectKey, "")
 		if len(milestones) == 0 {
@@ -296,6 +337,11 @@ func (m boardModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			k := domain.IssueKey{Project: m.projectKey, Seq: sel.Seq}
 			return m, openEditorForIssue(m.store, k)
 		}
+	case "E":
+		if m.milestoneFilter != "" {
+			return m, openEditorForMilestone(m.store, m.projectKey, m.milestoneFilter)
+		}
+		return m, openEditorForProject(m.store, m.projectKey)
 	case "n":
 		return m, openEditorForNew(m.store, m.projectKey, domain.AllStatuses()[m.colCursor])
 	case "N":
@@ -716,7 +762,7 @@ func (m boardModel) View() string {
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, visible...)
 
-	helpText := "hjkl move  enter detail  e edit  n new  N ms+  t tag-ms  Space mv  a archive  M ms-filter  / find  r refresh  q quit"
+	helpText := "hjkl move  enter detail  e edit  E proj/ms  n new  N ms+  t tag-ms  Space mv  a archive  M ms-filter  / find  r refresh  q quit"
 	helpText = fmt.Sprintf("col %d/5  | %s", m.colCursor+1, helpText)
 	if m.milestoneFilter != "" {
 		helpText = fmt.Sprintf("milestone: %s  | %s", m.milestoneFilter, helpText)
@@ -728,7 +774,7 @@ func (m boardModel) View() string {
 	base := StyleTitle.Render(fmt.Sprintf("cliban — %s", m.projectKey)) + "\n" + body + "\n" + help
 
 	if m.showMilestones {
-		return base + "\n" + renderMilestoneOverlay(m.store, m.projectKey)
+		return base + "\n" + renderMilestoneOverlay(m.store, m.projectKey, m.msCursor)
 	}
 	return base
 }

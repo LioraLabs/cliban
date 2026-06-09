@@ -39,6 +39,13 @@ func (m projectsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case projectsLoadedMsg:
 		m.items = v.items
 		m.err = v.err
+	case projectEditorFinishedMsg:
+		if v.err != nil {
+			m.err = v.err
+			return m, m.Init()
+		}
+		m.err = applyProjectBuffer(m.store, v.projectKey, v.tempPath)
+		return m, m.Init()
 	case tea.KeyMsg:
 		switch v.String() {
 		case "j", "down":
@@ -52,6 +59,10 @@ func (m projectsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if len(m.items) > 0 {
 				m.selected = m.items[m.cursor].Key
+			}
+		case "E":
+			if len(m.items) > 0 {
+				return m, openEditorForProject(m.store, m.items[m.cursor].Key)
 			}
 		case "q":
 			return m, tea.Quit
@@ -77,6 +88,6 @@ func (m projectsModel) View() string {
 		}
 		sb.WriteString(line + "\n")
 	}
-	sb.WriteString("\n" + StyleStatusBar.Render("j/k move  enter open  q quit"))
+	sb.WriteString("\n" + StyleStatusBar.Render("j/k move  enter open  E edit  q quit"))
 	return sb.String()
 }

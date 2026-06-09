@@ -23,7 +23,7 @@ func openEditorForIssue(s *store.Store, k domain.IssueKey) tea.Cmd {
 		return func() tea.Msg { return editorFinishedMsg{err: err} }
 	}
 	bf := issuebuf.IssueBuffer{
-		Header: fmt.Sprintf("# Editing %s — lines above the first '---' are ignored.\n# Statuses:   backlog | in-progress | blocked | in-review | done\n# Priorities: none | low | medium | high | urgent\n# Set milestone or parent to '' to clear.", k),
+		Header:      fmt.Sprintf("# Editing %s — lines above the first '---' are ignored.\n# Statuses:   backlog | in-progress | blocked | in-review | done\n# Priorities: none | low | medium | high | urgent\n# Set milestone or parent to '' to clear.", k),
 		Title:       issue.Title,
 		Status:      string(issue.Status),
 		Priority:    string(issue.Priority),

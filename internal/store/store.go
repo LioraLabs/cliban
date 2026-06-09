@@ -1,8 +1,8 @@
 package store
 
 import (
-	_ "embed"
 	"database/sql"
+	_ "embed"
 	"fmt"
 	"time"
 
