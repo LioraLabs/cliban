@@ -2,8 +2,9 @@ use clap::Parser;
 
 mod cmd;
 mod descmd;
+use cliban::migrate;
+
 mod errors;
-mod migrate;
 mod output;
 mod search;
 mod store_open;
