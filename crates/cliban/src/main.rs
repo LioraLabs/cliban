@@ -22,6 +22,8 @@ enum Command {
     Tui,
     /// Manage projects
     Project(cmd::project::ProjectArgs),
+    /// Manage labels
+    Label(cmd::label::LabelArgs),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -41,5 +43,6 @@ async fn run(cli: Cli) -> errors::CliResult<()> {
             Ok(())
         }
         Some(Command::Project(args)) => cmd::project::run(&cli.db, args).await,
+        Some(Command::Label(args)) => cmd::label::run(&cli.db, args).await,
     }
 }
