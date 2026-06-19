@@ -88,7 +88,7 @@ impl Data {
     }
 
     pub fn list_projects(&self) -> Result<Vec<(String, String)>, DataError> {
-        let ps = self.rt.block_on(self.store.call(|conn| projects::list(conn)))?;
+        let ps = self.rt.block_on(self.store.call(projects::list))?;
         Ok(ps.into_iter().map(|p| (p.key, p.name)).collect())
     }
 
