@@ -3,6 +3,7 @@ use clap::Parser;
 mod cmd;
 mod descmd;
 mod errors;
+mod migrate;
 mod output;
 mod search;
 mod store_open;
