@@ -5,7 +5,9 @@ use std::path::Path;
 use cliban::migrate;
 use rusqlite::Connection;
 
-const GO_SCHEMA: &str = include_str!("../../../internal/store/schema.sql");
+// Vendored copy of the legacy Go cliban schema (the Go tree was deleted at the
+// CLI-9 cutover). This fixture keeps the migration round-trip test hermetic.
+const GO_SCHEMA: &str = include_str!("fixtures/go_schema.sql");
 
 fn build_fixture(path: &Path) {
     let c = Connection::open(path).unwrap();
