@@ -102,6 +102,7 @@ fn map_overlay(key: KeyEvent) -> Option<Action> {
         (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => Some(Action::OverlayDown),
         (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => Some(Action::OverlayUp),
         (KeyCode::Char('E'), _) => Some(Action::OverlayEdit),
+        (KeyCode::Enter, _) => Some(Action::OverlaySelect),
         (KeyCode::Char('m'), KeyModifiers::NONE) | (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => Some(Action::Cancel),
         _ => None,
     }

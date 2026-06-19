@@ -26,7 +26,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &MilestoneOverlayState) {
         }
     }
     lines.push(Line::raw(""));
-    lines.push(Line::styled("  j/k move   E edit   esc close", Style::default().fg(Color::DarkGray)));
+    lines.push(Line::styled("  j/k move   enter filter   E edit   esc close", Style::default().fg(Color::DarkGray)));
     frame.render_widget(Paragraph::new(lines), inner);
 }
 fn centered_rect(width_pct: u16, height_max: u16, area: Rect) -> Rect {

@@ -284,6 +284,10 @@ fn update_fuzzy_overlay(app: &mut App, action: Action) -> Option<Command> {
         Action::OverlayUp => { if let Mode::MilestoneOverlay(o) = &mut app.mode { o.cursor = o.cursor.saturating_sub(1); } None }
         Action::OverlayDown => { if let Mode::MilestoneOverlay(o) = &mut app.mode { let m = o.items.len().saturating_sub(1); if o.cursor < m { o.cursor += 1; } } None }
         Action::OverlayEdit => { let name = match &app.mode { Mode::MilestoneOverlay(o) => o.items.get(o.cursor)?.name.clone(), _ => return None }; Some(Command::EditMilestone { name }) }
+        Action::OverlaySelect => {
+            let name = match &app.mode { Mode::MilestoneOverlay(o) => o.items.get(o.cursor)?.name.clone(), _ => return None };
+            app.scope.milestone = Some(name); app.mode = Mode::Normal; app.auto_focus_if_empty(); Some(Command::SetScope)
+        }
         _ => None,
     }
 }
@@ -409,5 +413,20 @@ mod tests {
         update(&mut app, Action::CycleMilestoneFilter); assert_eq!(app.scope.milestone.as_deref(), Some("M1"));
         update(&mut app, Action::CycleMilestoneFilter); assert_eq!(app.scope.milestone.as_deref(), Some("M2"));
         update(&mut app, Action::CycleMilestoneFilter); assert_eq!(app.scope.milestone, None);
+    }
+
+    #[test]
+    fn overlay_enter_sets_milestone_filter_and_closes() {
+        let mut app = App::new();
+        app.milestones = vec![
+            MilestoneRef { id:1, name:"M1".into(), status:"open".into(), target:None },
+            MilestoneRef { id:2, name:"M2".into(), status:"open".into(), target:None },
+        ];
+        update(&mut app, Action::OpenMilestoneOverlay);
+        update(&mut app, Action::OverlayDown); // cursor -> M2
+        let cmd = update(&mut app, Action::OverlaySelect);
+        assert_eq!(app.scope.milestone.as_deref(), Some("M2"));
+        assert!(matches!(app.mode, Mode::Normal), "overlay should close after select");
+        assert!(matches!(cmd, Some(Command::SetScope)));
     }
 }
