@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cliban-core", "crates/cliban-tui"]
+members = ["crates/cliban-core", "crates/cliban-tui", "crates/cliban"]
 
 [workspace.package]
 edition = "2021"

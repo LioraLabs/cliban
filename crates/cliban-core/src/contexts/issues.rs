@@ -72,7 +72,7 @@ pub fn create(conn: &Connection, project_key: &str, attrs: CreateIssue) -> Resul
 
     let position = match attrs.position {
         Some(p) => p,
-        None => default_position(&tx, project.id)?,
+        None => default_position(&tx, project.id, &status)?,
     };
 
     let description = attrs.description.clone().unwrap_or_default();
@@ -414,10 +414,12 @@ pub fn label_names(conn: &Connection, issue_id: i64) -> Result<Vec<String>> {
     Ok(out)
 }
 
-fn default_position(conn: &Connection, project_id: i64) -> Result<f64> {
+fn default_position(conn: &Connection, project_id: i64, status: &str) -> Result<f64> {
+    // Mirror Go `CreateIssue`: end of the target STATUS column (per-status max),
+    // not the project-wide max.
     let max: Option<f64> = conn.query_row(
-        "SELECT max(position) FROM issues WHERE project_id = ?1",
-        params![project_id],
+        "SELECT max(position) FROM issues WHERE project_id = ?1 AND status = ?2",
+        params![project_id, status],
         |r| r.get(0),
     )?;
     Ok(max.unwrap_or(0.0) + 1000.0)
