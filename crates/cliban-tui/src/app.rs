@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use crate::actions::{Action, Command, Direction};
+
 /// Display projection of a `cliban_core` issue. Pure data.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Card {
@@ -150,9 +152,175 @@ impl App {
     pub fn scoped_card_count(&self) -> usize {
         self.cards.iter().filter(|c| self.matches_scope(c)).count()
     }
+
+    pub fn remember_cursor(&mut self) { self.last_card_idx_per_column.insert(self.focus.column, self.focus.card_idx); }
+    pub fn restore_cursor_for(&self, col: ColumnId) -> usize {
+        let len = self.column_cards(col).len();
+        if len == 0 { return 0; }
+        self.last_card_idx_per_column.get(&col).copied().unwrap_or(0).min(len - 1)
+    }
+    pub fn auto_focus_if_empty(&mut self) {
+        if self.focused_card().is_some() { return; }
+        for col in self.visible_columns() {
+            if !self.column_cards(col).is_empty() {
+                self.focus.column = col; self.focus.card_idx = self.restore_cursor_for(col); return;
+            }
+        }
+        self.focus.card_idx = 0;
+    }
 }
 
 impl Default for App { fn default() -> Self { Self::new() } }
+
+pub fn update(app: &mut App, action: Action) -> Option<Command> {
+    match action {
+        Action::FocusMove(d) => { move_focus(app, d); None }
+        Action::JumpToTop => { app.focus.card_idx = 0; None }
+        Action::JumpToBottom => { app.focus.card_idx = app.column_cards(app.focus.column).len().saturating_sub(1); None }
+        Action::ToggleHelp => { app.mode = match app.mode { Mode::Help => Mode::Normal, _ => Mode::Help }; None }
+        Action::QuitRequest => { app.mode = Mode::ConfirmQuit; None }
+        Action::Quit => None,
+        Action::Cancel => { app.mode = Mode::Normal; None }
+        Action::Refresh => Some(Command::Reload),
+        Action::OpenDetail => { if let Some(c) = app.focused_card() { app.mode = Mode::Detail(c.key.clone()); } None }
+        Action::BeginMove => { app.mode = Mode::AwaitingMove; None }
+        Action::MoveTo(status) => { app.mode = Mode::Normal; let key = app.focused_card()?.key.clone(); Some(Command::MoveIssue { key, status }) }
+        Action::Archive => { let key = app.focused_card()?.key.clone(); Some(Command::Archive { key }) }
+        Action::EditCard => { let key = app.focused_card()?.key.clone(); Some(Command::EditIssue { key }) }
+        Action::EditScope => match (&app.scope.project, &app.scope.milestone) {
+            (Some(_), Some(m)) => Some(Command::EditMilestone { name: m.clone() }),
+            (Some(_), None) => Some(Command::EditProject),
+            (None, _) => { app.status_msg = Some("scope a project first (p) to edit it".into()); None }
+        },
+        Action::NewIssue => { let status = app.focus.column.status().to_string(); Some(Command::NewIssue { status }) }
+        Action::NewMilestone => Some(Command::NewMilestone),
+        Action::TagMilestone => {
+            let card = app.focused_card()?.clone();
+            if app.milestones.is_empty() { app.status_msg = Some("no milestones to tag (N to create one)".into()); return None; }
+            let cur = card.milestone_id
+                .and_then(|id| app.milestones.iter().position(|m| m.id == id))
+                .map(|i| i + 1).unwrap_or(0);
+            let next = (cur + 1) % (app.milestones.len() + 1);
+            let milestone = if next == 0 { None } else { Some(app.milestones[next - 1].name.clone()) };
+            Some(Command::TagMilestone { key: card.key, milestone })
+        }
+        _ => update_overlays(app, action),
+    }
+}
+
+fn update_overlays(app: &mut App, action: Action) -> Option<Command> {
+    match action {
+        Action::OpenProjectPicker => { app.mode = Mode::ProjectPicker(PickerState { query: String::new(), items: vec![], cursor: 0 }); None }
+        Action::OpenMilestonePicker => {
+            if app.scope.project.is_none() { app.status_msg = Some("scope a project first with p".into()); return None; }
+            app.mode = Mode::MilestonePicker(PickerState { query: String::new(), items: vec![], cursor: 0 }); None
+        }
+        Action::OpenMilestoneOverlay => { app.mode = Mode::MilestoneOverlay(MilestoneOverlayState { items: app.milestones.clone(), cursor: 0 }); None }
+        Action::CycleMilestoneFilter => {
+            if app.milestones.is_empty() { return None; }
+            let names: Vec<&str> = app.milestones.iter().map(|m| m.name.as_str()).collect();
+            let next = match &app.scope.milestone {
+                None => Some(names[0].to_string()),
+                Some(cur) => match names.iter().position(|n| *n == cur.as_str()) {
+                    Some(i) if i + 1 < names.len() => Some(names[i + 1].to_string()),
+                    _ => None,
+                },
+            };
+            app.scope.milestone = next; app.auto_focus_if_empty(); Some(Command::SetScope)
+        }
+        Action::SetScope(s) => { app.scope = s; app.auto_focus_if_empty(); Some(Command::SetScope) }
+        Action::PickerInput(c) => { with_picker(app, |p| { p.query.push(c); p.cursor = 0; }); None }
+        Action::PickerBackspace => { with_picker(app, |p| { p.query.pop(); p.cursor = 0; }); None }
+        Action::PickerUp => { with_picker(app, |p| p.cursor = p.cursor.saturating_sub(1)); None }
+        Action::PickerDown => { with_picker(app, |p| { let n = filtered_picker(p).len(); if p.cursor + 1 < n { p.cursor += 1; } }); None }
+        Action::PickerConfirm => picker_confirm(app),
+        _ => update_fuzzy_overlay(app, action),
+    }
+}
+
+fn with_picker(app: &mut App, f: impl FnOnce(&mut PickerState)) {
+    match &mut app.mode { Mode::ProjectPicker(p) | Mode::MilestonePicker(p) => f(p), _ => {} }
+}
+
+/// Substring filter over picker labels; returns indices into `items`.
+pub fn filtered_picker(p: &PickerState) -> Vec<usize> {
+    if p.query.is_empty() { return (0..p.items.len()).collect(); }
+    let q = p.query.to_lowercase();
+    p.items.iter().enumerate().filter(|(_, c)| c.label.to_lowercase().contains(&q)).map(|(i, _)| i).collect()
+}
+
+fn picker_confirm(app: &mut App) -> Option<Command> {
+    let (is_project, chip) = match &app.mode {
+        Mode::ProjectPicker(p) => { let i = *filtered_picker(p).get(p.cursor)?; (true, p.items[i].clone()) }
+        Mode::MilestonePicker(p) => { let i = *filtered_picker(p).get(p.cursor)?; (false, p.items[i].clone()) }
+        _ => return None,
+    };
+    app.mode = Mode::Normal;
+    if is_project { app.scope.set_project(Some(chip.value)); } else { app.scope.milestone = Some(chip.value); }
+    app.auto_focus_if_empty();
+    Some(Command::SetScope)
+}
+
+fn update_fuzzy_overlay(app: &mut App, action: Action) -> Option<Command> {
+    match action {
+        Action::OpenFuzzyFind => { let results = fuzzy_search(app, ""); app.mode = Mode::FuzzyFind(FuzzyState { query: String::new(), results, cursor: 0 }); None }
+        Action::FuzzyInput(c) => {
+            let q = match &app.mode { Mode::FuzzyFind(f) => { let mut q = f.query.clone(); q.push(c); q } _ => return None };
+            let r = fuzzy_search(app, &q);
+            if let Mode::FuzzyFind(f) = &mut app.mode { f.query = q; f.results = r; f.cursor = 0; } None
+        }
+        Action::FuzzyBackspace => {
+            let q = match &app.mode { Mode::FuzzyFind(f) => { let mut q = f.query.clone(); q.pop(); q } _ => return None };
+            let r = fuzzy_search(app, &q);
+            if let Mode::FuzzyFind(f) = &mut app.mode { f.query = q; f.results = r; f.cursor = 0; } None
+        }
+        Action::FuzzyUp => { if let Mode::FuzzyFind(f) = &mut app.mode { f.cursor = f.cursor.saturating_sub(1); } None }
+        Action::FuzzyDown => { if let Mode::FuzzyFind(f) = &mut app.mode { let m = f.results.len().saturating_sub(1); if f.cursor < m { f.cursor += 1; } } None }
+        Action::FuzzyConfirm => {
+            let target = match &app.mode { Mode::FuzzyFind(f) => f.results.get(f.cursor).cloned()?, _ => return None };
+            if let Some(focus) = locate_focus_for_key(app, &target) { app.focus = focus; }
+            app.mode = Mode::Normal; None
+        }
+        Action::OverlayUp => { if let Mode::MilestoneOverlay(o) = &mut app.mode { o.cursor = o.cursor.saturating_sub(1); } None }
+        Action::OverlayDown => { if let Mode::MilestoneOverlay(o) = &mut app.mode { let m = o.items.len().saturating_sub(1); if o.cursor < m { o.cursor += 1; } } None }
+        Action::OverlayEdit => { let name = match &app.mode { Mode::MilestoneOverlay(o) => o.items.get(o.cursor)?.name.clone(), _ => return None }; Some(Command::EditMilestone { name }) }
+        _ => None,
+    }
+}
+
+pub fn fuzzy_search(app: &App, query: &str) -> Vec<String> {
+    let needle = query.to_lowercase();
+    let mut out = Vec::new();
+    for col in app.visible_columns() {
+        for c in app.column_cards(col) {
+            let hay = format!("{} {}", c.key, c.title).to_lowercase();
+            if needle.is_empty() || hay.contains(&needle) { out.push(c.key.clone()); }
+        }
+    }
+    out
+}
+
+fn locate_focus_for_key(app: &App, key: &str) -> Option<Focus> {
+    for col in app.visible_columns() {
+        for (idx, c) in app.column_cards(col).iter().enumerate() {
+            if c.key == key { return Some(Focus { column: col, card_idx: idx }); }
+        }
+    }
+    None
+}
+
+fn move_focus(app: &mut App, dir: Direction) {
+    let columns = app.visible_columns();
+    let cur = columns.iter().position(|c| *c == app.focus.column).unwrap_or(0);
+    match dir {
+        Direction::Left => if let Some(t) = (0..cur).rev().find(|&i| !app.column_cards(columns[i]).is_empty()) {
+            app.remember_cursor(); app.focus.column = columns[t]; app.focus.card_idx = app.restore_cursor_for(columns[t]); },
+        Direction::Right => if let Some(t) = (cur + 1..columns.len()).find(|&i| !app.column_cards(columns[i]).is_empty()) {
+            app.remember_cursor(); app.focus.column = columns[t]; app.focus.card_idx = app.restore_cursor_for(columns[t]); },
+        Direction::Up => if app.focus.card_idx > 0 { app.focus.card_idx -= 1; },
+        Direction::Down => { let n = app.column_cards(app.focus.column).len(); if app.focus.card_idx + 1 < n { app.focus.card_idx += 1; } }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -187,5 +355,59 @@ mod tests {
         let mut s = Scope { project: Some("CLI".into()), milestone: Some("M1".into()) };
         s.set_project(None);
         assert_eq!(s.milestone, None);
+    }
+
+    use crate::actions::{Action, Command, Direction};
+
+    #[test]
+    fn space_then_letter_moves_focused_card() {
+        let mut app = App::new();
+        app.cards = vec![card("CLI-1","backlog",1000.0)]; app.auto_focus_if_empty();
+        assert!(update(&mut app, Action::BeginMove).is_none());
+        assert!(matches!(app.mode, Mode::AwaitingMove));
+        match update(&mut app, Action::MoveTo("in-progress".into())).unwrap() {
+            Command::MoveIssue { key, status } => { assert_eq!(key, "CLI-1"); assert_eq!(status, "in-progress"); } _ => panic!() }
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn tag_milestone_cycles_none_to_first() {
+        let mut app = App::new();
+        app.cards = vec![card("CLI-1","backlog",1000.0)];
+        app.milestones = vec![MilestoneRef { id: 7, name: "M1".into(), status: "open".into(), target: None }];
+        app.auto_focus_if_empty();
+        match update(&mut app, Action::TagMilestone).unwrap() {
+            Command::TagMilestone { key, milestone } => { assert_eq!(key, "CLI-1"); assert_eq!(milestone, Some("M1".to_string())); } _ => panic!() }
+    }
+
+    #[test]
+    fn fuzzy_search_matches_key_and_title() {
+        let mut app = App::new();
+        let mut c = card("CLI-1","backlog",1.0); c.title = "Build the board".into();
+        app.cards = vec![c];
+        assert_eq!(fuzzy_search(&app, "board"), vec!["CLI-1"]);
+        assert_eq!(fuzzy_search(&app, "cli-1"), vec!["CLI-1"]);
+        assert!(fuzzy_search(&app, "zzz").is_empty());
+    }
+
+    #[test]
+    fn focus_move_right_skips_empty_columns() {
+        let mut app = App::new();
+        app.cards = vec![card("CLI-1","blocked",1.0)];
+        app.focus = Focus { column: ColumnId::Backlog, card_idx: 0 };
+        update(&mut app, Action::FocusMove(Direction::Right));
+        assert_eq!(app.focus.column, ColumnId::Blocked);
+    }
+
+    #[test]
+    fn cycle_milestone_filter_advances_then_wraps_to_all() {
+        let mut app = App::new();
+        app.milestones = vec![
+            MilestoneRef { id:1, name:"M1".into(), status:"open".into(), target:None },
+            MilestoneRef { id:2, name:"M2".into(), status:"open".into(), target:None },
+        ];
+        update(&mut app, Action::CycleMilestoneFilter); assert_eq!(app.scope.milestone.as_deref(), Some("M1"));
+        update(&mut app, Action::CycleMilestoneFilter); assert_eq!(app.scope.milestone.as_deref(), Some("M2"));
+        update(&mut app, Action::CycleMilestoneFilter); assert_eq!(app.scope.milestone, None);
     }
 }
