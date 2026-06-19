@@ -1,5 +1,6 @@
 use clap::Parser;
 
+mod descmd;
 mod errors;
 mod output;
 mod store_open;
