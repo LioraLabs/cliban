@@ -10,7 +10,9 @@ use cliban_core::time::{format_date, format_usec, parse_date, parse_ts};
 use cliban_core::Store;
 
 use chrono::Utc;
+use rusqlite::OptionalExtension;
 
+use crate::descmd;
 use crate::descmd::find_section;
 use crate::errors::{CliError, CliResult};
 use crate::output::{build_issue_json, write_issue_table, IssueJsonInputs, IssueRow, RelationOut};
@@ -30,6 +32,19 @@ pub enum IssueCmd {
     Show(ShowArgs),
     /// List issues
     Ls(LsArgs),
+    /// Edit an issue
+    Edit(EditArgs),
+    /// Append an entry to the issue's ## Activity Log section
+    Log(LogArgs),
+    /// Tick a step in the issue's ## Plan section
+    Tick(TickArgs),
+    /// Promote a plan step into its own issue
+    Promote(PromoteArgs),
+    /// Archive done issues
+    #[command(name = "archive-done")]
+    ArchiveDone(ArchiveDoneArgs),
+    /// Bulk-create issues from an NDJSON file (or stdin with '-')
+    Import(ImportArgs),
     /// Move an issue to a new status
     Mv {
         key: String,
@@ -168,11 +183,155 @@ pub struct AddArgs {
     editor: bool,
 }
 
+#[derive(clap::Args)]
+pub struct EditArgs {
+    /// issue key
+    key: String,
+    /// new title
+    #[arg(long)]
+    title: Option<String>,
+    /// new description (use '-' for stdin)
+    #[arg(long)]
+    description: Option<String>,
+    /// read description from a file (use '-' for stdin)
+    #[arg(long = "description-file")]
+    description_file: Option<String>,
+    /// new priority
+    #[arg(long)]
+    priority: Option<String>,
+    /// new milestone
+    #[arg(long)]
+    milestone: Option<String>,
+    /// clear milestone
+    #[arg(long = "clear-milestone")]
+    clear_milestone: bool,
+    /// new parent key
+    #[arg(long)]
+    parent: Option<String>,
+    /// clear parent
+    #[arg(long = "clear-parent")]
+    clear_parent: bool,
+    /// new due date YYYY-MM-DD
+    #[arg(long)]
+    due: Option<String>,
+    /// clear due date
+    #[arg(long = "clear-due")]
+    clear_due: bool,
+    /// add label (repeatable)
+    #[arg(long)]
+    label: Vec<String>,
+    /// remove label (repeatable)
+    #[arg(long = "remove-label")]
+    remove_label: Vec<String>,
+    /// add 'blocks' relation to KEY (repeatable)
+    #[arg(long)]
+    blocks: Vec<String>,
+    /// add 'blocked by' relation from KEY (repeatable)
+    #[arg(long = "blocked-by")]
+    blocked_by: Vec<String>,
+    /// add 'related to' relation to KEY (repeatable)
+    #[arg(long = "related-to")]
+    related_to: Vec<String>,
+    /// remove any relation involving KEY (repeatable)
+    #[arg(long = "remove-relation")]
+    remove_relation: Vec<String>,
+    /// open $EDITOR for full edit
+    #[arg(long, short = 'e')]
+    editor: bool,
+    /// JSON output
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args)]
+pub struct LogArgs {
+    /// issue key
+    key: String,
+    /// log message
+    message: Option<String>,
+    /// read message from file (use '-' for stdin)
+    #[arg(long = "message-file")]
+    message_file: Option<String>,
+    /// JSON output
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args)]
+pub struct TickArgs {
+    /// issue key
+    key: String,
+    /// task number (required, 1-indexed)
+    #[arg(long)]
+    task: i32,
+    /// step number (required, 1-indexed)
+    #[arg(long)]
+    step: i32,
+    /// JSON output
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args)]
+pub struct PromoteArgs {
+    /// issue key
+    key: String,
+    /// task number (required, 1-indexed)
+    #[arg(long)]
+    task: i32,
+    /// step number (required, 1-indexed)
+    #[arg(long)]
+    step: i32,
+    /// title for the promoted issue (required)
+    #[arg(long, default_value = "")]
+    title: String,
+    /// promotion mode: sub-issue|related
+    #[arg(long = "as", default_value = "sub-issue")]
+    as_mode: String,
+    /// JSON output
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args)]
+pub struct ArchiveDoneArgs {
+    /// project key
+    #[arg(long)]
+    project: Option<String>,
+    /// sweep every project per its auto_archive_done_after_days policy
+    #[arg(long)]
+    auto: bool,
+    /// JSON output
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args)]
+pub struct ImportArgs {
+    /// NDJSON file path (default: stdin)
+    file_arg: Option<String>,
+    /// NDJSON file path (default: stdin)
+    #[arg(long)]
+    file: Option<String>,
+    /// default project key for records that omit it
+    #[arg(long)]
+    project: Option<String>,
+    /// emit each created issue as a JSON line
+    #[arg(long)]
+    json: bool,
+}
+
 pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
     match args.cmd {
         IssueCmd::Add(a) => add(db, a).await,
         IssueCmd::Show(a) => show(db, a).await,
         IssueCmd::Ls(a) => ls(db, a).await,
+        IssueCmd::Edit(a) => edit(db, a).await,
+        IssueCmd::Log(a) => log(db, a).await,
+        IssueCmd::Tick(a) => tick(db, a).await,
+        IssueCmd::Promote(a) => promote(db, a).await,
+        IssueCmd::ArchiveDone(a) => archive_done(db, a).await,
+        IssueCmd::Import(a) => import(db, a).await,
         IssueCmd::Mv { key, status } => mv(db, key, status).await,
         IssueCmd::Rm { key } => rm(db, key).await,
         IssueCmd::Archive { key } => set_archived(db, key, true).await,
@@ -404,11 +563,24 @@ async fn add(db: &Option<String>, a: AddArgs) -> CliResult<()> {
         issue = fresh;
     }
 
-    if a.json {
-        let inputs = issue_json_inputs(&store, &issue).await?;
-        println!("{}", serde_json::to_string_pretty(&build_issue_json(inputs)).unwrap());
+    print_issue_result(&store, &issue, "created", a.json).await
+}
+
+/// Mirrors Go `printIssueResult`: human `{verb} {KEY}: {title}\n`; json pretty.
+async fn print_issue_result(
+    store: &Store,
+    issue: &Issue,
+    verb: &str,
+    json: bool,
+) -> CliResult<()> {
+    if json {
+        let inputs = issue_json_inputs(store, issue).await?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&build_issue_json(inputs)).unwrap()
+        );
     } else {
-        println!("created {}: {}", issue.key, issue.title);
+        println!("{verb} {}: {}", issue.key, issue.title);
     }
     Ok(())
 }
@@ -862,6 +1034,702 @@ fn sort_issues(issues: &mut [Issue], spec: &str) {
         }),
         _ => {}
     }
+}
+
+async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
+    let key = parse_issue_key(&a.key)?;
+    let project_part = project_prefix(&key).to_string();
+
+    // resolveDescription: respects mutual exclusivity, only "set" when changed.
+    let (desc_content, desc_set) = resolve_description(a.description, a.description_file)?;
+
+    let title = a.title.clone(); // --title given → Some (even if "")
+    let priority = match &a.priority {
+        Some(p) => Some(parse_priority(p)?),
+        None => None,
+    };
+    let due_date: Option<Option<chrono::NaiveDate>> = if a.clear_due {
+        Some(None)
+    } else if let Some(d) = &a.due {
+        match parse_date(d) {
+            Some(dt) => Some(Some(dt)),
+            None => {
+                return Err(CliError::validation(format!(
+                    "invalid --due {d:?} (want YYYY-MM-DD)"
+                )))
+            }
+        }
+    } else {
+        None
+    };
+    // Parent: parse key now (validates form).
+    let parent_key = if a.clear_parent {
+        None
+    } else {
+        match &a.parent {
+            Some(p) => Some(parse_issue_key(p)?),
+            None => None,
+        }
+    };
+
+    let any_change = title.is_some()
+        || desc_set
+        || priority.is_some()
+        || a.clear_milestone
+        || a.milestone.is_some()
+        || a.clear_parent
+        || a.parent.is_some()
+        || a.clear_due
+        || a.due.is_some()
+        || !a.label.is_empty()
+        || !a.remove_label.is_empty()
+        || !a.blocks.is_empty()
+        || !a.blocked_by.is_empty()
+        || !a.related_to.is_empty()
+        || !a.remove_relation.is_empty();
+
+    if !any_change && a.editor {
+        // Interactive editor path requires a TTY; out of golden-test scope.
+        return Err(CliError::validation("--editor requires a TTY"));
+    }
+    if !any_change {
+        return Err(CliError::validation(
+            "no edits requested (pass a flag or --editor)",
+        ));
+    }
+
+    // Normalize relation keys up front.
+    let blocks: Vec<String> = a.blocks.iter().map(|k| parse_issue_key(k)).collect::<Result<_, _>>()?;
+    let blocked_by: Vec<String> =
+        a.blocked_by.iter().map(|k| parse_issue_key(k)).collect::<Result<_, _>>()?;
+    let related_to: Vec<String> =
+        a.related_to.iter().map(|k| parse_issue_key(k)).collect::<Result<_, _>>()?;
+    let remove_relation: Vec<String> =
+        a.remove_relation.iter().map(|k| parse_issue_key(k)).collect::<Result<_, _>>()?;
+
+    let store = store_open::open(db).await?;
+
+    // Resolve milestone name → id (project-scoped) up front.
+    let milestone_field: Option<Option<i64>> = if a.clear_milestone {
+        Some(None)
+    } else if let Some(name) = a.milestone.clone() {
+        let pk = project_part.clone();
+        let mid = store
+            .call(move |conn| Ok(milestones::get(conn, &pk, &name)?.map(|m| m.id)))
+            .await?;
+        match mid {
+            Some(id) => Some(Some(id)),
+            None => {
+                // Match Go: ErrNotFound "not found: milestone \"name\"".
+                let n = a.milestone.clone().unwrap_or_default();
+                return Err(CliError::not_found(format!("not found: milestone {n:?}")));
+            }
+        }
+    } else {
+        None
+    };
+
+    // Resolve parent key → id (same-project + own-parent checks mirror Go).
+    let parent_field: Option<Option<i64>> = if a.clear_parent {
+        Some(None)
+    } else if let Some(pk) = parent_key.clone() {
+        if project_prefix(&pk) != project_part {
+            return Err(CliError::validation("parent must be in same project"));
+        }
+        if pk == key {
+            return Err(CliError::validation("issue cannot be its own parent"));
+        }
+        let lookup = pk.clone();
+        let pid = store
+            .call(move |conn| Ok(issues::get_by_key(conn, &lookup)?.map(|i| i.id)))
+            .await?;
+        match pid {
+            Some(id) => Some(Some(id)),
+            None => return Err(CliError::not_found(format!("not found: parent {pk}"))),
+        }
+    } else {
+        None
+    };
+
+    let description = if desc_set { Some(desc_content) } else { None };
+
+    // Apply the core update (only when there is a field-level change).
+    let has_field_update = title.is_some()
+        || description.is_some()
+        || priority.is_some()
+        || milestone_field.is_some()
+        || parent_field.is_some()
+        || due_date.is_some();
+    if has_field_update {
+        let lookup = key.clone();
+        let upd = UpdateIssue {
+            title: title.clone(),
+            description: description.clone(),
+            priority: priority.clone(),
+            milestone_id: milestone_field,
+            parent_id: parent_field,
+            due_date,
+            ..Default::default()
+        };
+        store
+            .call(move |conn| {
+                let issue =
+                    issues::get_by_key(conn, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+                issues::update(conn, &issue, upd)?;
+                Ok(())
+            })
+            .await?;
+    } else {
+        // Even with no field update, confirm the issue exists (Go fetches it).
+        let lookup = key.clone();
+        store
+            .call(move |conn| issues::get_by_key(conn, &lookup))
+            .await?
+            .ok_or(cliban_core::Error::NotFound)?;
+    }
+
+    // Labels.
+    for lbl in a.label {
+        let lookup = key.clone();
+        store
+            .call(move |conn| {
+                let issue =
+                    issues::get_by_key(conn, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+                issues::add_label(conn, &issue, &lbl)
+            })
+            .await?;
+    }
+    for lbl in a.remove_label {
+        let lookup = key.clone();
+        store
+            .call(move |conn| {
+                let issue =
+                    issues::get_by_key(conn, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+                issues::remove_label(conn, &issue, &lbl)
+            })
+            .await?;
+    }
+
+    // Relations.
+    for other in blocks {
+        let from = key.clone();
+        store.call(move |conn| relations::add(conn, &from, &other, "blocks")).await?;
+    }
+    for other in blocked_by {
+        let to = key.clone();
+        store.call(move |conn| relations::add(conn, &other, &to, "blocks")).await?;
+    }
+    for other in related_to {
+        let from = key.clone();
+        store.call(move |conn| relations::add(conn, &from, &other, "related_to")).await?;
+    }
+    for other in remove_relation {
+        let k = key.clone();
+        store
+            .call(move |conn| {
+                let _ = relations::remove(conn, &k, &other, "blocks");
+                let _ = relations::remove(conn, &other, &k, "blocks");
+                let _ = relations::remove(conn, &k, &other, "related_to");
+                Ok(())
+            })
+            .await?;
+    }
+
+    let reload = key.clone();
+    let issue = store
+        .call(move |conn| issues::get_by_key(conn, &reload))
+        .await?
+        .ok_or(cliban_core::Error::NotFound)?;
+    print_issue_result(&store, &issue, "updated", a.json).await
+}
+
+async fn log(db: &Option<String>, a: LogArgs) -> CliResult<()> {
+    let key = parse_issue_key(&a.key)?;
+    let mut msg = a.message.clone().unwrap_or_default();
+    if let Some(file) = &a.message_file {
+        if !msg.is_empty() {
+            return Err(CliError::validation(
+                "pass <message> OR --message-file, not both",
+            ));
+        }
+        let content = if file == "-" {
+            read_stdin()?
+        } else {
+            std::fs::read_to_string(file).map_err(|e| CliError::validation(e.to_string()))?
+        };
+        msg = content.trim_end_matches('\n').to_string();
+    }
+    if msg.is_empty() {
+        return Err(CliError::validation(
+            "message required (positional or --message-file)",
+        ));
+    }
+
+    let store = store_open::open(db).await?;
+    let lookup = key.clone();
+    let now = Utc::now();
+    let entry = msg.clone();
+    store
+        .call(move |conn| {
+            let tx = conn.unchecked_transaction()?;
+            let issue =
+                issues::get_by_key(&tx, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+            let new_desc = descmd::append_activity_log(&issue.description, &entry, now);
+            let updated = format_usec(now);
+            tx.execute(
+                "UPDATE issues SET description = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![new_desc, updated, issue.id],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+
+    if a.json {
+        let mut m = serde_json::Map::new();
+        m.insert("entry".into(), serde_json::json!(msg));
+        m.insert("key".into(), serde_json::json!(a.key));
+        m.insert("timestamp".into(), serde_json::json!(format_usec(now)));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::Value::Object(m)).unwrap()
+        );
+    } else {
+        println!("logged on {}: {}", a.key, msg);
+    }
+    Ok(())
+}
+
+async fn tick(db: &Option<String>, a: TickArgs) -> CliResult<()> {
+    let key = parse_issue_key(&a.key)?;
+    let store = store_open::open(db).await?;
+    let lookup = key.clone();
+    let task = a.task;
+    let step = a.step;
+    let updated_at = store
+        .call(move |conn| {
+            let tx = conn.unchecked_transaction()?;
+            let issue =
+                issues::get_by_key(&tx, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+            let new_desc = match descmd::tick_step(&issue.description, task, step) {
+                Ok(d) => d,
+                Err(msg) => return Err(cliban_core::Error::validation("plan", &msg)),
+            };
+            let now = format_usec(cliban_core::time::now_usec());
+            tx.execute(
+                "UPDATE issues SET description = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![new_desc, now, issue.id],
+            )?;
+            tx.commit()?;
+            Ok(now)
+        })
+        .await?;
+
+    if a.json {
+        let mut m = serde_json::Map::new();
+        m.insert("checked".into(), serde_json::json!(true));
+        m.insert("key".into(), serde_json::json!(a.key));
+        m.insert("step".into(), serde_json::json!(a.step));
+        m.insert("task".into(), serde_json::json!(a.task));
+        m.insert("updated_at".into(), serde_json::json!(updated_at));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::Value::Object(m)).unwrap()
+        );
+    } else {
+        println!("ticked {} Task {} Step {}", a.key, a.task, a.step);
+    }
+    Ok(())
+}
+
+async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
+    let key = parse_issue_key(&a.key)?;
+    let project_part = project_prefix(&key).to_string();
+
+    // Up-front validations (mirror Go PromoteStep ordering).
+    if a.title.is_empty() {
+        return Err(CliError::validation("--title required"));
+    }
+    if a.as_mode != "sub-issue" && a.as_mode != "related" {
+        return Err(CliError::validation(format!(
+            "invalid --as {:?} (want sub-issue|related)",
+            a.as_mode
+        )));
+    }
+
+    let store = store_open::open(db).await?;
+    let lookup = key.clone();
+    let task = a.task;
+    let step = a.step;
+    let title = a.title.clone();
+    let mode = a.as_mode.clone();
+    let proj_key = project_part.clone();
+
+    let new_key = store
+        .call(move |conn| {
+            let tx = conn.unchecked_transaction()?;
+
+            // 1. Read parent issue + project.
+            let parent: Option<(i64, i64, String, Option<i64>, i64)> = tx
+                .query_row(
+                    "SELECT i.id, i.project_id, i.description, i.parent_id, p.issue_seq \
+                     FROM issues i JOIN projects p ON p.id = i.project_id WHERE i.key = ?1",
+                    rusqlite::params![lookup],
+                    |r| {
+                        Ok((
+                            r.get(0)?,
+                            r.get(1)?,
+                            r.get(2)?,
+                            r.get(3)?,
+                            r.get(4)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let (parent_id, proj_id, parent_desc, parent_parent, issue_seq) = match parent {
+                Some(v) => v,
+                None => return Err(cliban_core::Error::NotFound),
+            };
+
+            if mode == "sub-issue" && parent_parent.is_some() {
+                return Err(cliban_core::Error::validation(
+                    "depth",
+                    "cannot promote as sub-issue of a sub-issue (would exceed depth 2)",
+                ));
+            }
+
+            // 2. Allocate seq + insert new issue.
+            let new_seq = issue_seq + 1;
+            let max_pos: Option<f64> = tx.query_row(
+                "SELECT max(position) FROM issues WHERE project_id = ?1 AND status = 'backlog'",
+                rusqlite::params![proj_id],
+                |r| r.get(0),
+            )?;
+            let pos = max_pos.unwrap_or(0.0) + 1000.0;
+            let now = format_usec(cliban_core::time::now_usec());
+            let new_key = format!("{proj_key}-{new_seq}");
+            let sub_parent: Option<i64> = if mode == "sub-issue" {
+                Some(parent_id)
+            } else {
+                None
+            };
+            tx.execute(
+                "INSERT INTO issues (key, project_id, milestone_id, parent_id, title, \
+                 description, status, priority, position, archived, inserted_at, updated_at) \
+                 VALUES (?1, ?2, NULL, ?3, ?4, '', 'backlog', 'none', ?5, 0, ?6, ?6)",
+                rusqlite::params![new_key, proj_id, sub_parent, title, pos, now],
+            )?;
+            let new_id = tx.last_insert_rowid();
+            tx.execute(
+                "UPDATE projects SET issue_seq = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![new_seq, now, proj_id],
+            )?;
+
+            // 3. Related mode: insert related_to in BOTH directions.
+            if mode == "related" {
+                tx.execute(
+                    "INSERT OR IGNORE INTO issue_relation (from_issue_id, to_issue_id, type, created_at) \
+                     VALUES (?1, ?2, 'related_to', ?3)",
+                    rusqlite::params![new_id, parent_id, now],
+                )?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO issue_relation (from_issue_id, to_issue_id, type, created_at) \
+                     VALUES (?1, ?2, 'related_to', ?3)",
+                    rusqlite::params![parent_id, new_id, now],
+                )?;
+            }
+
+            // 4. Rewrite the parent's step line.
+            let step_obj = find_step_for_rewrite(&parent_desc, task, step);
+            let raw = match step_obj {
+                Some(s) => s,
+                None => {
+                    return Err(cliban_core::Error::validation(
+                        "plan",
+                        &format!("cannot find Task {task} Step {step} in parent description"),
+                    ))
+                }
+            };
+            let new_line = build_promoted_line(&raw, &new_key);
+            let new_desc = match descmd::rewrite_step_line(&parent_desc, task, step, &new_line) {
+                Ok(d) => d,
+                Err(msg) => return Err(cliban_core::Error::validation("plan", &msg)),
+            };
+            tx.execute(
+                "UPDATE issues SET description = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![new_desc, now, parent_id],
+            )?;
+
+            tx.commit()?;
+            Ok(new_key)
+        })
+        .await?;
+
+    if a.json {
+        let mut m = serde_json::Map::new();
+        m.insert("new_key".into(), serde_json::json!(new_key));
+        m.insert("parent".into(), serde_json::json!(a.key));
+        m.insert("step".into(), serde_json::json!(a.step));
+        m.insert("task".into(), serde_json::json!(a.task));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::Value::Object(m)).unwrap()
+        );
+    } else {
+        println!(
+            "promoted {} Task {} Step {} → {}",
+            a.key, a.task, a.step, new_key
+        );
+    }
+    Ok(())
+}
+
+/// Mirror Go `findStepForRewrite`: FindSection(Plan) → FindTask → FindStep,
+/// returning the raw step line.
+fn find_step_for_rewrite(desc: &str, task_n: i32, step_m: i32) -> Option<String> {
+    let (plan_start, plan_end, ok) = find_section(desc, "Plan");
+    if !ok {
+        return None;
+    }
+    let plan_body = &desc[plan_start..plan_end];
+    let (task_start, task_end, ok) = crate::descmd::find_task(plan_body, task_n);
+    if !ok {
+        return None;
+    }
+    crate::descmd::find_step(&plan_body[task_start..task_end], step_m).map(|s| s.raw)
+}
+
+/// Mirror Go `buildPromotedLine`: strip an existing " → ..." suffix and append
+/// " → {NEWKEY}\n".
+fn build_promoted_line(original: &str, new_key: &str) -> String {
+    let trimmed = original.trim_end_matches('\n');
+    let trimmed = match trimmed.rfind(" → ") {
+        Some(idx) => &trimmed[..idx],
+        None => trimmed,
+    };
+    format!("{trimmed} → {new_key}\n")
+}
+
+async fn archive_done(db: &Option<String>, a: ArchiveDoneArgs) -> CliResult<()> {
+    let store = store_open::open(db).await?;
+    if a.auto {
+        let n = store
+            .call(|conn| {
+                let now = format_usec(cliban_core::time::now_usec());
+                // Per-project policy sweep (mirror Go SweepAutoArchive).
+                let mut pols: Vec<(String, i64)> = Vec::new();
+                {
+                    let mut stmt = conn.prepare(
+                        "SELECT key, auto_archive_done_after_days FROM projects \
+                         WHERE auto_archive_done_after_days IS NOT NULL",
+                    )?;
+                    let rows = stmt.query_map([], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                    })?;
+                    for row in rows {
+                        pols.push(row?);
+                    }
+                }
+                let mut total = 0i64;
+                for (pkey, days) in pols {
+                    let n = conn.execute(
+                        "UPDATE issues SET archived = 1, updated_at = ?1 \
+                         WHERE archived = 0 AND status = 'done' AND completed_at IS NOT NULL \
+                         AND project_id = (SELECT id FROM projects WHERE key = ?2) \
+                         AND datetime(completed_at, '+' || ?3 || ' days') < datetime('now')",
+                        rusqlite::params![now, pkey, days],
+                    )?;
+                    total += n as i64;
+                }
+                Ok(total)
+            })
+            .await?;
+        if a.json {
+            let mut m = serde_json::Map::new();
+            m.insert("archived".into(), serde_json::json!(n));
+            m.insert("mode".into(), serde_json::json!("auto"));
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::Value::Object(m)).unwrap()
+            );
+        } else {
+            println!("archived {n} done issue(s) (auto sweep)");
+        }
+        return Ok(());
+    }
+
+    let project = a.project.filter(|p| !p.is_empty());
+    let project = match project {
+        Some(p) => p.to_uppercase(),
+        None => {
+            return Err(CliError::validation(
+                "--project is required (or use --auto for the per-project policy)",
+            ))
+        }
+    };
+    let pkey = project.clone();
+    let n = store
+        .call(move |conn| {
+            let now = format_usec(cliban_core::time::now_usec());
+            let n = conn.execute(
+                "UPDATE issues SET archived = 1, updated_at = ?1 \
+                 WHERE archived = 0 AND status = 'done' \
+                 AND project_id = (SELECT id FROM projects WHERE key = ?2)",
+                rusqlite::params![now, pkey],
+            )?;
+            Ok(n as i64)
+        })
+        .await?;
+    if a.json {
+        let mut m = serde_json::Map::new();
+        m.insert("archived".into(), serde_json::json!(n));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::Value::Object(m)).unwrap()
+        );
+    } else {
+        println!("archived {n} done issue(s) in {project}");
+    }
+    Ok(())
+}
+
+async fn import(db: &Option<String>, a: ImportArgs) -> CliResult<()> {
+    let path = a.file_arg.clone().or(a.file.clone());
+    let content = match path.as_deref() {
+        None | Some("") | Some("-") => read_stdin()?,
+        Some(p) => std::fs::read_to_string(p).map_err(|e| CliError::other(e.to_string()))?,
+    };
+    let default_project = a.project.clone().unwrap_or_default();
+
+    let store = store_open::open(db).await?;
+    let mut created = 0i64;
+    let mut line_no = 0i64;
+    for raw in content.lines() {
+        line_no += 1;
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let spec: serde_json::Value = serde_json::from_str(line)
+            .map_err(|e| CliError::other(format!("line {line_no}: invalid JSON: {e}")))?;
+
+        let get_str = |k: &str| spec.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let mut project = get_str("project");
+        if project.is_empty() {
+            project = default_project.clone();
+        }
+        if project.is_empty() {
+            return Err(CliError::validation(format!(
+                "line {line_no}: project required (set per-record or pass --project)"
+            )));
+        }
+        let project = project.to_uppercase();
+        let title = get_str("title");
+        let description = get_str("description");
+        let status = {
+            let s = get_str("status");
+            if s.is_empty() {
+                None
+            } else {
+                Some(parse_status_lined(&s, line_no)?)
+            }
+        };
+        let priority = {
+            let p = get_str("priority");
+            if p.is_empty() {
+                None
+            } else {
+                Some(parse_priority_lined(&p, line_no)?)
+            }
+        };
+        let milestone = {
+            let m = get_str("milestone");
+            if m.is_empty() {
+                None
+            } else {
+                Some(m)
+            }
+        };
+        let parent_key = {
+            let p = get_str("parent");
+            if p.is_empty() {
+                None
+            } else {
+                Some(parse_issue_key_lined(&p, line_no)?)
+            }
+        };
+        let labels: Vec<String> = spec
+            .get("labels")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let create_project = project.clone();
+        let create = CreateIssue {
+            title,
+            description: Some(description),
+            status,
+            priority,
+            milestone,
+            parent_key,
+            due_date: None,
+            position: None,
+        };
+        let issue = store
+            .call(move |conn| issues::create(conn, &create_project, create))
+            .await
+            .map_err(|e| prefix_line_err(e, line_no))?;
+
+        for lbl in labels {
+            let id = issue.id;
+            let name = lbl;
+            store
+                .call(move |conn| {
+                    let issue = issues::get_by_id(conn, id)?.ok_or(cliban_core::Error::NotFound)?;
+                    issues::add_label(conn, &issue, &name)
+                })
+                .await
+                .map_err(|e| prefix_line_err(e, line_no))?;
+        }
+
+        created += 1;
+        if a.json {
+            let inputs = issue_json_inputs(&store, &issue).await?;
+            println!(
+                "{}",
+                serde_json::to_string(&build_issue_json(inputs)).unwrap()
+            );
+        }
+    }
+    if !a.json {
+        println!("imported {created} issue(s)");
+    }
+    Ok(())
+}
+
+/// Prefix a core error's message with `line {n}: `, preserving the exit code.
+fn prefix_line_err(e: cliban_core::Error, line_no: i64) -> CliError {
+    let code = crate::errors::exit_code_for(&e);
+    let msg = crate::errors::message_for(&e);
+    CliError::Coded(code, format!("line {line_no}: {msg}"))
+}
+
+fn parse_status_lined(s: &str, line_no: i64) -> Result<String, CliError> {
+    parse_status(s).map_err(|e| CliError::Coded(e.code(), format!("line {line_no}: {}", e.message())))
+}
+
+fn parse_priority_lined(s: &str, line_no: i64) -> Result<String, CliError> {
+    parse_priority(s)
+        .map_err(|e| CliError::Coded(e.code(), format!("line {line_no}: {}", e.message())))
+}
+
+fn parse_issue_key_lined(s: &str, line_no: i64) -> Result<String, CliError> {
+    parse_issue_key(s)
+        .map_err(|e| CliError::Coded(e.code(), format!("line {line_no}: {}", e.message())))
 }
 
 async fn mv(db: &Option<String>, key: String, status: String) -> CliResult<()> {
