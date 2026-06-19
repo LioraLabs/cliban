@@ -1,5 +1,8 @@
 use clap::Parser;
 
+mod errors;
+mod store_open;
+
 #[derive(Parser)]
 #[command(name = "cliban", about = "AI-agent-first kanban board for the terminal")]
 struct Cli {
@@ -19,10 +22,18 @@ enum Command {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let cli = Cli::parse();
+    if let Err(e) = run(cli).await {
+        eprintln!("error: {}", e.message());
+        std::process::exit(e.code());
+    }
+}
+
+async fn run(cli: Cli) -> errors::CliResult<()> {
     match cli.cmd {
         None | Some(Command::Tui) => {
             // TODO(CLI-8 integration): cliban board / no-args launches cliban-tui.
             println!("TUI not yet wired");
+            Ok(())
         }
     }
 }
