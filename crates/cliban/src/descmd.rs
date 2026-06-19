@@ -3,7 +3,6 @@
 //! Ported verbatim in behavior from the Go `internal/descmd/descmd.go`. All
 //! functions are pure: input string in, output string + error out. The store
 //! layer wraps these in SQL transactions so mutations are atomic.
-#![allow(dead_code)]
 
 use chrono::{DateTime, Utc};
 
@@ -91,13 +90,17 @@ pub fn find_task(plan_body: &str, n: i32) -> (usize, usize, bool) {
 
 /// One bite-sized step line in a Task body.
 pub struct Step {
-    /// 1-based step index within the task.
+    /// 1-based step index within the task. Part of the parsed descmd `Step`
+    /// contract (Go `descmd.Step`); reserved for future step-level mutations.
+    #[allow(dead_code)]
     pub index: i32,
     /// Current checkbox state.
     pub checked: bool,
     /// Byte offset of the line start within the task body.
     pub line_start: usize,
     /// Byte offset just past the trailing newline (or len(task) if last).
+    /// Reserved for future step-level mutations (mirrors Go `descmd.Step`).
+    #[allow(dead_code)]
     pub line_end: usize,
     /// The full line content including the trailing newline (and \r if input
     /// uses CRLF) — preserved verbatim for round-trip mutations.

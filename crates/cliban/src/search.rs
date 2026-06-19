@@ -37,7 +37,7 @@ fn equal_fold(tr: char, sr: char) -> bool {
     let (tr, sr) = if tr < sr { (sr, tr) } else { (tr, sr) };
     if (tr as u32) < 0x80 {
         // ASCII, sr is upper case → tr must be lower case.
-        if ('A'..='Z').contains(&sr) && tr == ((sr as u8) + b'a' - b'A') as char {
+        if sr.is_ascii_uppercase() && tr == ((sr as u8) + b'a' - b'A') as char {
             return true;
         }
         return false;
@@ -127,25 +127,23 @@ pub fn fuzzy_find(pattern: &str, text: &str) -> Option<(i64, Vec<usize>)> {
         };
         let nextc: char = if idx + 1 < n { chars[idx + 1].1 } else { '\0' };
 
-        if equal_fold(nextp, nextc) || nextc == '\0' {
-            if matched_index > -1 {
-                if matched_indexes.is_empty() {
-                    let penalty = matched_index * UNMATCHED_LEADING_CHAR_PENALTY;
-                    best_score += penalty.max(MAX_UNMATCHED_LEADING_CHAR_PENALTY);
-                }
-                total_score += best_score;
-                matched_indexes.push(matched_index as usize);
-                best_score = -1;
-                matched_index = -1;
-                pattern_index += 1;
-                if pattern_index >= runes.len() {
-                    // All pattern runes consumed. The Go loop continues to the
-                    // end of the string but never matches again (pattern_index
-                    // out of range); replicate by breaking after the final
-                    // per-char penalty accounting below.
-                    // We still must apply the trailing unmatched-char penalty,
-                    // handled after the loop.
-                }
+        if (equal_fold(nextp, nextc) || nextc == '\0') && matched_index > -1 {
+            if matched_indexes.is_empty() {
+                let penalty = matched_index * UNMATCHED_LEADING_CHAR_PENALTY;
+                best_score += penalty.max(MAX_UNMATCHED_LEADING_CHAR_PENALTY);
+            }
+            total_score += best_score;
+            matched_indexes.push(matched_index as usize);
+            best_score = -1;
+            matched_index = -1;
+            pattern_index += 1;
+            if pattern_index >= runes.len() {
+                // All pattern runes consumed. The Go loop continues to the
+                // end of the string but never matches again (pattern_index
+                // out of range); replicate by breaking after the final
+                // per-char penalty accounting below.
+                // We still must apply the trailing unmatched-char penalty,
+                // handled after the loop.
             }
         }
 

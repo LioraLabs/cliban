@@ -131,7 +131,7 @@ async fn add(
 
 async fn ls(db: &Option<String>, archived: bool, json: bool) -> CliResult<()> {
     let store = store_open::open(db).await?;
-    let mut ps = store.call(|conn| projects::list(conn)).await?;
+    let mut ps = store.call(projects::list).await?;
     if !archived {
         ps.retain(|p| !p.archived);
     }

@@ -817,7 +817,7 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
         }
         // --sort is ignored under --search; emit the Go note to stderr.
         if a.sort.is_some() {
-            eprint!("note: --sort is ignored when --search is set\n");
+            eprintln!("note: --sort is ignored when --search is set");
         }
         return run_search(db, &a, raw.clone()).await;
     }
@@ -1748,14 +1748,18 @@ async fn import(db: &Option<String>, a: ImportArgs) -> CliResult<()> {
 
         for lbl in labels {
             let id = issue.id;
-            let name = lbl;
+            let name = lbl.clone();
             store
                 .call(move |conn| {
                     let issue = issues::get_by_id(conn, id)?.ok_or(cliban_core::Error::NotFound)?;
                     issues::add_label(conn, &issue, &name)
                 })
                 .await
-                .map_err(|e| prefix_line_err(e, line_no))?;
+                .map_err(|e| {
+                    let code = crate::errors::exit_code_for(&e);
+                    let msg = crate::errors::message_for(&e);
+                    CliError::Coded(code, format!("line {line_no}: attach label {lbl:?}: {msg}"))
+                })?;
         }
 
         created += 1;

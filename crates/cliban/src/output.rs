@@ -5,9 +5,6 @@
 //! `serde_json` `preserve_order` feature: insert keys in alphabetical order
 //! into a `Map` and the serialized output preserves that order.
 //!
-// Builders/writers are consumed by command handlers in later CLI-6 tasks.
-#![allow(dead_code)]
-
 use serde_json::{json, Map, Value};
 
 pub struct RelationOut {
