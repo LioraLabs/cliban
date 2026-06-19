@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "cliban CLI — kanban for the terminal, Rust reimplementation"
 
+[lib]
+name = "cliban"
+path = "src/lib.rs"
+
 [[bin]]
 name = "cliban"
 path = "src/main.rs"
