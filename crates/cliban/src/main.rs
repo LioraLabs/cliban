@@ -26,6 +26,8 @@ enum Command {
     Label(cmd::label::LabelArgs),
     /// Manage issues
     Issue(cmd::issue::IssueArgs),
+    /// Manage milestones
+    Milestone(cmd::milestone::MilestoneArgs),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -47,5 +49,6 @@ async fn run(cli: Cli) -> errors::CliResult<()> {
         Some(Command::Project(args)) => cmd::project::run(&cli.db, args).await,
         Some(Command::Label(args)) => cmd::label::run(&cli.db, args).await,
         Some(Command::Issue(args)) => cmd::issue::run(&cli.db, args).await,
+        Some(Command::Milestone(args)) => cmd::milestone::run(&cli.db, args).await,
     }
 }
