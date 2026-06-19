@@ -1,0 +1,17 @@
+[package]
+name = "cliban-tui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "cliban TUI: loom-style ratatui kanban board over in-process cliban-core"
+
+[dependencies]
+cliban-core = { path = "../cliban-core" }
+ratatui = "0.29"
+crossterm = "0.28"
+tokio = { workspace = true }
+chrono.workspace = true
+
+[[bin]]
+name = "cliban-tui"
+path = "src/bin/cliban-tui.rs"
