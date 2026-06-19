@@ -1,6 +1,7 @@
 use clap::Parser;
 
 mod errors;
+mod output;
 mod store_open;
 
 #[derive(Parser)]
