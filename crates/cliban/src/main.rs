@@ -1,5 +1,6 @@
 use clap::Parser;
 
+mod cmd;
 mod descmd;
 mod errors;
 mod output;
@@ -19,6 +20,8 @@ struct Cli {
 enum Command {
     /// Open the kanban TUI
     Tui,
+    /// Manage projects
+    Project(cmd::project::ProjectArgs),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -37,5 +40,6 @@ async fn run(cli: Cli) -> errors::CliResult<()> {
             println!("TUI not yet wired");
             Ok(())
         }
+        Some(Command::Project(args)) => cmd::project::run(&cli.db, args).await,
     }
 }
