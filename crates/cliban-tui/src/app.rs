@@ -185,6 +185,36 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
         Action::OpenDetail => { if let Some(c) = app.focused_card() { app.mode = Mode::Detail(c.key.clone()); } None }
         Action::BeginMove => { app.mode = Mode::AwaitingMove; None }
         Action::MoveTo(status) => { app.mode = Mode::Normal; let key = app.focused_card()?.key.clone(); Some(Command::MoveIssue { key, status }) }
+        Action::MoveIssueDir(d) => {
+            let key = app.focused_card()?.key.clone();
+            match d {
+                Direction::Left | Direction::Right => {
+                    let cur = ColumnId::ALL.iter().position(|c| *c == app.focus.column)?;
+                    let target_idx = match d {
+                        Direction::Left => cur.checked_sub(1)?,
+                        _ => { let n = cur + 1; if n >= ColumnId::ALL.len() { return None; } n }
+                    };
+                    let target = ColumnId::ALL[target_idx];
+                    let status = target.status().to_string();
+                    // core's move_issue appends to the end of the target column, so the
+                    // cursor follows the card to its landing slot there.
+                    let landing = app.column_cards(target).len();
+                    app.focus.column = target; app.focus.card_idx = landing;
+                    Some(Command::MoveIssue { key, status })
+                }
+                Direction::Down | Direction::Up => {
+                    let cards = app.column_cards(app.focus.column);
+                    let idx = app.focus.card_idx;
+                    let other_idx = match d {
+                        Direction::Down => { let n = idx + 1; if n >= cards.len() { return None; } n }
+                        _ => idx.checked_sub(1)?,
+                    };
+                    let other = cards[other_idx].key.clone();
+                    app.focus.card_idx = other_idx; // cursor follows the reordered card
+                    Some(Command::Reorder { key, other })
+                }
+            }
+        }
         Action::Archive => { let key = app.focused_card()?.key.clone(); Some(Command::Archive { key }) }
         Action::EditCard => { let key = app.focused_card()?.key.clone(); Some(Command::EditIssue { key }) }
         Action::EditScope => match (&app.scope.project, &app.scope.milestone) {
@@ -372,6 +402,47 @@ mod tests {
         match update(&mut app, Action::MoveTo("in-progress".into())).unwrap() {
             Command::MoveIssue { key, status } => { assert_eq!(key, "CLI-1"); assert_eq!(status, "in-progress"); } _ => panic!() }
         assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn capital_l_moves_issue_to_next_column_and_cursor_follows() {
+        let mut app = App::new();
+        app.cards = vec![card("CLI-1","backlog",1000.0)]; app.auto_focus_if_empty();
+        match update(&mut app, Action::MoveIssueDir(Direction::Right)).unwrap() {
+            Command::MoveIssue { key, status } => { assert_eq!(key, "CLI-1"); assert_eq!(status, "in-progress"); }
+            _ => panic!(),
+        }
+        assert_eq!(app.focus.column, ColumnId::InProgress);
+        assert_eq!(app.focus.card_idx, 0); // landing slot in the (was empty) target column
+    }
+
+    #[test]
+    fn capital_h_at_leftmost_column_is_noop() {
+        let mut app = App::new();
+        app.cards = vec![card("CLI-1","backlog",1000.0)]; app.auto_focus_if_empty();
+        assert!(update(&mut app, Action::MoveIssueDir(Direction::Left)).is_none());
+        assert_eq!(app.focus.column, ColumnId::Backlog);
+    }
+
+    #[test]
+    fn capital_j_reorders_within_column_and_cursor_follows() {
+        let mut app = App::new();
+        app.cards = vec![card("CLI-1","backlog",1000.0), card("CLI-2","backlog",2000.0)];
+        app.scope.set_project(Some("CLI".into())); app.auto_focus_if_empty();
+        assert_eq!(app.focus.card_idx, 0); // on CLI-1
+        match update(&mut app, Action::MoveIssueDir(Direction::Down)).unwrap() {
+            Command::Reorder { key, other } => { assert_eq!(key, "CLI-1"); assert_eq!(other, "CLI-2"); }
+            _ => panic!(),
+        }
+        assert_eq!(app.focus.card_idx, 1); // cursor follows the card down
+    }
+
+    #[test]
+    fn capital_j_at_bottom_of_column_is_noop() {
+        let mut app = App::new();
+        app.cards = vec![card("CLI-1","backlog",1000.0)];
+        app.scope.set_project(Some("CLI".into())); app.auto_focus_if_empty();
+        assert!(update(&mut app, Action::MoveIssueDir(Direction::Down)).is_none());
     }
 
     #[test]

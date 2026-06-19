@@ -7,7 +7,8 @@ use ratatui::Frame;
 /// Categorised keybind sections for the cliban board.
 const SECTIONS: &[(&str, &[(&str, &str)])] = &[
     ("NAVIGATION", &[("h j k l","move cursor"), ("gg / G","top / bottom of column"), ("Tab","cycle column")]),
-    ("CARD", &[("Enter","open detail"), ("e","edit issue ($EDITOR)"), ("Space b/i/k/r/d","move to status"),
+    ("CARD", &[("Enter","open detail"), ("H/L","move issue across columns"), ("J/K","reorder issue in column"),
+               ("e","edit issue ($EDITOR)"), ("Space b/i/k/r/d","move to status"),
                ("t","cycle milestone tag"), ("a","archive"), ("n","new issue")]),
     ("SCOPE / MILESTONES", &[("p","project picker"), ("m","milestone overlay"), ("M","cycle milestone filter"),
                ("N","new milestone"), ("E","edit milestone/project ($EDITOR)"), ("/","fuzzy find")]),

@@ -102,6 +102,20 @@ impl Data {
         Ok(())
     }
 
+    /// Swap the board positions of two issues (J/K reorder within a column).
+    pub fn reorder(&self, key: &str, other: &str) -> Result<(), DataError> {
+        let (key, other) = (key.to_string(), other.to_string());
+        self.rt.block_on(self.store.call(move |conn| {
+            let a = issues::get_by_key(conn, &key)?.ok_or(cliban_core::Error::NotFound)?;
+            let b = issues::get_by_key(conn, &other)?.ok_or(cliban_core::Error::NotFound)?;
+            let (pa, pb) = (a.position, b.position);
+            issues::update(conn, &a, issues::UpdateIssue { position: Some(pb), ..Default::default() })?;
+            issues::update(conn, &b, issues::UpdateIssue { position: Some(pa), ..Default::default() })?;
+            Ok(())
+        }))?;
+        Ok(())
+    }
+
     pub fn archive(&self, key: &str) -> Result<(), DataError> {
         let key = key.to_string();
         self.rt.block_on(self.store.call(move |conn| {
@@ -424,6 +438,22 @@ mod tests {
         d.seed_project_issue("CLI", "First");
         d.move_issue("CLI-1", "in-progress").unwrap();
         assert_eq!(d.load_cards().unwrap()[0].status, "in-progress");
+    }
+
+    #[test]
+    fn reorder_swaps_positions() {
+        let d = Data::open_in_memory_for_test();
+        d.seed_project_issue("CLI", "First"); // CLI-1
+        d.rt.block_on(d.store.call(|conn| {
+            issues::create(conn, "CLI", issues::CreateIssue { title: "Second".into(), ..Default::default() })?;
+            Ok(())
+        })).unwrap(); // CLI-2
+        let pos = |cards: &[Card], k: &str| cards.iter().find(|c| c.key == k).unwrap().position;
+        let before = d.load_cards().unwrap();
+        d.reorder("CLI-1", "CLI-2").unwrap();
+        let after = d.load_cards().unwrap();
+        assert_eq!(pos(&after, "CLI-1"), pos(&before, "CLI-2"));
+        assert_eq!(pos(&after, "CLI-2"), pos(&before, "CLI-1"));
     }
 
     #[test]

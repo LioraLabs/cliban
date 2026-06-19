@@ -27,6 +27,12 @@ fn map_normal(key: KeyEvent, app: &mut App) -> Option<Action> {
     if was_g && !is_g { app.pending_g = false; }
     match (key.code, key.modifiers) {
         (KeyCode::Char('q'), _) => Some(Action::QuitRequest),
+        // Capital H/J/K/L move the focused ISSUE: H/L across columns (status),
+        // J/K reorder within the column. (Lowercase moves the cursor.)
+        (KeyCode::Char('H'), _) => Some(Action::MoveIssueDir(Direction::Left)),
+        (KeyCode::Char('L'), _) => Some(Action::MoveIssueDir(Direction::Right)),
+        (KeyCode::Char('J'), _) => Some(Action::MoveIssueDir(Direction::Down)),
+        (KeyCode::Char('K'), _) => Some(Action::MoveIssueDir(Direction::Up)),
         (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => Some(Action::FocusMove(Direction::Left)),
         (KeyCode::Char('l'), KeyModifiers::NONE) | (KeyCode::Right, _) => Some(Action::FocusMove(Direction::Right)),
         (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => Some(Action::FocusMove(Direction::Down)),

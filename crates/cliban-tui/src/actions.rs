@@ -10,6 +10,7 @@ pub enum Action {
     ToggleHelp, QuitRequest, Quit, Cancel, Refresh,
     OpenDetail, EditCard, EditScope, NewIssue, NewMilestone, TagMilestone, Archive,
     BeginMove, MoveTo(String),
+    MoveIssueDir(Direction),
     OpenProjectPicker, OpenMilestonePicker, CycleMilestoneFilter, OpenMilestoneOverlay,
     SetScope(Scope),
     PickerInput(char), PickerBackspace, PickerUp, PickerDown, PickerConfirm,
@@ -20,6 +21,8 @@ pub enum Action {
 #[derive(Debug, Clone)]
 pub enum Command {
     MoveIssue { key: String, status: String },
+    /// Swap the board positions of two issues in the same column (J/K reorder).
+    Reorder { key: String, other: String },
     Archive { key: String },
     TagMilestone { key: String, milestone: Option<String> },
     SetScope, Reload,

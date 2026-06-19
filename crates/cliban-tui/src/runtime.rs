@@ -18,6 +18,7 @@ type DynErr = Box<dyn std::error::Error>;
 pub fn dispatch_command(data: &Data, _app: &mut App, cmd: &Command) -> Result<bool, DynErr> {
     match cmd {
         Command::MoveIssue { key, status } => { data.move_issue(key, status)?; Ok(true) }
+        Command::Reorder { key, other } => { data.reorder(key, other)?; Ok(true) }
         Command::Archive { key } => { data.archive(key)?; Ok(true) }
         Command::TagMilestone { key, milestone } => { data.tag_milestone(key, milestone.clone())?; Ok(true) }
         Command::SetScope | Command::Reload => Ok(true),
