@@ -198,6 +198,7 @@ dependencies = [
  "chrono",
  "clap",
  "cliban-core",
+ "cliban-tui",
  "regex",
  "rusqlite",
  "serde",

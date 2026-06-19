@@ -47,10 +47,25 @@ enum Command {
     MigrateLegacy(MigrateLegacyArgs),
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
+fn main() {
     let cli = Cli::parse();
-    if let Err(e) = run(cli).await {
+
+    // The TUI is synchronous and owns its own runtime (see cliban-tui::data),
+    // so it must run OUTSIDE a tokio runtime — launch it before we build one.
+    if matches!(cli.cmd, None | Some(Command::Tui)) {
+        let path = store_open::db_path(&cli.db);
+        if let Err(e) = cliban_tui::run(path) {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+    if let Err(e) = rt.block_on(run(cli)) {
         eprintln!("error: {}", e.message());
         std::process::exit(e.code());
     }
@@ -58,11 +73,7 @@ async fn main() {
 
 async fn run(cli: Cli) -> errors::CliResult<()> {
     match cli.cmd {
-        None | Some(Command::Tui) => {
-            // TODO(CLI-8 integration): cliban board / no-args launches cliban-tui.
-            println!("TUI not yet wired");
-            Ok(())
-        }
+        None | Some(Command::Tui) => unreachable!("TUI handled in main before runtime"),
         Some(Command::Project(args)) => cmd::project::run(&cli.db, args).await,
         Some(Command::Label(args)) => cmd::label::run(&cli.db, args).await,
         Some(Command::Issue(args)) => cmd::issue::run(&cli.db, args).await,
