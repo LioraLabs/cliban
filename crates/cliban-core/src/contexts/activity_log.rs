@@ -201,3 +201,69 @@ fn append_section(description: &str, section: &str) -> String {
     let base = description.trim_end();
     format!("{base}\n\n{section}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A line equal to the section header (ignoring trailing spaces/tabs).
+    fn has_header_line(s: &str) -> bool {
+        s.lines().any(is_activity_header_line)
+    }
+
+    #[test]
+    fn none_description_produces_clean_section() {
+        let out = merge_activity_log_section(None, "log body");
+        assert_eq!(out, "## Activity Log\n\nlog body\n");
+    }
+
+    #[test]
+    fn empty_description_produces_clean_section() {
+        // Empty `Some("")` behaves like `None`.
+        let out = merge_activity_log_section(Some(""), "log body");
+        assert_eq!(out, "## Activity Log\n\nlog body\n");
+    }
+
+    #[test]
+    fn empty_body_produces_header_only_section() {
+        let out = merge_activity_log_section(None, "");
+        assert_eq!(out, "## Activity Log\n");
+        assert!(has_header_line(&out));
+    }
+
+    #[test]
+    fn appends_section_when_none_exists() {
+        let desc = "# Title\n\nSome prose.";
+        let out = merge_activity_log_section(Some(desc), "log body");
+
+        // Original content is preserved, and the section is appended after it.
+        assert!(out.starts_with("# Title\n\nSome prose."));
+        assert!(has_header_line(&out));
+        let header_at = out.find(SECTION_HEADER).expect("header present");
+        let prose_at = out.find("Some prose.").expect("prose present");
+        assert!(prose_at < header_at, "section appended after existing content");
+        assert!(out.contains("log body"));
+    }
+
+    #[test]
+    fn replaces_existing_section_preserving_later_section() {
+        let desc = "# Title\n\nSome prose.\n\n## Activity Log\n\nold line\n\n## Other\n\nkept.";
+        let out = merge_activity_log_section(desc.into(), "new body");
+
+        // Exactly one activity header, the old body is gone, the new is in.
+        assert_eq!(out.lines().filter(|l| is_activity_header_line(l)).count(), 1);
+        assert!(!out.contains("old line"), "old activity body replaced");
+        assert!(out.contains("new body"), "new activity body present");
+
+        // Both the leading prose and the trailing `## Other` section survive.
+        assert!(out.contains("Some prose."));
+        assert!(out.contains("## Other"));
+        assert!(out.contains("kept."));
+
+        // Structural order: prose, activity log, then the other section.
+        let prose = out.find("Some prose.").unwrap();
+        let activity = out.find(SECTION_HEADER).unwrap();
+        let other = out.find("## Other").unwrap();
+        assert!(prose < activity && activity < other);
+    }
+}

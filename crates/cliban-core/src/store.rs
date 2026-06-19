@@ -51,8 +51,8 @@ impl Store {
     }
 
     /// Open the store at the default [`crate::paths::db_path`] location. The CLI
-    /// and TUI entry points will call this; tests MUST use [`Store::open`] with
-    /// a tempfile instead.
+    /// and TUI entry points will call this; tests use
+    /// [`Store::open_in_memory`] instead.
     pub fn open_default() -> Result<Store> {
         Self::open(crate::paths::db_path())
     }
