@@ -37,7 +37,7 @@ fn draw_column(frame: &mut Frame, area: Rect, app: &App, col: ColumnId, now_ms: 
 
 #[cfg(test)]
 mod tests {
-    use crate::app::{App, Card, ColumnId};
+    use crate::app::{App, Card};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     use ratatui::layout::Rect;
