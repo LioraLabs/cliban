@@ -4,6 +4,7 @@ mod cmd;
 mod descmd;
 mod errors;
 mod output;
+mod search;
 mod store_open;
 
 #[derive(Parser)]
@@ -28,6 +29,8 @@ enum Command {
     Issue(cmd::issue::IssueArgs),
     /// Manage milestones
     Milestone(cmd::milestone::MilestoneArgs),
+    /// Fuzzy-find issues; print selected key to stdout
+    Fff(cmd::fff::FffArgs),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -50,5 +53,6 @@ async fn run(cli: Cli) -> errors::CliResult<()> {
         Some(Command::Label(args)) => cmd::label::run(&cli.db, args).await,
         Some(Command::Issue(args)) => cmd::issue::run(&cli.db, args).await,
         Some(Command::Milestone(args)) => cmd::milestone::run(&cli.db, args).await,
+        Some(Command::Fff(args)) => cmd::fff::run(&cli.db, args).await,
     }
 }

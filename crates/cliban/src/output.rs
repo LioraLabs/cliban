@@ -84,6 +84,21 @@ pub fn build_issue_json(i: IssueJsonInputs) -> Value {
     Value::Object(m)
 }
 
+/// Build the NDJSON object for a search match: the full issue JSON plus a
+/// `score` field, with keys in alphabetical order (Go serializes a
+/// `map[string]any` so adding `out["score"]` lands it alphabetically between
+/// `relations` and `status`).
+pub fn build_search_match_json(i: IssueJsonInputs, score: i64) -> Value {
+    let base = build_issue_json(i);
+    let mut entries: Vec<(String, Value)> = match base {
+        Value::Object(m) => m.into_iter().collect(),
+        _ => unreachable!("build_issue_json always returns an object"),
+    };
+    entries.push(("score".into(), json!(score)));
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    Value::Object(entries.into_iter().collect())
+}
+
 pub fn git_branch_name(key: &str, title: &str) -> String {
     let key_lower = key.to_lowercase();
     let mut slug = String::new();

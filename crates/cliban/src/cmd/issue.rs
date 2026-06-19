@@ -401,6 +401,11 @@ fn parse_issue_key(s: &str) -> Result<String, CliError> {
     }
 }
 
+/// Public wrapper over `parse_issue_key` for use by the search module.
+pub fn parse_issue_key_pub(s: &str) -> Result<String, CliError> {
+    parse_issue_key(s)
+}
+
 /// `resolveDescription`: returns `(content, was_set)`.
 ///   * `--description` and `--description-file` are mutually exclusive.
 ///   * `-` reads stdin.
@@ -803,10 +808,18 @@ fn parse_go_duration(s: &str) -> Option<chrono::Duration> {
 }
 
 async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
-    if a.search.as_deref().map(str::trim).unwrap_or("").is_empty() {
-        // no search query: fall through
-    } else {
-        return Err(CliError::other("search not yet implemented (Task 11)"));
+    // --search branch. The flag being *present* (even empty) maps to Go's
+    // `cmd.Flags().Changed("search")`; an empty/whitespace value is a clean
+    // validation error.
+    if let Some(raw) = &a.search {
+        if raw.trim().is_empty() {
+            return Err(CliError::validation("--search requires a non-empty query"));
+        }
+        // --sort is ignored under --search; emit the Go note to stderr.
+        if a.sort.is_some() {
+            eprint!("note: --sort is ignored when --search is set\n");
+        }
+        return run_search(db, &a, raw.clone()).await;
     }
 
     // Pre-parse the typed filters (Go parses before the store call).
@@ -926,6 +939,55 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
 
     let rows = issue_rows(&store, &issues).await?;
     print!("{}", write_issue_table(&rows));
+    Ok(())
+}
+
+/// `issue ls --search` branch. Mirrors Go `runIssueSearch`: default limit 50
+/// (the `--limit` flag overrides; 0 → 50), NDJSON rows carry a `score` field,
+/// human output uses the search table with a leading SCORE column.
+async fn run_search(db: &Option<String>, a: &LsArgs, query: String) -> CliResult<()> {
+    let effective_limit = if a.limit == 0 { 50 } else { a.limit };
+    let store = store_open::open(db).await?;
+    let opts = crate::search::Options {
+        query,
+        project: a.project.as_deref().map(str::to_uppercase),
+        label: a.label.clone(),
+        milestone: a.milestone.clone(),
+        status: a.status.clone(),
+        priority: a.priority.clone(),
+        parent: a.parent.clone(),
+        include_archived: a.archived,
+        exclude_subs: a.no_subs,
+        limit: effective_limit,
+    };
+    let matches = crate::search::search(&store, opts).await?;
+
+    if a.json {
+        for m in &matches {
+            let inputs = issue_json_inputs(&store, &m.issue).await?;
+            println!(
+                "{}",
+                serde_json::to_string(&crate::output::build_search_match_json(inputs, m.score))
+                    .unwrap()
+            );
+        }
+        return Ok(());
+    }
+
+    let mut rows = Vec::with_capacity(matches.len());
+    for m in &matches {
+        let (ms_name, parent_key) = crate::search::resolve_refs(&store, &m.issue).await?;
+        rows.push(crate::output::SearchRow {
+            score: m.score,
+            key: m.issue.key.clone(),
+            title: m.issue.title.clone(),
+            status: m.issue.status.clone(),
+            priority: m.issue.priority.clone(),
+            milestone: ms_name,
+            parent: parent_key,
+        });
+    }
+    print!("{}", crate::output::write_search_table(&rows));
     Ok(())
 }
 

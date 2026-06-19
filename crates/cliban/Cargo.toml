@@ -17,3 +17,4 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 rusqlite.workspace = true
+regex = "1"
