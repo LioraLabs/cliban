@@ -15,7 +15,7 @@ pub enum Action {
     SetScope(Scope),
     PickerInput(char), PickerBackspace, PickerUp, PickerDown, PickerConfirm,
     OpenFuzzyFind, FuzzyInput(char), FuzzyBackspace, FuzzyUp, FuzzyDown, FuzzyConfirm,
-    OverlayUp, OverlayDown, OverlayEdit, OverlaySelect,
+    OverlayUp, OverlayDown, OverlayEdit, OverlaySelect, OverlayInput(char), OverlayBackspace, OverlayToggleAll,
 }
 
 #[derive(Debug, Clone)]

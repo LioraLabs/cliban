@@ -104,12 +104,23 @@ fn map_fuzzy(key: KeyEvent) -> Option<Action> {
 }
 
 fn map_overlay(key: KeyEvent) -> Option<Action> {
+    // Mirrors `map_picker` so the milestone overlay scrolls and filters like
+    // the project picker: j/k (and arrows) navigate, Enter selects, Esc
+    // cancels, Backspace edits the query, and any other printable char types
+    // into the filter. `E` (shift+e) stays reserved for editing the focused
+    // milestone — the filter is case-insensitive so a lowercase `e` still
+    // filters and matches names containing `E`.
     match (key.code, key.modifiers) {
-        (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => Some(Action::OverlayDown),
-        (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => Some(Action::OverlayUp),
-        (KeyCode::Char('E'), _) => Some(Action::OverlayEdit),
         (KeyCode::Enter, _) => Some(Action::OverlaySelect),
-        (KeyCode::Char('m'), KeyModifiers::NONE) | (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => Some(Action::Cancel),
+        (KeyCode::Esc, _) => Some(Action::Cancel),
+        (KeyCode::Backspace, _) => Some(Action::OverlayBackspace),
+        (KeyCode::Down, _) => Some(Action::OverlayDown),
+        (KeyCode::Up, _) => Some(Action::OverlayUp),
+        (KeyCode::Char('j'), KeyModifiers::NONE) => Some(Action::OverlayDown),
+        (KeyCode::Char('k'), KeyModifiers::NONE) => Some(Action::OverlayUp),
+        (KeyCode::Char('E'), _) => Some(Action::OverlayEdit),
+        (KeyCode::Char('A'), _) => Some(Action::OverlayToggleAll),
+        (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => Some(Action::OverlayInput(c)),
         _ => None,
     }
 }
@@ -125,6 +136,28 @@ mod tests {
         assert!(matches!(map_key(ke(KeyCode::Char(' ')), &mut app), Some(Action::BeginMove)));
         app.mode = Mode::AwaitingMove;
         match map_key(ke(KeyCode::Char('d')), &mut app) { Some(Action::MoveTo(s)) => assert_eq!(s, "done"), o => panic!("{o:?}") }
+    }
+
+    #[test]
+    fn overlay_types_into_filter_but_reserves_nav_and_edit() {
+        use crate::app::{MilestoneOverlayState, Mode};
+        let mut app = App::new();
+        app.mode = Mode::MilestoneOverlay(MilestoneOverlayState { items: vec![], cursor: 0, query: String::new(), show_all: false });
+        // printable char → filter input
+        assert!(matches!(map_key(ke(KeyCode::Char('a')), &mut app), Some(Action::OverlayInput('a'))));
+        // j/k still navigate (mirrors the project picker)
+        assert!(matches!(map_key(ke(KeyCode::Char('j')), &mut app), Some(Action::OverlayDown)));
+        assert!(matches!(map_key(ke(KeyCode::Char('k')), &mut app), Some(Action::OverlayUp)));
+        // capital E stays reserved for editing the focused milestone
+        let e = KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT);
+        assert!(matches!(map_key(e, &mut app), Some(Action::OverlayEdit)));
+        // capital A toggles open-only vs all statuses; lowercase a still filters
+        let a_cap = KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT);
+        assert!(matches!(map_key(a_cap, &mut app), Some(Action::OverlayToggleAll)));
+        assert!(matches!(map_key(ke(KeyCode::Char('a')), &mut app), Some(Action::OverlayInput('a'))));
+        assert!(matches!(map_key(ke(KeyCode::Backspace), &mut app), Some(Action::OverlayBackspace)));
+        assert!(matches!(map_key(ke(KeyCode::Enter), &mut app), Some(Action::OverlaySelect)));
+        assert!(matches!(map_key(ke(KeyCode::Esc), &mut app), Some(Action::Cancel)));
     }
 
     #[test]

@@ -85,7 +85,7 @@ pub struct PickerChip { pub label: String, pub value: String }
 pub struct FuzzyState { pub query: String, pub results: Vec<String>, pub cursor: usize }
 
 #[derive(Debug, Clone)]
-pub struct MilestoneOverlayState { pub items: Vec<MilestoneRef>, pub cursor: usize }
+pub struct MilestoneOverlayState { pub items: Vec<MilestoneRef>, pub cursor: usize, pub query: String, pub show_all: bool }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MilestoneRef { pub id: i64, pub name: String, pub status: String, pub target: Option<String> }
@@ -245,7 +245,7 @@ fn update_overlays(app: &mut App, action: Action) -> Option<Command> {
             if app.scope.project.is_none() { app.status_msg = Some("scope a project first with p".into()); return None; }
             app.mode = Mode::MilestonePicker(PickerState { query: String::new(), items: vec![], cursor: 0 }); None
         }
-        Action::OpenMilestoneOverlay => { app.mode = Mode::MilestoneOverlay(MilestoneOverlayState { items: app.milestones.clone(), cursor: 0 }); None }
+        Action::OpenMilestoneOverlay => { app.mode = Mode::MilestoneOverlay(MilestoneOverlayState { items: app.milestones.clone(), cursor: 0, query: String::new(), show_all: false }); None }
         Action::CycleMilestoneFilter => {
             if app.milestones.is_empty() { return None; }
             let names: Vec<&str> = app.milestones.iter().map(|m| m.name.as_str()).collect();
@@ -277,6 +277,19 @@ pub fn filtered_picker(p: &PickerState) -> Vec<usize> {
     if p.query.is_empty() { return (0..p.items.len()).collect(); }
     let q = p.query.to_lowercase();
     p.items.iter().enumerate().filter(|(_, c)| c.label.to_lowercase().contains(&q)).map(|(i, _)| i).collect()
+}
+
+/// Case-insensitive substring filter over milestone names; returns indices
+/// into the overlay's `items`. Empty query matches everything. Mirrors
+/// `filtered_picker` so the milestone overlay filters like the project picker.
+pub fn filtered_overlay(o: &MilestoneOverlayState) -> Vec<usize> {
+    // Two conditions: unless `show_all`, keep only open milestones; and the name
+    // must contain the (case-insensitive) query. Empty query matches every name.
+    let q = o.query.to_lowercase();
+    o.items.iter().enumerate()
+        .filter(|(_, m)| o.show_all || m.status == "open")
+        .filter(|(_, m)| q.is_empty() || m.name.to_lowercase().contains(&q))
+        .map(|(i, _)| i).collect()
 }
 
 fn picker_confirm(app: &mut App) -> Option<Command> {
@@ -311,13 +324,16 @@ fn update_fuzzy_overlay(app: &mut App, action: Action) -> Option<Command> {
             if let Some(focus) = locate_focus_for_key(app, &target) { app.focus = focus; }
             app.mode = Mode::Normal; None
         }
+        Action::OverlayInput(c) => { if let Mode::MilestoneOverlay(o) = &mut app.mode { o.query.push(c); o.cursor = 0; } None }
+        Action::OverlayBackspace => { if let Mode::MilestoneOverlay(o) = &mut app.mode { o.query.pop(); o.cursor = 0; } None }
         Action::OverlayUp => { if let Mode::MilestoneOverlay(o) = &mut app.mode { o.cursor = o.cursor.saturating_sub(1); } None }
-        Action::OverlayDown => { if let Mode::MilestoneOverlay(o) = &mut app.mode { let m = o.items.len().saturating_sub(1); if o.cursor < m { o.cursor += 1; } } None }
-        Action::OverlayEdit => { let name = match &app.mode { Mode::MilestoneOverlay(o) => o.items.get(o.cursor)?.name.clone(), _ => return None }; Some(Command::EditMilestone { name }) }
+        Action::OverlayDown => { if let Mode::MilestoneOverlay(o) = &mut app.mode { let m = filtered_overlay(o).len().saturating_sub(1); if o.cursor < m { o.cursor += 1; } } None }
+        Action::OverlayEdit => { let name = match &app.mode { Mode::MilestoneOverlay(o) => o.items.get(*filtered_overlay(o).get(o.cursor)?)?.name.clone(), _ => return None }; Some(Command::EditMilestone { name }) }
         Action::OverlaySelect => {
-            let name = match &app.mode { Mode::MilestoneOverlay(o) => o.items.get(o.cursor)?.name.clone(), _ => return None };
+            let name = match &app.mode { Mode::MilestoneOverlay(o) => o.items.get(*filtered_overlay(o).get(o.cursor)?)?.name.clone(), _ => return None };
             app.scope.milestone = Some(name); app.mode = Mode::Normal; app.auto_focus_if_empty(); Some(Command::SetScope)
         }
+        Action::OverlayToggleAll => { if let Mode::MilestoneOverlay(o) = &mut app.mode { o.show_all = !o.show_all; o.cursor = 0; } None }
         _ => None,
     }
 }
@@ -487,6 +503,62 @@ mod tests {
     }
 
     #[test]
+    fn overlay_query_filters_and_select_resolves_against_filtered_list() {
+        let mut app = App::new();
+        app.milestones = vec![
+            MilestoneRef { id:1, name:"alpha".into(), status:"open".into(), target:None },
+            MilestoneRef { id:2, name:"beta".into(), status:"open".into(), target:None },
+            MilestoneRef { id:3, name:"gamma".into(), status:"open".into(), target:None },
+        ];
+        update(&mut app, Action::OpenMilestoneOverlay);
+        // Typing narrows the list; only "beta" matches "be".
+        update(&mut app, Action::OverlayInput('b'));
+        update(&mut app, Action::OverlayInput('e'));
+        match &app.mode {
+            Mode::MilestoneOverlay(o) => {
+                assert_eq!(o.query, "be");
+                assert_eq!(o.cursor, 0, "typing resets the cursor to the top");
+                assert_eq!(filtered_overlay(o), vec![1]);
+            }
+            _ => panic!("expected overlay mode"),
+        }
+        // Enter on the single match sets that milestone, not items[cursor].
+        let cmd = update(&mut app, Action::OverlaySelect);
+        assert_eq!(app.scope.milestone.as_deref(), Some("beta"));
+        assert!(matches!(cmd, Some(Command::SetScope)));
+    }
+
+    #[test]
+    fn overlay_down_is_clamped_to_filtered_len() {
+        let mut app = App::new();
+        app.milestones = vec![
+            MilestoneRef { id:1, name:"alpha".into(), status:"open".into(), target:None },
+            MilestoneRef { id:2, name:"beta".into(), status:"open".into(), target:None },
+        ];
+        update(&mut app, Action::OpenMilestoneOverlay);
+        update(&mut app, Action::OverlayInput('a')); // matches "alpha" and "beta"? "a" is in both
+        update(&mut app, Action::OverlayInput('l')); // "al" -> only "alpha"
+        update(&mut app, Action::OverlayDown); // one match: cursor must stay at 0
+        match &app.mode { Mode::MilestoneOverlay(o) => assert_eq!(o.cursor, 0), _ => panic!() }
+    }
+
+    #[test]
+    fn overlay_backspace_widens_the_filter() {
+        let mut app = App::new();
+        app.milestones = vec![
+            MilestoneRef { id:1, name:"alpha".into(), status:"open".into(), target:None },
+            MilestoneRef { id:2, name:"beta".into(), status:"open".into(), target:None },
+        ];
+        update(&mut app, Action::OpenMilestoneOverlay);
+        update(&mut app, Action::OverlayInput('b'));
+        update(&mut app, Action::OverlayBackspace);
+        match &app.mode {
+            Mode::MilestoneOverlay(o) => { assert_eq!(o.query, ""); assert_eq!(filtered_overlay(o).len(), 2); }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
     fn overlay_enter_sets_milestone_filter_and_closes() {
         let mut app = App::new();
         app.milestones = vec![
@@ -499,5 +571,42 @@ mod tests {
         assert_eq!(app.scope.milestone.as_deref(), Some("M2"));
         assert!(matches!(app.mode, Mode::Normal), "overlay should close after select");
         assert!(matches!(cmd, Some(Command::SetScope)));
+    }
+
+    #[test]
+    fn overlay_opens_showing_open_milestones_only() {
+        let mut app = App::new();
+        app.milestones = vec![
+            MilestoneRef { id:1, name:"open-one".into(),  status:"open".into(),      target:None },
+            MilestoneRef { id:2, name:"done-one".into(),  status:"completed".into(), target:None },
+            MilestoneRef { id:3, name:"axed-one".into(),  status:"cancelled".into(), target:None },
+        ];
+        update(&mut app, Action::OpenMilestoneOverlay);
+        match &app.mode {
+            // only the open milestone (items index 0) is visible by default
+            Mode::MilestoneOverlay(o) => { assert!(!o.show_all); assert_eq!(filtered_overlay(o), vec![0]); }
+            _ => panic!("expected overlay mode"),
+        }
+    }
+
+    #[test]
+    fn overlay_toggle_all_reveals_then_hides_non_open() {
+        let mut app = App::new();
+        app.milestones = vec![
+            MilestoneRef { id:1, name:"open-one".into(),  status:"open".into(),      target:None },
+            MilestoneRef { id:2, name:"done-one".into(),  status:"completed".into(), target:None },
+            MilestoneRef { id:3, name:"axed-one".into(),  status:"cancelled".into(), target:None },
+        ];
+        update(&mut app, Action::OpenMilestoneOverlay);
+        update(&mut app, Action::OverlayToggleAll); // reveal all statuses
+        match &app.mode {
+            Mode::MilestoneOverlay(o) => { assert!(o.show_all); assert_eq!(filtered_overlay(o), vec![0,1,2]); }
+            _ => panic!("expected overlay mode"),
+        }
+        update(&mut app, Action::OverlayToggleAll); // back to open-only
+        match &app.mode {
+            Mode::MilestoneOverlay(o) => { assert!(!o.show_all); assert_eq!(filtered_overlay(o), vec![0]); }
+            _ => panic!("expected overlay mode"),
+        }
     }
 }
