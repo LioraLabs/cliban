@@ -1,4 +1,4 @@
-//! Round-trip integrity test for the legacy->core migration (CLI-7).
+//! Round-trip integrity test for the legacy->core migration.
 
 use std::path::Path;
 
@@ -6,7 +6,7 @@ use cliban::migrate;
 use rusqlite::Connection;
 
 // Vendored copy of the legacy Go cliban schema (the Go tree was deleted at the
-// CLI-9 cutover). This fixture keeps the migration round-trip test hermetic.
+// core cutover). This fixture keeps the migration round-trip test hermetic.
 const GO_SCHEMA: &str = include_str!("fixtures/go_schema.sql");
 
 fn build_fixture(path: &Path) {
@@ -69,10 +69,18 @@ fn round_trip_fixture() {
     assert_eq!(prio, "high");
     assert_eq!(completed, "2026-01-05T00:00:00.111222Z");
     let blocks: i64 = c
-        .query_row("SELECT count(*) FROM issue_relation WHERE type='blocks'", [], |r| r.get(0))
+        .query_row(
+            "SELECT count(*) FROM issue_relation WHERE type='blocks'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     let related: i64 = c
-        .query_row("SELECT count(*) FROM issue_relation WHERE type='related_to'", [], |r| r.get(0))
+        .query_row(
+            "SELECT count(*) FROM issue_relation WHERE type='related_to'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(blocks, 1);
     assert_eq!(related, 2);

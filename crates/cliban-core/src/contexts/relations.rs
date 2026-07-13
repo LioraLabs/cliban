@@ -19,11 +19,9 @@ pub struct Relation {
 
 /// Resolve an issue id by `<KEY>` (e.g. `CLI-5`).
 fn issue_id_by_key(conn: &Connection, key: &str) -> Result<i64> {
-    conn.query_row(
-        "SELECT id FROM issues WHERE key = ?1",
-        params![key],
-        |r| r.get(0),
-    )
+    conn.query_row("SELECT id FROM issues WHERE key = ?1", params![key], |r| {
+        r.get(0)
+    })
     .map_err(|e| match e {
         rusqlite::Error::QueryReturnedNoRows => Error::NotFound,
         other => Error::Sqlite(other),
@@ -90,7 +88,10 @@ pub fn for_issue(conn: &Connection, issue_id: i64) -> Result<Vec<Relation>> {
              WHERE r.from_issue_id = ?1 ORDER BY r.type, t.key",
         )?;
         let rows = stmt.query_map(params![issue_id], |r| {
-            Ok(Relation { kind: r.get(0)?, target_key: r.get(1)? })
+            Ok(Relation {
+                kind: r.get(0)?,
+                target_key: r.get(1)?,
+            })
         })?;
         for row in rows {
             out.push(row?);
@@ -103,7 +104,10 @@ pub fn for_issue(conn: &Connection, issue_id: i64) -> Result<Vec<Relation>> {
              WHERE r.to_issue_id = ?1 AND r.type = 'blocks' ORDER BY f.key",
         )?;
         let rows = stmt.query_map(params![issue_id], |r| {
-            Ok(Relation { kind: "blocked_by".to_string(), target_key: r.get(0)? })
+            Ok(Relation {
+                kind: "blocked_by".to_string(),
+                target_key: r.get(0)?,
+            })
         })?;
         for row in rows {
             out.push(row?);

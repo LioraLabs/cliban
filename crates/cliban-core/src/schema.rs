@@ -83,8 +83,7 @@ pub struct IssueRelation {
 
 // ---- Enum vocabularies (cliban's, not loom's) ----
 
-pub const ISSUE_STATUSES: &[&str] =
-    &["backlog", "in-progress", "blocked", "in-review", "done"];
+pub const ISSUE_STATUSES: &[&str] = &["backlog", "in-progress", "blocked", "in-review", "done"];
 
 pub const ISSUE_PRIORITIES: &[&str] = &["none", "low", "medium", "high", "urgent"];
 

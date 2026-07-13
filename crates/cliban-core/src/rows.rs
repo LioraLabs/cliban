@@ -114,8 +114,7 @@ pub fn activity_log_entry(row: &Row) -> rusqlite::Result<ActivityLogEntry> {
     })
 }
 
-pub const RELATION_COLS: &str =
-    "id, from_issue_id, to_issue_id, type, created_at";
+pub const RELATION_COLS: &str = "id, from_issue_id, to_issue_id, type, created_at";
 
 pub fn issue_relation(row: &Row) -> rusqlite::Result<IssueRelation> {
     Ok(IssueRelation {

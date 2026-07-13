@@ -99,11 +99,7 @@ pub fn draw(frame: &mut Frame, area: Rect, view: PickerView) {
     // visible rows (covers both "shorter than viewport" and "scrolled to
     // the top" cases — the two arms collapse intentionally). Otherwise
     // slide the window so the cursor sits on the last visible row.
-    let start = if cursor < rows {
-        0
-    } else {
-        cursor + 1 - rows
-    };
+    let start = if cursor < rows { 0 } else { cursor + 1 - rows };
     let end = (start + rows).min(total);
 
     let lines: Vec<Line> = if total == 0 {

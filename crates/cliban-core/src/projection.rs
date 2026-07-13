@@ -20,20 +20,14 @@ mod ser {
         s.serialize_str(&time::format_usec(*dt))
     }
 
-    pub fn opt_ts<S: Serializer>(
-        dt: &Option<DateTime<Utc>>,
-        s: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub fn opt_ts<S: Serializer>(dt: &Option<DateTime<Utc>>, s: S) -> Result<S::Ok, S::Error> {
         match dt {
             Some(d) => s.serialize_str(&time::format_usec(*d)),
             None => s.serialize_none(),
         }
     }
 
-    pub fn opt_date<S: Serializer>(
-        d: &Option<NaiveDate>,
-        s: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub fn opt_date<S: Serializer>(d: &Option<NaiveDate>, s: S) -> Result<S::Ok, S::Error> {
         match d {
             Some(d) => s.serialize_str(&time::format_date(*d)),
             None => s.serialize_none(),

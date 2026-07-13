@@ -20,7 +20,10 @@ struct MigrateLegacyArgs {
 }
 
 #[derive(Parser)]
-#[command(name = "cliban", about = "AI-agent-first kanban board for the terminal")]
+#[command(
+    name = "cliban",
+    about = "AI-agent-first kanban board for the terminal"
+)]
 struct Cli {
     /// path to SQLite DB (default: $CLIBAN_DB or $XDG_DATA_HOME/cliban/cliban.db)
     #[arg(long, global = true)]

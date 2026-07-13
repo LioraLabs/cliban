@@ -59,7 +59,10 @@ pub fn create(conn: &Connection, project_key: &str, attrs: CreateIssue) -> Resul
         Some(key) => match get_row_by_key(&tx, key)? {
             Some(i) => Some(i.id),
             None => {
-                return Err(Error::validation("parent_key", &format!("not found: {key}")))
+                return Err(Error::validation(
+                    "parent_key",
+                    &format!("not found: {key}"),
+                ))
             }
         },
     };
@@ -67,7 +70,10 @@ pub fn create(conn: &Connection, project_key: &str, attrs: CreateIssue) -> Resul
     let (_p, n) = projects::bump_issue_seq(&tx, &project.key)?;
     let key = format!("{}-{}", project.key, n);
 
-    let status = attrs.status.clone().unwrap_or_else(|| "backlog".to_string());
+    let status = attrs
+        .status
+        .clone()
+        .unwrap_or_else(|| "backlog".to_string());
     let priority = attrs.priority.clone().unwrap_or_else(|| "none".to_string());
 
     let position = match attrs.position {
@@ -274,7 +280,10 @@ fn do_update(conn: &Connection, issue: &Issue, attrs: UpdateIssue) -> Result<Iss
         .clone()
         .unwrap_or_else(|| issue.description.clone());
     let status = attrs.status.clone().unwrap_or_else(|| issue.status.clone());
-    let priority = attrs.priority.clone().unwrap_or_else(|| issue.priority.clone());
+    let priority = attrs
+        .priority
+        .clone()
+        .unwrap_or_else(|| issue.priority.clone());
     let position = attrs.position.unwrap_or(issue.position);
     let archived = attrs.archived.unwrap_or(issue.archived);
     let due_date = match attrs.due_date {
@@ -317,8 +326,7 @@ pub fn delete(conn: &Connection, issue: &Issue) -> Result<()> {
 
 /// `set_labels/2`: replace the issue's labels with `names` (created on demand).
 pub fn set_labels(conn: &Connection, issue: &Issue, names: &[String]) -> Result<Issue> {
-    let project = projects::get_by_id(conn, issue.project_id)?
-        .ok_or(Error::ProjectNotFound)?;
+    let project = projects::get_by_id(conn, issue.project_id)?.ok_or(Error::ProjectNotFound)?;
     let tx = conn.unchecked_transaction()?;
     let label_rows = labels::upsert_many(&tx, &project, names)?;
 
@@ -443,7 +451,10 @@ fn validate_depth_limit(conn: &Connection, parent_id: Option<i64>) -> Result<()>
         Some(pid) => match get_row_by_id(conn, pid)? {
             None => Err(Error::validation("parent_id", "parent not found")),
             Some(p) if p.parent_id.is_none() => Ok(()),
-            Some(_) => Err(Error::validation("parent_id", "depth limit exceeded (max 2)")),
+            Some(_) => Err(Error::validation(
+                "parent_id",
+                "depth limit exceeded (max 2)",
+            )),
         },
     }
 }

@@ -57,7 +57,13 @@ pub fn create(conn: &Connection, attrs: CreateProject) -> Result<Project> {
         "INSERT INTO projects (key, name, description, archived, \
          auto_archive_done_after_days, issue_seq, inserted_at, updated_at) \
          VALUES (?1, ?2, ?3, 0, ?4, 0, ?5, ?5)",
-        params![key, attrs.name, desc, attrs.auto_archive_done_after_days, now],
+        params![
+            key,
+            attrs.name,
+            desc,
+            attrs.auto_archive_done_after_days,
+            now
+        ],
     )?;
     let id = conn.last_insert_rowid();
     Ok(get_by_id(conn, id)?.expect("just inserted"))
@@ -77,10 +83,7 @@ pub fn list(conn: &Connection) -> Result<Vec<Project>> {
 
 /// `get_by_key/1` — upcases the key (matches the Elixir `String.upcase`).
 pub fn get_by_key(conn: &Connection, key: &str) -> Result<Option<Project>> {
-    let sql = format!(
-        "SELECT {} FROM projects WHERE key = ?1",
-        rows::PROJECT_COLS
-    );
+    let sql = format!("SELECT {} FROM projects WHERE key = ?1", rows::PROJECT_COLS);
     Ok(conn
         .query_row(&sql, params![key.to_uppercase()], rows::project)
         .optional()?)
@@ -88,7 +91,9 @@ pub fn get_by_key(conn: &Connection, key: &str) -> Result<Option<Project>> {
 
 pub fn get_by_id(conn: &Connection, id: i64) -> Result<Option<Project>> {
     let sql = format!("SELECT {} FROM projects WHERE id = ?1", rows::PROJECT_COLS);
-    Ok(conn.query_row(&sql, params![id], rows::project).optional()?)
+    Ok(conn
+        .query_row(&sql, params![id], rows::project)
+        .optional()?)
 }
 
 /// `fetch_by_key/1` — returns ProjectNotFound instead of None.

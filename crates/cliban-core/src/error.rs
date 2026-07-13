@@ -53,9 +53,7 @@ impl Error {
     /// `cs.errors[:field] =~ needle` assertions.
     pub fn has_validation(&self, field: &str, needle: &str) -> bool {
         match self {
-            Error::Validation(errs) => errs
-                .iter()
-                .any(|(f, m)| f == field && m.contains(needle)),
+            Error::Validation(errs) => errs.iter().any(|(f, m)| f == field && m.contains(needle)),
             _ => false,
         }
     }

@@ -57,7 +57,13 @@ fn tmp_db(tag: &str) -> String {
 /// Run a command through `bin` against `db` with a CLEAN environment (we do NOT
 /// inherit the developer's CLIBAN_DB / XDG_DATA_HOME). Optionally pass stdin and
 /// extra env vars.
-fn run_env(bin: &str, db: &str, args: &[&str], stdin: Option<&str>, extra_env: &[(&str, &str)]) -> Run {
+fn run_env(
+    bin: &str,
+    db: &str,
+    args: &[&str],
+    stdin: Option<&str>,
+    extra_env: &[(&str, &str)],
+) -> Run {
     let mut cmd = Command::new(bin);
     // env_clear gives us a clean env; we then set only what we need.
     cmd.env_clear();
@@ -159,26 +165,71 @@ fn assert_parity(seed: &[&[&str]], cmd: &[&str], stdin: Option<&str>) {
 fn base_seed() -> Vec<Vec<&'static str>> {
     vec![
         vec![
-            "project", "add", "CLI", "--name", "CLI Project", "--description", "the cli",
+            "project",
+            "add",
+            "CLI",
+            "--name",
+            "CLI Project",
+            "--description",
+            "the cli",
         ],
         vec![
-            "issue", "add", "--project", "CLI", "--title", "First issue", "--priority", "high",
-            "--label", "bug",
+            "issue",
+            "add",
+            "--project",
+            "CLI",
+            "--title",
+            "First issue",
+            "--priority",
+            "high",
+            "--label",
+            "bug",
         ],
         vec![
-            "issue", "add", "--project", "CLI", "--title", "Second thing", "--label", "feature",
-            "--label", "bug",
+            "issue",
+            "add",
+            "--project",
+            "CLI",
+            "--title",
+            "Second thing",
+            "--label",
+            "feature",
+            "--label",
+            "bug",
         ],
         vec![
-            "milestone", "add", "--project", "CLI", "--name", "v1", "--description",
-            "milestone one", "--target", "2026-12-31",
+            "milestone",
+            "add",
+            "--project",
+            "CLI",
+            "--name",
+            "v1",
+            "--description",
+            "milestone one",
+            "--target",
+            "2026-12-31",
         ],
         vec![
-            "issue", "add", "--project", "CLI", "--title", "Third", "--milestone", "v1",
-            "--blocks", "CLI-1",
+            "issue",
+            "add",
+            "--project",
+            "CLI",
+            "--title",
+            "Third",
+            "--milestone",
+            "v1",
+            "--blocks",
+            "CLI-1",
         ],
         vec![
-            "issue", "add", "--project", "CLI", "--title", "Fourth", "--parent", "CLI-1",
+            "issue",
+            "add",
+            "--project",
+            "CLI",
+            "--title",
+            "Fourth",
+            "--parent",
+            "CLI-1",
         ],
     ]
 }
@@ -230,7 +281,15 @@ fn test_issue_read_parity() {
             &["issue", "ls"],
             &["issue", "ls", "--status", "backlog", "--json"],
             &["issue", "ls", "--priority", "high", "--json"],
-            &["issue", "ls", "--milestone", "v1", "--project", "CLI", "--json"],
+            &[
+                "issue",
+                "ls",
+                "--milestone",
+                "v1",
+                "--project",
+                "CLI",
+                "--json",
+            ],
             &["issue", "ls", "--label", "bug", "--json"],
             &["issue", "ls", "--no-subs", "--json"],
             &["issue", "ls", "--sort", "priority", "--json"],
@@ -259,8 +318,17 @@ fn test_issue_mutation_parity() {
         &seed,
         &[
             &[
-                "issue", "add", "--project", "CLI", "--title", "X", "--priority", "urgent",
-                "--label", "new", "--json",
+                "issue",
+                "add",
+                "--project",
+                "CLI",
+                "--title",
+                "X",
+                "--priority",
+                "urgent",
+                "--label",
+                "new",
+                "--json",
             ],
             &["issue", "edit", "CLI-1", "--priority", "urgent", "--json"],
             &["issue", "edit", "CLI-1", "--title", "Renamed", "--json"],
@@ -278,7 +346,14 @@ fn test_workflow_parity() {
     // NOTE: real newlines here (Rust interprets \n), NOT shell-literal "\\n".
     let desc = "## Plan\n\n### Task 1: a\n\n- [ ] Step 1\n- [ ] Step 2\n";
     let p_add: &[&str] = &[
-        "issue", "add", "--project", "CLI", "--title", "P", "--description", desc,
+        "issue",
+        "add",
+        "--project",
+        "CLI",
+        "--title",
+        "P",
+        "--description",
+        desc,
     ];
     let base = base_seed();
     let mut seed_slices: Vec<&[&str]> = base.iter().map(|v| v.as_slice()).collect();
@@ -329,7 +404,13 @@ fn test_milestone_label_parity() {
             &["milestone", "ls", "--project", "CLI", "--json"],
             &["milestone", "show", "v1", "--project", "CLI", "--json"],
             &[
-                "milestone", "show", "v1", "--project", "CLI", "--json", "--with-issues",
+                "milestone",
+                "show",
+                "v1",
+                "--project",
+                "CLI",
+                "--json",
+                "--with-issues",
             ],
             &["milestone", "show", "v1", "--project", "CLI"],
             &["label", "ls", "--project", "CLI", "--json"],
@@ -373,8 +454,15 @@ fn test_stdin_parity() {
     assert_parity(
         &s,
         &[
-            "issue", "add", "--project", "CLI", "--title", "StdinDesc", "--description-file",
-            "-", "--json",
+            "issue",
+            "add",
+            "--project",
+            "CLI",
+            "--title",
+            "StdinDesc",
+            "--description-file",
+            "-",
+            "--json",
         ],
         Some("from stdin\n"),
     );

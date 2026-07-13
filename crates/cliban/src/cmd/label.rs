@@ -55,9 +55,7 @@ async fn add(db: &Option<String>, name: String, project: String) -> CliResult<()
 async fn ls(db: &Option<String>, project: String, json: bool) -> CliResult<()> {
     let project = project.to_uppercase();
     let store = store_open::open(db).await?;
-    let labels = store
-        .call(move |conn| labels::list(conn, &project))
-        .await?;
+    let labels = store.call(move |conn| labels::list(conn, &project)).await?;
     for l in &labels {
         if json {
             println!("{}", serde_json::json!({ "name": l.name }));

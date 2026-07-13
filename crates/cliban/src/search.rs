@@ -326,7 +326,9 @@ pub async fn search(store: &Store, opts: Options) -> CliResult<Vec<Match>> {
         let mut kept = Vec::with_capacity(issues.len());
         for i in issues.into_iter() {
             let id = i.id;
-            let names = store.call(move |conn| issues::label_names(conn, id)).await?;
+            let names = store
+                .call(move |conn| issues::label_names(conn, id))
+                .await?;
             if want.iter().all(|w| names.iter().any(|n| n == w)) {
                 kept.push(i);
             }
@@ -341,7 +343,10 @@ pub async fn search(store: &Store, opts: Options) -> CliResult<Vec<Match>> {
 
     let mut matches: Vec<Match>;
     if q.is_empty() {
-        matches = issues.into_iter().map(|issue| Match { issue, score: 0 }).collect();
+        matches = issues
+            .into_iter()
+            .map(|issue| Match { issue, score: 0 })
+            .collect();
         // stable sort by updated_at desc
         matches.sort_by(|a, b| b.issue.updated_at.cmp(&a.issue.updated_at));
     } else {
@@ -350,7 +355,9 @@ pub async fn search(store: &Store, opts: Options) -> CliResult<Vec<Match>> {
         matches = Vec::with_capacity(issues.len());
         for issue in issues.into_iter() {
             let id = issue.id;
-            let labels = store.call(move |conn| issues::label_names(conn, id)).await?;
+            let labels = store
+                .call(move |conn| issues::label_names(conn, id))
+                .await?;
             let label_str = labels.join(" ");
             let desc = strip_description(&issue.description);
 
@@ -373,7 +380,10 @@ pub async fn search(store: &Store, opts: Options) -> CliResult<Vec<Match>> {
                 }
             }
             if matched {
-                matches.push(Match { issue, score: total });
+                matches.push(Match {
+                    issue,
+                    score: total,
+                });
             }
         }
         // stable sort: score desc, updated_at desc tiebreak

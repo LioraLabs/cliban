@@ -1,5 +1,5 @@
 //! `cliban fff` — fuzzy issue picker. In an interactive TTY this would drive a
-//! Bubble Tea-style picker (out of scope, CLI-8); in any non-TTY context
+//! Bubble Tea-style picker (out of scope); in any non-TTY context
 //! (tests, pipes) it runs "batch mode": require a QUERY, search, and emit one
 //! NDJSON search-match line per result. Output is byte-for-byte parity with the
 //! Go oracle (`internal/cli/fff.go`).
@@ -60,7 +60,7 @@ pub async fn run(db: &Option<String>, a: FffArgs) -> CliResult<()> {
     let query = a.query.clone().unwrap_or_default();
 
     if std::io::stdin().is_terminal() {
-        // Interactive picker path — loom-TUI work (CLI-8), out of scope.
+        // Interactive picker path — loom-TUI work, out of scope.
         return Err(CliError::other("fff interactive picker not yet wired"));
     }
 
@@ -89,7 +89,8 @@ pub async fn run(db: &Option<String>, a: FffArgs) -> CliResult<()> {
         let inputs = crate::cmd::issue::issue_json_inputs(&store, &m.issue).await?;
         println!(
             "{}",
-            serde_json::to_string(&crate::output::build_search_match_json(inputs, m.score)).unwrap()
+            serde_json::to_string(&crate::output::build_search_match_json(inputs, m.score))
+                .unwrap()
         );
     }
     Ok(())

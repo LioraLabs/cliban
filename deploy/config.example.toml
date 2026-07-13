@@ -1,0 +1,25 @@
+# cliband configuration. Every key is optional — an empty file (or no
+# --config at all) runs with these defaults, except signup_token, which you
+# almost certainly want to set.
+
+# Address the SSH listener binds.
+listen_addr = "0.0.0.0:2222"
+
+# Host key, registry.db, and tenants/*.db live here.
+# Default: $XDG_DATA_HOME/cliband (~/.local/share/cliband).
+data_dir = "/var/lib/cliband"
+
+# Who may create a tenant with `ssh <host> signup <slug> [token]`:
+#   "open"   — anyone with an SSH key
+#   "token"  — anyone presenting the shared signup_token (default)
+#   "closed" — nobody; existing members invite via `invite`/`accept`
+signup_policy = "token"
+
+# Required when signup_policy = "token"; while unset, signup is denied.
+signup_token = "change-me"
+
+# Max tenants one public key may create. 0 = unlimited.
+max_tenants_per_key = 5
+
+# Global tenant cap. 0 = unlimited.
+max_tenants = 0

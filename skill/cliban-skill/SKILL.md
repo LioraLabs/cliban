@@ -14,6 +14,7 @@ default no longer opens an editor; mutations are safe to run unattended.
 - **Statuses**: `backlog` | `in-progress` | `blocked` | `in-review` | `done`
 - **Priorities**: `none` | `low` | `medium` | `high` | `urgent`
 - **Issue keys**: `{PROJECT}-{N}` like `CLI-42` (project key is uppercase letters/digits, 2-10 chars starting with a letter).
+- **Project memory**: durable context lives under `## Notes` in the project description, one retrievable lesson per `###` subsection.
 - **Sub-issues**: depth limited to 2 — a sub-issue cannot have its own children. The CLI returns exit code 2 if you try to nest a third level.
 - **Relations**: `blocks`, `blocked_by` (reverse of `blocks`), `related_to` (symmetric).
 - **Labels**: free-form tags per project. Create with `cliban label add`, attach via `--label` on `issue add`/`edit`/`import`.
@@ -46,6 +47,8 @@ The agent-facing JSON shape is stable. Optional refs are `null` (never omitted) 
 `cliban issue show KEY --json` returns one pretty-printed object.
 `cliban issue ls --json` emits one **compact** JSON object per line (NDJSON).
 Parse with `for line in stdout.splitlines(): json.loads(line)` (or `jq -c`).
+`cliban project search KEY QUERY --json` emits compact NDJSON objects containing
+`project`, `heading`, `content`, and `score`.
 
 ## DB location
 
@@ -98,6 +101,22 @@ cliban issue add --project CLI --title "Plan" --description-file ./plan.md
 # stdin still works:
 cliban issue edit CLI-12 --description - < /tmp/desc.md
 ```
+
+### Store and retrieve persistent agent memory
+```bash
+cliban project add CLI --name "Cliban" --description-file project.md
+cliban project search CLI "sqlte canonical" --section notes --json
+cliban project show CLI --section notes
+cliban project edit CLI --description-file - < updated-project.md
+```
+Use the project description's `## Notes` section for durable knowledge that
+does not belong in an issue. Give each lesson a descriptive `###` heading.
+Search first: every whitespace-separated term is fuzzy-matched against each
+heading and body, and only matching subsections are returned. Results are
+ranked and capped by `--limit` (default 20), so do not load the complete notes
+section unless the task needs it. `--section all` searches all `###`
+subsections. Project `add` and `edit` accept `--description-file`; `-` reads
+stdin.
 
 ### Move work along
 ```bash
@@ -189,6 +208,7 @@ cliban issue ls --project CLI --archived --json
 - Don't nest sub-issues three levels deep; the CLI returns exit code 2.
 - Don't filter on archived state by hand — pass `--archived` to `ls` to include them; otherwise they are excluded.
 - Don't assume timestamps are in the local timezone — they are UTC ISO-8601.
+- Don't create fake backlog/done issues for agent memory. Use `###` subsections under the project's `## Notes` and retrieve them with `project search`.
 - Don't pass `--editor` in an agent context unless you actually have a TTY; it will fail with exit code 2 if stdin isn't a TTY.
 
 ## Editor behavior (agent-safe)

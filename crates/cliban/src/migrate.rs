@@ -1,5 +1,5 @@
 //! One-shot migration: legacy Go SQLite (singular tables) -> cliban-core schema
-//! (plural tables). Preserves all ids + issue seq (folded into key). See CLI-7.
+//! (plural tables). Preserves all ids + issue seq (folded into key).
 
 use std::path::Path;
 
@@ -39,7 +39,8 @@ pub fn migrate(from: &Path, to: &Path) -> Result<MigrationReport, String> {
         .map_err(|e| format!("open source {}: {e}", from.display()))?;
     let dst = Connection::open(to).map_err(|e| format!("open target {}: {e}", to.display()))?;
     cliban_core::migrations::run(&dst).map_err(|e| format!("schema: {e}"))?;
-    dst.execute_batch("PRAGMA foreign_keys = OFF;").map_err(|e| e.to_string())?;
+    dst.execute_batch("PRAGMA foreign_keys = OFF;")
+        .map_err(|e| e.to_string())?;
 
     let tx = dst.unchecked_transaction().map_err(|e| e.to_string())?;
     copy_projects(&src, &tx)?;
@@ -71,8 +72,10 @@ fn report(dst: &Connection) -> Result<MigrationReport, String> {
 
 fn copy_projects(src: &Connection, dst: &Connection) -> Result<(), String> {
     let mut stmt = src
-        .prepare("SELECT id, key, name, description, archived, issue_seq, \
-                  auto_archive_done_after_days, created_at, updated_at FROM project")
+        .prepare(
+            "SELECT id, key, name, description, archived, issue_seq, \
+                  auto_archive_done_after_days, created_at, updated_at FROM project",
+        )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| {
@@ -96,7 +99,17 @@ fn copy_projects(src: &Connection, dst: &Connection) -> Result<(), String> {
             "INSERT INTO projects (id, key, name, description, archived, \
              auto_archive_done_after_days, issue_seq, inserted_at, updated_at) \
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-            params![id, key, name, desc, archived, auto, seq, norm_ts(&created), norm_ts(&updated)],
+            params![
+                id,
+                key,
+                name,
+                desc,
+                archived,
+                auto,
+                seq,
+                norm_ts(&created),
+                norm_ts(&updated)
+            ],
         )
         .map_err(|e| format!("insert project {key}: {e}"))?;
     }
@@ -105,8 +118,10 @@ fn copy_projects(src: &Connection, dst: &Connection) -> Result<(), String> {
 
 fn copy_milestones(src: &Connection, dst: &Connection) -> Result<(), String> {
     let mut stmt = src
-        .prepare("SELECT id, project_id, name, description, target_date, status, \
-                  created_at, updated_at FROM milestone")
+        .prepare(
+            "SELECT id, project_id, name, description, target_date, status, \
+                  created_at, updated_at FROM milestone",
+        )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| {
@@ -128,7 +143,16 @@ fn copy_milestones(src: &Connection, dst: &Connection) -> Result<(), String> {
         dst.execute(
             "INSERT INTO milestones (id, project_id, name, description, target_date, \
              status, archived, inserted_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8)",
-            params![id, pid, name, desc, target, status, norm_ts(&created), norm_ts(&updated)],
+            params![
+                id,
+                pid,
+                name,
+                desc,
+                target,
+                status,
+                norm_ts(&created),
+                norm_ts(&updated)
+            ],
         )
         .map_err(|e| format!("insert milestone {id}: {e}"))?;
     }
@@ -180,9 +204,11 @@ fn project_keys(conn: &Connection) -> Result<std::collections::HashMap<i64, Stri
 fn copy_issues(src: &Connection, dst: &Connection) -> Result<(), String> {
     let pkeys = project_keys(src)?;
     let mut stmt = src
-        .prepare("SELECT id, project_id, milestone_id, parent_id, seq, title, description, \
+        .prepare(
+            "SELECT id, project_id, milestone_id, parent_id, seq, title, description, \
                   status, priority, position, archived, due_date, completed_at, \
-                  created_at, updated_at FROM issue")
+                  created_at, updated_at FROM issue",
+        )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| {
@@ -206,8 +232,23 @@ fn copy_issues(src: &Connection, dst: &Connection) -> Result<(), String> {
         })
         .map_err(|e| e.to_string())?;
     for row in rows {
-        let (id, pid, mid, parent, seq, title, desc, status, priority, position, archived,
-             due, completed, created, updated) = row.map_err(|e| e.to_string())?;
+        let (
+            id,
+            pid,
+            mid,
+            parent,
+            seq,
+            title,
+            desc,
+            status,
+            priority,
+            position,
+            archived,
+            due,
+            completed,
+            created,
+            updated,
+        ) = row.map_err(|e| e.to_string())?;
         let pkey = pkeys
             .get(&pid)
             .ok_or_else(|| format!("issue {id}: unknown project_id {pid}"))?;
@@ -217,8 +258,23 @@ fn copy_issues(src: &Connection, dst: &Connection) -> Result<(), String> {
              description, status, priority, position, archived, due_date, completed_at, \
              inserted_at, updated_at) VALUES \
              (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
-            params![id, key, pid, mid, parent, title, desc, status, priority, position,
-                    archived, due, norm_opt_ts(completed), norm_ts(&created), norm_ts(&updated)],
+            params![
+                id,
+                key,
+                pid,
+                mid,
+                parent,
+                title,
+                desc,
+                status,
+                priority,
+                position,
+                archived,
+                due,
+                norm_opt_ts(completed),
+                norm_ts(&created),
+                norm_ts(&updated)
+            ],
         )
         .map_err(|e| format!("insert issue {key}: {e}"))?;
     }

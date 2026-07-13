@@ -7,7 +7,7 @@ description = "cliban TUI: loom-style ratatui kanban board over in-process cliba
 
 [dependencies]
 cliban-core = { path = "../cliban-core" }
-ratatui = "0.29"
+ratatui = { workspace = true, features = ["unstable-backend-writer"] }
 crossterm = "0.28"
 tokio = { workspace = true }
 chrono.workspace = true

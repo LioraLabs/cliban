@@ -1,0 +1,35 @@
+[Unit]
+Description=cliban SSH daemon — hosted shared boards
+Documentation=https://github.com/lioralabs/cliban
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cliband
+Group=cliband
+ExecStart=/usr/local/bin/cliband --config /etc/cliband/config.toml
+Restart=on-failure
+RestartSec=2
+
+# The daemon only needs its data dir; lock everything else down.
+StateDirectory=cliband
+Environment=XDG_DATA_HOME=/var/lib
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/cliband
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

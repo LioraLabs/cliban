@@ -10,6 +10,10 @@ use crate::buffers::{IssueBuffer, MilestoneBuffer, ProjectBuffer};
 pub struct Data {
     pub(crate) store: Store,
     pub(crate) rt: tokio::runtime::Runtime,
+    /// Called after every successful mutation (i.e. after commit — each
+    /// mutation is one `store.call`). Hosts hook this to publish coarse
+    /// change events; `None` (the local TUI) publishes nowhere.
+    on_mutate: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 #[derive(Debug)]
@@ -28,12 +32,33 @@ impl From<cliban_core::Error> for DataError {
 
 impl Data {
     pub fn open(path: &Path) -> Result<Self, DataError> {
+        Self::from_store(Store::open(path)?)
+    }
+
+    /// Wrap an already-open store (e.g. a shared per-tenant store handed to
+    /// an SSH session). Each `Data` gets its own private blocking runtime;
+    /// the store is `Clone` and serializes all callers on one writer thread.
+    pub fn from_store(store: Store) -> Result<Self, DataError> {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| DataError(e.to_string()))?;
-        let store = Store::open(path).map_err(DataError::from)?;
-        Ok(Self { store, rt })
+        Ok(Self {
+            store,
+            rt,
+            on_mutate: None,
+        })
+    }
+
+    /// Register a hook invoked after every successful mutation.
+    pub fn set_on_mutate(&mut self, f: impl Fn() + Send + Sync + 'static) {
+        self.on_mutate = Some(Box::new(f));
+    }
+
+    fn notify(&self) {
+        if let Some(f) = &self.on_mutate {
+            f();
+        }
     }
 
     pub fn load_cards(&self) -> Result<Vec<Card>, DataError> {
@@ -73,9 +98,10 @@ impl Data {
             return Ok(vec![]);
         };
         let project = project.to_string();
-        let ms = self
-            .rt
-            .block_on(self.store.call(move |conn| milestones::list(conn, Some(&project))))?;
+        let ms = self.rt.block_on(
+            self.store
+                .call(move |conn| milestones::list(conn, Some(&project))),
+        )?;
         Ok(ms
             .into_iter()
             .map(|m| MilestoneRef {
@@ -99,6 +125,7 @@ impl Data {
             issues::move_issue(conn, &i, &status)?;
             Ok(())
         }))?;
+        self.notify();
         Ok(())
     }
 
@@ -109,10 +136,25 @@ impl Data {
             let a = issues::get_by_key(conn, &key)?.ok_or(cliban_core::Error::NotFound)?;
             let b = issues::get_by_key(conn, &other)?.ok_or(cliban_core::Error::NotFound)?;
             let (pa, pb) = (a.position, b.position);
-            issues::update(conn, &a, issues::UpdateIssue { position: Some(pb), ..Default::default() })?;
-            issues::update(conn, &b, issues::UpdateIssue { position: Some(pa), ..Default::default() })?;
+            issues::update(
+                conn,
+                &a,
+                issues::UpdateIssue {
+                    position: Some(pb),
+                    ..Default::default()
+                },
+            )?;
+            issues::update(
+                conn,
+                &b,
+                issues::UpdateIssue {
+                    position: Some(pa),
+                    ..Default::default()
+                },
+            )?;
             Ok(())
         }))?;
+        self.notify();
         Ok(())
     }
 
@@ -130,6 +172,7 @@ impl Data {
             )?;
             Ok(())
         }))?;
+        self.notify();
         Ok(())
     }
 
@@ -155,6 +198,7 @@ impl Data {
             )?;
             Ok(())
         }))?;
+        self.notify();
         Ok(())
     }
 }
@@ -217,6 +261,7 @@ impl Data {
             )?;
             Ok(())
         }))?;
+        self.notify();
         Ok(())
     }
 
@@ -254,10 +299,15 @@ impl Data {
             )?;
             Ok(())
         }))?;
+        self.notify();
         Ok(())
     }
 
-    pub fn milestone_buffer(&self, project: &str, name: &str) -> Result<MilestoneBuffer, DataError> {
+    pub fn milestone_buffer(
+        &self,
+        project: &str,
+        name: &str,
+    ) -> Result<MilestoneBuffer, DataError> {
         let (project, name) = (project.to_string(), name.to_string());
         let m = self.rt.block_on(self.store.call(move |conn| {
             milestones::get(conn, &project, &name)?.ok_or(cliban_core::Error::NotFound)
@@ -312,6 +362,7 @@ impl Data {
             )?;
             Ok(())
         }))?;
+        self.notify();
         Ok(())
     }
 
@@ -342,6 +393,7 @@ impl Data {
             )?;
             Ok(())
         }))?;
+        self.notify();
         Ok(())
     }
 
@@ -363,8 +415,8 @@ impl Data {
     pub fn apply_project_edit(&self, project: &str, b: &ProjectBuffer) -> Result<(), DataError> {
         let (project, b) = (project.to_string(), b.clone());
         self.rt.block_on(self.store.call(move |conn| {
-            let p = projects::get_by_key(conn, &project)?
-                .ok_or(cliban_core::Error::ProjectNotFound)?;
+            let p =
+                projects::get_by_key(conn, &project)?.ok_or(cliban_core::Error::ProjectNotFound)?;
             projects::update(
                 conn,
                 &p,
@@ -376,6 +428,7 @@ impl Data {
             )?;
             Ok(())
         }))?;
+        self.notify();
         Ok(())
     }
 }
@@ -388,7 +441,11 @@ impl Data {
             .build()
             .unwrap();
         let store = Store::open_in_memory().unwrap();
-        Self { store, rt }
+        Self {
+            store,
+            rt,
+            on_mutate: None,
+        }
     }
 
     pub fn seed_project_issue(&self, key: &str, title: &str) {
@@ -406,6 +463,25 @@ impl Data {
                 issues::create(
                     conn,
                     &key,
+                    issues::CreateIssue {
+                        title,
+                        ..Default::default()
+                    },
+                )?;
+                Ok(())
+            }))
+            .unwrap();
+    }
+
+    /// Add another issue to an existing project (seed_project_issue creates
+    /// the project, so it can only be called once per project key).
+    pub fn seed_issue(&self, project: &str, title: &str) {
+        let (project, title) = (project.to_string(), title.to_string());
+        self.rt
+            .block_on(self.store.call(move |conn| {
+                issues::create(
+                    conn,
+                    &project,
                     issues::CreateIssue {
                         title,
                         ..Default::default()
@@ -445,9 +521,17 @@ mod tests {
         let d = Data::open_in_memory_for_test();
         d.seed_project_issue("CLI", "First"); // CLI-1
         d.rt.block_on(d.store.call(|conn| {
-            issues::create(conn, "CLI", issues::CreateIssue { title: "Second".into(), ..Default::default() })?;
+            issues::create(
+                conn,
+                "CLI",
+                issues::CreateIssue {
+                    title: "Second".into(),
+                    ..Default::default()
+                },
+            )?;
             Ok(())
-        })).unwrap(); // CLI-2
+        }))
+        .unwrap(); // CLI-2
         let pos = |cards: &[Card], k: &str| cards.iter().find(|c| c.key == k).unwrap().position;
         let before = d.load_cards().unwrap();
         d.reorder("CLI-1", "CLI-2").unwrap();
@@ -482,10 +566,108 @@ mod tests {
     fn create_milestone_then_loads() {
         let d = Data::open_in_memory_for_test();
         d.seed_project_issue("CLI", "First");
-        let b = crate::buffers::MilestoneBuffer { name: "M1".into(), status: "open".into(), ..Default::default() };
+        let b = crate::buffers::MilestoneBuffer {
+            name: "M1".into(),
+            status: "open".into(),
+            ..Default::default()
+        };
         d.create_milestone("CLI", &b).unwrap();
         let ms = d.load_milestones(Some("CLI")).unwrap();
         assert_eq!(ms.len(), 1);
         assert_eq!(ms[0].name, "M1");
+    }
+
+    #[test]
+    fn from_store_shares_the_underlying_store() {
+        let store = Store::open_in_memory().unwrap();
+        let d1 = Data::from_store(store.clone()).unwrap();
+        d1.seed_project_issue("CLI", "First");
+        // A second Data over the same Store sees the same rows.
+        let d2 = Data::from_store(store).unwrap();
+        assert_eq!(d2.load_cards().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn on_mutate_fires_after_successful_writes_only() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let mut d = Data::open_in_memory_for_test();
+        d.seed_project_issue("CLI", "First");
+        let count = Arc::new(AtomicUsize::new(0));
+        let c = count.clone();
+        d.set_on_mutate(move || {
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let key = d.load_cards().unwrap()[0].key.clone();
+        assert_eq!(count.load(Ordering::SeqCst), 0, "reads must not notify");
+
+        d.move_issue(&key, "done").unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        d.archive(&key).unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+
+        // A failed write publishes nothing.
+        assert!(d.move_issue("NOPE-1", "done").is_err());
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn interleaved_field_edits_are_last_write_wins_without_corruption() {
+        let store = Store::open_in_memory().unwrap();
+        let d1 = Data::from_store(store.clone()).unwrap();
+        d1.seed_project_issue("CLI", "First");
+        let d2 = Data::from_store(store).unwrap();
+        let key = d1.load_cards().unwrap()[0].key.clone();
+
+        // Interleaved status writes: the later one sticks.
+        d1.move_issue(&key, "in-progress").unwrap();
+        d2.move_issue(&key, "blocked").unwrap();
+
+        // Interleaved full edits from stale buffers: both apply cleanly,
+        // the later writer's fields win, nothing is corrupted or duplicated.
+        let mut b1 = d1.issue_buffer(&key).unwrap();
+        let mut b2 = d2.issue_buffer(&key).unwrap();
+        b1.title = "From session one".into();
+        b2.title = "From session two".into();
+        d1.apply_issue_edit(&key, &b1).unwrap();
+        d2.apply_issue_edit(&key, &b2).unwrap();
+
+        let cards = d1.load_cards().unwrap();
+        assert_eq!(cards.len(), 1, "no ghost rows");
+        assert_eq!(cards[0].title, "From session two");
+        assert_eq!(cards[0].status, "blocked");
+    }
+
+    #[test]
+    fn concurrent_writers_from_two_threads_leave_consistent_state() {
+        let store = Store::open_in_memory().unwrap();
+        let d0 = Data::from_store(store.clone()).unwrap();
+        d0.seed_project_issue("CLI", "First");
+        let key = d0.load_cards().unwrap()[0].key.clone();
+
+        let writer = |a: &'static str, b: &'static str| {
+            let store = store.clone();
+            let key = key.clone();
+            std::thread::spawn(move || {
+                let d = Data::from_store(store).unwrap();
+                for i in 0..20 {
+                    d.move_issue(&key, if i % 2 == 0 { a } else { b }).unwrap();
+                }
+            })
+        };
+        let t1 = writer("done", "in-progress");
+        let t2 = writer("blocked", "in-review");
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        let cards = d0.load_cards().unwrap();
+        assert_eq!(cards.len(), 1, "no duplicate/ghost rows");
+        assert!(
+            ["done", "in-progress", "blocked", "in-review"].contains(&cards[0].status.as_str()),
+            "status must be one of the written values, got {}",
+            cards[0].status
+        );
     }
 }

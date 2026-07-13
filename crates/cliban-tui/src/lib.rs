@@ -4,8 +4,12 @@ pub mod actions;
 pub mod app;
 pub mod buffers;
 pub mod data;
+pub mod input;
 pub mod keybinds;
+pub mod picker;
+pub mod remote;
 pub mod runtime;
+pub mod session;
 pub mod ui;
 
 use std::path::Path;

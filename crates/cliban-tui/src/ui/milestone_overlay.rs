@@ -8,21 +8,29 @@
 //! hints. Filtering is done by `app::filtered_overlay` so the widget stays
 //! rendering-only.
 
+use crate::app::{filtered_overlay, MilestoneOverlayState};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
-use crate::app::{filtered_overlay, MilestoneOverlayState};
 
 pub fn draw(frame: &mut Frame, area: Rect, state: &MilestoneOverlayState) {
     let popup = centered_rect(60, 20, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default().title(" Milestones ").borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+    let block = Block::default()
+        .title(" Milestones ")
+        .borders(Borders::ALL)
+        .border_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
-    if inner.width == 0 || inner.height < 2 { return; }
+    if inner.width == 0 || inner.height < 2 {
+        return;
+    }
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -53,7 +61,11 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &MilestoneOverlayState) {
     let end = (start + rows).min(total);
 
     let lines: Vec<Line> = if total == 0 {
-        let msg = if state.items.is_empty() { "  (no milestones)" } else { "  (no matches)" };
+        let msg = if state.items.is_empty() {
+            "  (no milestones)"
+        } else {
+            "  (no matches)"
+        };
         vec![Line::styled(msg, Style::default().fg(Color::DarkGray))]
     } else {
         idx[start..end]
@@ -90,5 +102,10 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &MilestoneOverlayState) {
 fn centered_rect(width_pct: u16, height_max: u16, area: Rect) -> Rect {
     let w = (area.width * width_pct / 100).max(20).min(area.width);
     let h = height_max.min(area.height);
-    Rect::new(area.x + (area.width.saturating_sub(w))/2, area.y + (area.height.saturating_sub(h))/2, w, h)
+    Rect::new(
+        area.x + (area.width.saturating_sub(w)) / 2,
+        area.y + (area.height.saturating_sub(h)) / 2,
+        w,
+        h,
+    )
 }

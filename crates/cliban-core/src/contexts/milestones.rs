@@ -149,8 +149,13 @@ pub fn get(conn: &Connection, project_key: &str, name: &str) -> Result<Option<Mi
 }
 
 pub fn get_by_id(conn: &Connection, id: i64) -> Result<Option<Milestone>> {
-    let sql = format!("SELECT {} FROM milestones WHERE id = ?1", rows::MILESTONE_COLS);
-    Ok(conn.query_row(&sql, params![id], rows::milestone).optional()?)
+    let sql = format!(
+        "SELECT {} FROM milestones WHERE id = ?1",
+        rows::MILESTONE_COLS
+    );
+    Ok(conn
+        .query_row(&sql, params![id], rows::milestone)
+        .optional()?)
 }
 
 fn get_row(conn: &Connection, project_id: i64, name: &str) -> Result<Option<Milestone>> {

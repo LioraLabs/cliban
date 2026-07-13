@@ -14,7 +14,11 @@ pub fn message_for(err: &Error) -> String {
     match err {
         Error::NotFound | Error::ProjectNotFound => "not found".to_string(),
         Error::Validation(pairs) => {
-            let detail = pairs.iter().map(|(_, m)| m.clone()).collect::<Vec<_>>().join("; ");
+            let detail = pairs
+                .iter()
+                .map(|(_, m)| m.clone())
+                .collect::<Vec<_>>()
+                .join("; ");
             format!("validation error: {detail}")
         }
         other => other.to_string(),
@@ -27,15 +31,31 @@ pub enum CliError {
     Coded(i32, String),
 }
 impl From<Error> for CliError {
-    fn from(e: Error) -> Self { CliError::Core(e) }
+    fn from(e: Error) -> Self {
+        CliError::Core(e)
+    }
 }
 impl CliError {
     pub fn validation(msg: impl Into<String>) -> Self {
         CliError::Coded(2, format!("validation error: {}", msg.into()))
     }
-    pub fn not_found(msg: impl Into<String>) -> Self { CliError::Coded(1, msg.into()) }
-    pub fn other(msg: impl Into<String>) -> Self { CliError::Coded(3, msg.into()) }
-    pub fn code(&self) -> i32 { match self { CliError::Core(e) => exit_code_for(e), CliError::Coded(c, _) => *c } }
-    pub fn message(&self) -> String { match self { CliError::Core(e) => message_for(e), CliError::Coded(_, m) => m.clone() } }
+    pub fn not_found(msg: impl Into<String>) -> Self {
+        CliError::Coded(1, msg.into())
+    }
+    pub fn other(msg: impl Into<String>) -> Self {
+        CliError::Coded(3, msg.into())
+    }
+    pub fn code(&self) -> i32 {
+        match self {
+            CliError::Core(e) => exit_code_for(e),
+            CliError::Coded(c, _) => *c,
+        }
+    }
+    pub fn message(&self) -> String {
+        match self {
+            CliError::Core(e) => message_for(e),
+            CliError::Coded(_, m) => m.clone(),
+        }
+    }
 }
 pub type CliResult<T> = Result<T, CliError>;

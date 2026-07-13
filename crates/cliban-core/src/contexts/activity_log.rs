@@ -81,7 +81,12 @@ pub fn render(entries: &[ActivityLogEntry]) -> String {
 
 fn render_line(e: &ActivityLogEntry) -> String {
     let kind_padded = format!("{:<8}", e.kind);
-    let line = format!("{}  {}  {}", time::format_usec(e.ts), kind_padded, e.message);
+    let line = format!(
+        "{}  {}  {}",
+        time::format_usec(e.ts),
+        kind_padded,
+        e.message
+    );
     line.trim_end().to_string()
 }
 
@@ -241,7 +246,10 @@ mod tests {
         assert!(has_header_line(&out));
         let header_at = out.find(SECTION_HEADER).expect("header present");
         let prose_at = out.find("Some prose.").expect("prose present");
-        assert!(prose_at < header_at, "section appended after existing content");
+        assert!(
+            prose_at < header_at,
+            "section appended after existing content"
+        );
         assert!(out.contains("log body"));
     }
 
@@ -251,7 +259,10 @@ mod tests {
         let out = merge_activity_log_section(desc.into(), "new body");
 
         // Exactly one activity header, the old body is gone, the new is in.
-        assert_eq!(out.lines().filter(|l| is_activity_header_line(l)).count(), 1);
+        assert_eq!(
+            out.lines().filter(|l| is_activity_header_line(l)).count(),
+            1
+        );
         assert!(!out.contains("old line"), "old activity body replaced");
         assert!(out.contains("new body"), "new activity body present");
 

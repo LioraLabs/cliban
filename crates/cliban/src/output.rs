@@ -361,12 +361,17 @@ mod tests {
         let s = serde_json::to_string(&v).unwrap();
         // completed_at sits between archived and created_at alphabetically.
         assert!(
-            s.contains(r#""archived":true,"completed_at":"2026-06-01T00:00:00.000000Z","created_at""#),
+            s.contains(
+                r#""archived":true,"completed_at":"2026-06-01T00:00:00.000000Z","created_at""#
+            ),
             "got {s}"
         );
         // Non-integral position keeps the float form.
         assert!(s.contains(r#""position":1500.5"#), "got {s}");
-        assert!(s.contains(r#""git_branch_name":"cli-9-done-thing""#), "got {s}");
+        assert!(
+            s.contains(r#""git_branch_name":"cli-9-done-thing""#),
+            "got {s}"
+        );
     }
 
     #[test]
@@ -405,21 +410,9 @@ mod tests {
         );
         assert!(s.contains(r#""issue_seq":42"#), "got {s}");
         // ends with name then updated_at (alpha order: name < updated_at).
-        assert!(
-            s.contains(r#""name":"CLI Tool","updated_at""#),
-            "got {s}"
-        );
+        assert!(s.contains(r#""name":"CLI Tool","updated_at""#), "got {s}");
 
-        let v2 = build_project_json(
-            "X",
-            "X",
-            "",
-            true,
-            None,
-            0,
-            "t",
-            "t",
-        );
+        let v2 = build_project_json("X", "X", "", true, None, 0, "t", "t");
         let s2 = serde_json::to_string(&v2).unwrap();
         assert!(
             s2.contains(r#""auto_archive_done_after_days":null"#),
@@ -440,10 +433,7 @@ mod tests {
             5,
         );
         let s = serde_json::to_string(&v).unwrap();
-        assert!(
-            s.starts_with(r#"{"created_at":"#),
-            "got {s}"
-        );
+        assert!(s.starts_with(r#"{"created_at":"#), "got {s}");
         assert!(
             s.contains(r#""issue_count":5,"name":"M1","project":"CLI","status":"active","target_date":"2026-12-31","updated_at""#),
             "got {s}"

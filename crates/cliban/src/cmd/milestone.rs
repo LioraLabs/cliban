@@ -104,7 +104,18 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             description_file,
             target,
             json,
-        } => add(db, project, name, description, description_file, target, json).await,
+        } => {
+            add(
+                db,
+                project,
+                name,
+                description,
+                description_file,
+                target,
+                json,
+            )
+            .await
+        }
         MilestoneCmd::Ls {
             project,
             status,
@@ -385,7 +396,10 @@ async fn show(
             },
         );
         map.insert("updated_at".into(), json!(format_usec(m.updated_at)));
-        println!("{}", serde_json::to_string_pretty(&Value::Object(map)).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&Value::Object(map)).unwrap()
+        );
         return Ok(());
     }
 
@@ -417,7 +431,10 @@ async fn show(
 }
 
 /// Resolve milestone name + parent key for an issue (empty when unset).
-async fn resolve_refs(store: &Store, issue: &cliban_core::schema::Issue) -> CliResult<(String, String)> {
+async fn resolve_refs(
+    store: &Store,
+    issue: &cliban_core::schema::Issue,
+) -> CliResult<(String, String)> {
     let milestone_id = issue.milestone_id;
     let parent_id = issue.parent_id;
     let pair = store
@@ -471,8 +488,8 @@ async fn edit(
     let store = store_open::open(db).await?;
     store
         .call(move |conn| {
-            let cur = milestones::get(conn, &project_key, &name)?
-                .ok_or(cliban_core::Error::NotFound)?;
+            let cur =
+                milestones::get(conn, &project_key, &name)?.ok_or(cliban_core::Error::NotFound)?;
             milestones::update(conn, &cur, params)?;
             Ok(())
         })

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cliban-core", "crates/cliban-tui", "crates/cliban"]
+members = ["crates/cliban-core", "crates/cliban-tui", "crates/cliban", "crates/cliban-server", "crates/cliban-tenancy"]
 
 [workspace.package]
 edition = "2021"
@@ -13,3 +13,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
+russh = "0.62"
+rand = "0.10"
+toml = "1"
+ratatui = "0.29"

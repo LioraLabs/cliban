@@ -4,11 +4,14 @@ use cliban_core::Store;
 async fn store_with_project() -> Store {
     let s = Store::open_in_memory().expect("open in-memory store");
     s.call(|c| {
-        projects::create(c, projects::CreateProject {
-            key: "CLI".into(),
-            name: "Cliban".into(),
-            ..Default::default()
-        })
+        projects::create(
+            c,
+            projects::CreateProject {
+                key: "CLI".into(),
+                name: "Cliban".into(),
+                ..Default::default()
+            },
+        )
     })
     .await
     .unwrap();
@@ -18,7 +21,14 @@ async fn store_with_project() -> Store {
 async fn new_issue(s: &Store, title: &str) -> cliban_core::schema::Issue {
     let title = title.to_string();
     s.call(move |c| {
-        issues::create(c, "CLI", issues::CreateIssue { title, ..Default::default() })
+        issues::create(
+            c,
+            "CLI",
+            issues::CreateIssue {
+                title,
+                ..Default::default()
+            },
+        )
     })
     .await
     .unwrap()
@@ -29,11 +39,14 @@ async fn project_round_trips() {
     let s = Store::open_in_memory().unwrap();
     let p = s
         .call(|c| {
-            projects::create(c, projects::CreateProject {
-                key: "cli".into(),
-                name: "Cliban".into(),
-                ..Default::default()
-            })
+            projects::create(
+                c,
+                projects::CreateProject {
+                    key: "cli".into(),
+                    name: "Cliban".into(),
+                    ..Default::default()
+                },
+            )
         })
         .await
         .unwrap();
@@ -49,13 +62,16 @@ async fn milestone_and_label_round_trip() {
     let s = store_with_project().await;
     let m = s
         .call(|c| {
-            milestones::create(c, milestones::CreateMilestone {
-                project: "CLI".into(),
-                name: "M1".into(),
-                description: None,
-                target_date: None,
-                status: None,
-            })
+            milestones::create(
+                c,
+                milestones::CreateMilestone {
+                    project: "CLI".into(),
+                    name: "M1".into(),
+                    description: None,
+                    target_date: None,
+                    status: None,
+                },
+            )
         })
         .await
         .unwrap();
@@ -84,7 +100,9 @@ async fn issue_move_sets_and_clears_completed_at() {
     let i = new_issue(&s, "movable").await;
     let done = {
         let i = i.clone();
-        s.call(move |c| issues::move_issue(c, &i, "done")).await.unwrap()
+        s.call(move |c| issues::move_issue(c, &i, "done"))
+            .await
+            .unwrap()
     };
     assert_eq!(done.status, "done");
     assert!(done.completed_at.is_some());
@@ -101,11 +119,15 @@ async fn issue_update_title_and_priority() {
     let i = new_issue(&s, "edit me").await;
     let updated = s
         .call(move |c| {
-            issues::update(c, &i, issues::UpdateIssue {
-                title: Some("edited".into()),
-                priority: Some("high".into()),
-                ..Default::default()
-            })
+            issues::update(
+                c,
+                &i,
+                issues::UpdateIssue {
+                    title: Some("edited".into()),
+                    priority: Some("high".into()),
+                    ..Default::default()
+                },
+            )
         })
         .await
         .unwrap();
@@ -131,24 +153,40 @@ async fn issue_labels_round_trip() {
 #[tokio::test]
 async fn relations_blocks_related_and_blocked_list() {
     let s = store_with_project().await;
-    let a = new_issue(&s, "blocker").await;   // CLI-1
-    let b = new_issue(&s, "blocked").await;   // CLI-2
-    s.call(|c| relations::add(c, "CLI-1", "CLI-2", "blocks")).await.unwrap();
-    s.call(|c| relations::add(c, "CLI-1", "CLI-2", "related_to")).await.unwrap();
+    let a = new_issue(&s, "blocker").await; // CLI-1
+    let b = new_issue(&s, "blocked").await; // CLI-2
+    s.call(|c| relations::add(c, "CLI-1", "CLI-2", "blocks"))
+        .await
+        .unwrap();
+    s.call(|c| relations::add(c, "CLI-1", "CLI-2", "related_to"))
+        .await
+        .unwrap();
 
     let b_rels = {
         let bid = b.id;
         s.call(move |c| relations::for_issue(c, bid)).await.unwrap()
     };
-    assert!(b_rels.iter().any(|r| r.kind == "blocked_by" && r.target_key == "CLI-1"));
-    assert!(b_rels.iter().any(|r| r.kind == "related_to" && r.target_key == "CLI-1"));
+    assert!(b_rels
+        .iter()
+        .any(|r| r.kind == "blocked_by" && r.target_key == "CLI-1"));
+    assert!(b_rels
+        .iter()
+        .any(|r| r.kind == "related_to" && r.target_key == "CLI-1"));
 
-    let blocked = s.call(|c| relations::list_blocked(c, Some("CLI"))).await.unwrap();
+    let blocked = s
+        .call(|c| relations::list_blocked(c, Some("CLI")))
+        .await
+        .unwrap();
     assert!(blocked.iter().any(|i| i.key == "CLI-2"));
 
     let a2 = a.clone();
-    s.call(move |c| issues::move_issue(c, &a2, "done")).await.unwrap();
-    let blocked2 = s.call(|c| relations::list_blocked(c, Some("CLI"))).await.unwrap();
+    s.call(move |c| issues::move_issue(c, &a2, "done"))
+        .await
+        .unwrap();
+    let blocked2 = s
+        .call(|c| relations::list_blocked(c, Some("CLI")))
+        .await
+        .unwrap();
     assert!(!blocked2.iter().any(|i| i.key == "CLI-2"));
 }
 
@@ -209,13 +247,16 @@ async fn related_to_remove_deletes_both_edges() {
 async fn list_scoped_by_milestone() {
     let s = store_with_project().await;
     s.call(|c| {
-        milestones::create(c, milestones::CreateMilestone {
-            project: "CLI".into(),
-            name: "M1".into(),
-            description: None,
-            target_date: None,
-            status: None,
-        })
+        milestones::create(
+            c,
+            milestones::CreateMilestone {
+                project: "CLI".into(),
+                name: "M1".into(),
+                description: None,
+                target_date: None,
+                status: None,
+            },
+        )
     })
     .await
     .unwrap();
@@ -223,11 +264,15 @@ async fn list_scoped_by_milestone() {
     // An issue in the milestone, and one without.
     let in_m = s
         .call(|c| {
-            issues::create(c, "CLI", issues::CreateIssue {
-                title: "in milestone".into(),
-                milestone: Some("M1".into()),
-                ..Default::default()
-            })
+            issues::create(
+                c,
+                "CLI",
+                issues::CreateIssue {
+                    title: "in milestone".into(),
+                    milestone: Some("M1".into()),
+                    ..Default::default()
+                },
+            )
         })
         .await
         .unwrap();
@@ -236,11 +281,14 @@ async fn list_scoped_by_milestone() {
     // project + milestone filter returns only the milestone issue.
     let scoped = s
         .call(|c| {
-            issues::list(c, issues::ListOpts {
-                project: Some("CLI"),
-                milestone: Some("M1"),
-                ..Default::default()
-            })
+            issues::list(
+                c,
+                issues::ListOpts {
+                    project: Some("CLI"),
+                    milestone: Some("M1"),
+                    ..Default::default()
+                },
+            )
         })
         .await
         .unwrap();
@@ -250,11 +298,14 @@ async fn list_scoped_by_milestone() {
     // milestone filter without a project → empty (names are project-scoped).
     let no_project = s
         .call(|c| {
-            issues::list(c, issues::ListOpts {
-                project: None,
-                milestone: Some("M1"),
-                ..Default::default()
-            })
+            issues::list(
+                c,
+                issues::ListOpts {
+                    project: None,
+                    milestone: Some("M1"),
+                    ..Default::default()
+                },
+            )
         })
         .await
         .unwrap();
@@ -263,11 +314,14 @@ async fn list_scoped_by_milestone() {
     // unknown milestone → empty.
     let unknown = s
         .call(|c| {
-            issues::list(c, issues::ListOpts {
-                project: Some("CLI"),
-                milestone: Some("nope"),
-                ..Default::default()
-            })
+            issues::list(
+                c,
+                issues::ListOpts {
+                    project: Some("CLI"),
+                    milestone: Some("nope"),
+                    ..Default::default()
+                },
+            )
         })
         .await
         .unwrap();

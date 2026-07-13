@@ -1,9 +1,13 @@
-use cliban_core::{Store, paths};
+use cliban_core::{paths, Store};
 use std::path::PathBuf;
 
 /// Resolve the DB path: --db flag, else $CLIBAN_DB, else XDG default.
 pub fn db_path(flag: &Option<String>) -> PathBuf {
-    if let Some(p) = flag { if !p.is_empty() { return PathBuf::from(p); } }
+    if let Some(p) = flag {
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
     paths::db_path()
 }
 

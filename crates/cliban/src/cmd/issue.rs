@@ -46,22 +46,13 @@ pub enum IssueCmd {
     /// Bulk-create issues from an NDJSON file (or stdin with '-')
     Import(ImportArgs),
     /// Move an issue to a new status
-    Mv {
-        key: String,
-        status: String,
-    },
+    Mv { key: String, status: String },
     /// Delete an issue (cascades sub-issues)
-    Rm {
-        key: String,
-    },
+    Rm { key: String },
     /// Archive an issue (hides it from the default board and lists)
-    Archive {
-        key: String,
-    },
+    Archive { key: String },
     /// Unarchive an issue
-    Unarchive {
-        key: String,
-    },
+    Unarchive { key: String },
     /// Show the issue inferred from the current git branch
     Current {
         #[arg(long)]
@@ -572,12 +563,7 @@ async fn add(db: &Option<String>, a: AddArgs) -> CliResult<()> {
 }
 
 /// Mirrors Go `printIssueResult`: human `{verb} {KEY}: {title}\n`; json pretty.
-async fn print_issue_result(
-    store: &Store,
-    issue: &Issue,
-    verb: &str,
-    json: bool,
-) -> CliResult<()> {
+async fn print_issue_result(store: &Store, issue: &Issue, verb: &str, json: bool) -> CliResult<()> {
     if json {
         let inputs = issue_json_inputs(store, issue).await?;
         println!(
@@ -909,7 +895,9 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
         let mut kept = Vec::with_capacity(issues.len());
         for i in issues.into_iter() {
             let id = i.id;
-            let names = store.call(move |conn| issues::label_names(conn, id)).await?;
+            let names = store
+                .call(move |conn| issues::label_names(conn, id))
+                .await?;
             if want.iter().all(|w| names.iter().any(|n| n == w)) {
                 kept.push(i);
             }
@@ -932,7 +920,10 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
     if a.json {
         for i in &issues {
             let inputs = issue_json_inputs(&store, i).await?;
-            println!("{}", serde_json::to_string(&build_issue_json(inputs)).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string(&build_issue_json(inputs)).unwrap()
+            );
         }
         return Ok(());
     }
@@ -1161,13 +1152,26 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
     }
 
     // Normalize relation keys up front.
-    let blocks: Vec<String> = a.blocks.iter().map(|k| parse_issue_key(k)).collect::<Result<_, _>>()?;
-    let blocked_by: Vec<String> =
-        a.blocked_by.iter().map(|k| parse_issue_key(k)).collect::<Result<_, _>>()?;
-    let related_to: Vec<String> =
-        a.related_to.iter().map(|k| parse_issue_key(k)).collect::<Result<_, _>>()?;
-    let remove_relation: Vec<String> =
-        a.remove_relation.iter().map(|k| parse_issue_key(k)).collect::<Result<_, _>>()?;
+    let blocks: Vec<String> = a
+        .blocks
+        .iter()
+        .map(|k| parse_issue_key(k))
+        .collect::<Result<_, _>>()?;
+    let blocked_by: Vec<String> = a
+        .blocked_by
+        .iter()
+        .map(|k| parse_issue_key(k))
+        .collect::<Result<_, _>>()?;
+    let related_to: Vec<String> = a
+        .related_to
+        .iter()
+        .map(|k| parse_issue_key(k))
+        .collect::<Result<_, _>>()?;
+    let remove_relation: Vec<String> = a
+        .remove_relation
+        .iter()
+        .map(|k| parse_issue_key(k))
+        .collect::<Result<_, _>>()?;
 
     let store = store_open::open(db).await?;
 
@@ -1275,15 +1279,21 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
     // Relations.
     for other in blocks {
         let from = key.clone();
-        store.call(move |conn| relations::add(conn, &from, &other, "blocks")).await?;
+        store
+            .call(move |conn| relations::add(conn, &from, &other, "blocks"))
+            .await?;
     }
     for other in blocked_by {
         let to = key.clone();
-        store.call(move |conn| relations::add(conn, &other, &to, "blocks")).await?;
+        store
+            .call(move |conn| relations::add(conn, &other, &to, "blocks"))
+            .await?;
     }
     for other in related_to {
         let from = key.clone();
-        store.call(move |conn| relations::add(conn, &from, &other, "related_to")).await?;
+        store
+            .call(move |conn| relations::add(conn, &from, &other, "related_to"))
+            .await?;
     }
     for other in remove_relation {
         let k = key.clone();
@@ -1334,8 +1344,7 @@ async fn log(db: &Option<String>, a: LogArgs) -> CliResult<()> {
     store
         .call(move |conn| {
             let tx = conn.unchecked_transaction()?;
-            let issue =
-                issues::get_by_key(&tx, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+            let issue = issues::get_by_key(&tx, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
             let new_desc = descmd::append_activity_log(&issue.description, &entry, now);
             let updated = format_usec(now);
             tx.execute(
@@ -1371,8 +1380,7 @@ async fn tick(db: &Option<String>, a: TickArgs) -> CliResult<()> {
     let updated_at = store
         .call(move |conn| {
             let tx = conn.unchecked_transaction()?;
-            let issue =
-                issues::get_by_key(&tx, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+            let issue = issues::get_by_key(&tx, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
             let new_desc = match descmd::tick_step(&issue.description, task, step) {
                 Ok(d) => d,
                 Err(msg) => return Err(cliban_core::Error::validation("plan", &msg)),
@@ -1585,9 +1593,8 @@ async fn archive_done(db: &Option<String>, a: ArchiveDoneArgs) -> CliResult<()> 
                         "SELECT key, auto_archive_done_after_days FROM projects \
                          WHERE auto_archive_done_after_days IS NOT NULL",
                     )?;
-                    let rows = stmt.query_map([], |r| {
-                        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-                    })?;
+                    let rows =
+                        stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
                     for row in rows {
                         pols.push(row?);
                     }
@@ -1675,7 +1682,12 @@ async fn import(db: &Option<String>, a: ImportArgs) -> CliResult<()> {
         let spec: serde_json::Value = serde_json::from_str(line)
             .map_err(|e| CliError::other(format!("line {line_no}: invalid JSON: {e}")))?;
 
-        let get_str = |k: &str| spec.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let get_str = |k: &str| {
+            spec.get(k)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
         let mut project = get_str("project");
         if project.is_empty() {
             project = default_project.clone();
@@ -1785,7 +1797,8 @@ fn prefix_line_err(e: cliban_core::Error, line_no: i64) -> CliError {
 }
 
 fn parse_status_lined(s: &str, line_no: i64) -> Result<String, CliError> {
-    parse_status(s).map_err(|e| CliError::Coded(e.code(), format!("line {line_no}: {}", e.message())))
+    parse_status(s)
+        .map_err(|e| CliError::Coded(e.code(), format!("line {line_no}: {}", e.message())))
 }
 
 fn parse_priority_lined(s: &str, line_no: i64) -> Result<String, CliError> {
@@ -1938,9 +1951,7 @@ async fn current(db: &Option<String>, json: bool) -> CliResult<()> {
 }
 
 async fn blocked(db: &Option<String>, project: Option<String>, json: bool) -> CliResult<()> {
-    let project = project
-        .map(|p| p.to_uppercase())
-        .filter(|p| !p.is_empty());
+    let project = project.map(|p| p.to_uppercase()).filter(|p| !p.is_empty());
     let store = store_open::open(db).await?;
     let pk = project.clone();
     let mut issues = store
@@ -1951,7 +1962,10 @@ async fn blocked(db: &Option<String>, project: Option<String>, json: bool) -> Cl
     if json {
         for i in &issues {
             let inputs = issue_json_inputs(&store, i).await?;
-            println!("{}", serde_json::to_string(&build_issue_json(inputs)).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string(&build_issue_json(inputs)).unwrap()
+            );
         }
         return Ok(());
     }

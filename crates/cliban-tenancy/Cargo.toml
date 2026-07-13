@@ -1,0 +1,15 @@
+[package]
+name = "cliban-tenancy"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Multi-tenant storage for hosted cliban: cross-tenant registry + per-tenant DB routing"
+
+[dependencies]
+cliban-core = { path = "../cliban-core" }
+rusqlite.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
