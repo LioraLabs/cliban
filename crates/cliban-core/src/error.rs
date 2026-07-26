@@ -34,6 +34,16 @@ pub enum Error {
     #[error("store writer task unavailable")]
     WriterGone,
 
+    /// The `schema_migrations` ledger holds a version this build has never
+    /// heard of and that is *older* than its own — the database was not
+    /// written by any cliban we recognize. (A *newer* version is fine; see
+    /// [`crate::migrations::run`].)
+    #[error(
+        "unrecognized database schema version(s) {found:?} (this build expects {expected}); \
+         the database at this path was not written by a known cliban"
+    )]
+    SchemaUnknown { found: Vec<i64>, expected: i64 },
+
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 

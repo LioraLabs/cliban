@@ -97,7 +97,10 @@ const SCHEMA_DDL: &[&str] = &[
 ];
 
 /// Create the schema on a fresh DB or migrate a recognized prior version.
-pub fn run(conn: &Connection) -> rusqlite::Result<bool> {
+///
+/// Returns `true` when the schema was created or migrated, `false` when the
+/// database was already usable as-is.
+pub fn run(conn: &Connection) -> crate::error::Result<bool> {
     if !has_ledger(conn)? {
         let tx = conn.unchecked_transaction()?;
         for stmt in SCHEMA_DDL {
@@ -109,13 +112,32 @@ pub fn run(conn: &Connection) -> rusqlite::Result<bool> {
     }
 
     let versions = schema_versions(conn)?;
-    if versions.iter().any(|version| {
-        !matches!(
-            *version,
-            LEGACY_SCHEMA_VERSION | SUPERSEDED_NOTES_SCHEMA_VERSION | SCHEMA_VERSION
-        )
-    }) {
-        return Err(rusqlite::Error::InvalidQuery);
+
+    // A ledger entry newer than ours means another, newer build owns this
+    // database — cliban's sibling tools (and forks that vendor cliban-core)
+    // share the default DB path, and their migrations only ever ADD tables.
+    // Everything this build reads is still present, so use the database as it
+    // stands and do not stamp our own (older) version onto it. Refusing here
+    // is what produced the old "Query is not read-only" dead end.
+    if versions.iter().any(|version| *version > SCHEMA_VERSION) {
+        return Ok(false);
+    }
+
+    let unknown: Vec<i64> = versions
+        .iter()
+        .copied()
+        .filter(|version| {
+            !matches!(
+                *version,
+                LEGACY_SCHEMA_VERSION | SUPERSEDED_NOTES_SCHEMA_VERSION | SCHEMA_VERSION
+            )
+        })
+        .collect();
+    if !unknown.is_empty() {
+        return Err(crate::error::Error::SchemaUnknown {
+            found: unknown,
+            expected: SCHEMA_VERSION,
+        });
     }
     if versions.contains(&SCHEMA_VERSION) {
         return Ok(false);
@@ -123,7 +145,10 @@ pub fn run(conn: &Connection) -> rusqlite::Result<bool> {
     if !versions.contains(&LEGACY_SCHEMA_VERSION)
         && !versions.contains(&SUPERSEDED_NOTES_SCHEMA_VERSION)
     {
-        return Err(rusqlite::Error::InvalidQuery);
+        return Err(crate::error::Error::SchemaUnknown {
+            found: versions,
+            expected: SCHEMA_VERSION,
+        });
     }
 
     let tx = conn.unchecked_transaction()?;
