@@ -37,6 +37,14 @@ pub fn dispatch_command(data: &Data, _app: &mut App, cmd: &Command) -> Result<bo
             data.tag_milestone(key, milestone.clone())?;
             Ok(true)
         }
+        Command::SetMilestoneStatus {
+            project,
+            name,
+            status,
+        } => {
+            data.set_milestone_status(project, name, status)?;
+            Ok(true)
+        }
         Command::SetScope | Command::Reload => Ok(true),
         _ => Ok(false), // editor commands handled in the loop
     }
@@ -105,19 +113,17 @@ fn handle_editor<B: Backend>(
             }
             let _ = std::fs::remove_file(&path);
         }
-        Command::EditMilestone { name } => {
-            if let Some(project) = app.scope.project.clone() {
-                let path = temp_path("milestone");
-                std::fs::write(&path, data.milestone_buffer(&project, name)?.serialize())?;
-                if run_editor(terminal, session, &path)? {
-                    if let Ok(p) = parse_milestone(&std::fs::read_to_string(&path)?) {
-                        data.apply_milestone_edit(&project, name, &p)?;
-                    }
+        Command::EditMilestone { project, name } => {
+            let path = temp_path("milestone");
+            std::fs::write(&path, data.milestone_buffer(project, name)?.serialize())?;
+            if run_editor(terminal, session, &path)? {
+                if let Ok(p) = parse_milestone(&std::fs::read_to_string(&path)?) {
+                    data.apply_milestone_edit(project, name, &p)?;
                 }
-                let _ = std::fs::remove_file(&path);
             }
+            let _ = std::fs::remove_file(&path);
         }
-        Command::NewMilestone => match app.scope.project.clone() {
+        Command::NewMilestone { project } => match project.clone().or(app.scope.project.clone()) {
             Some(project) => {
                 let buf = MilestoneBuffer {
                     status: "open".into(),
@@ -257,7 +263,7 @@ fn handle_key<B: Backend>(
             Command::EditIssue { .. }
             | Command::NewIssue { .. }
             | Command::EditMilestone { .. }
-            | Command::NewMilestone
+            | Command::NewMilestone { .. }
             | Command::EditProject => {
                 handle_editor(data, app, terminal, session, &cmd)?;
                 reload(data, app)?;
@@ -413,6 +419,70 @@ mod tests {
         assert_eq!(app.cards[0].status, "done");
         let d = dump(&t);
         assert!(d.contains("DONE (1)"), "frame shows the remote move:\n{d}");
+    }
+
+    /// A project with one milestone carrying one issue, for the page tests.
+    fn harness_with_milestone() -> (Data, App, Terminal<TestBackend>, ByteSession) {
+        let (data, mut app, t, s) = harness();
+        data.create_milestone(
+            "CLI",
+            &MilestoneBuffer {
+                name: "v0.3".into(),
+                status: "open".into(),
+                target: "2026-08-01".into(),
+                description: "the cutover".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        data.tag_milestone("CLI-1", Some("v0.3".into())).unwrap();
+        reload(&data, &mut app).unwrap();
+        (data, app, t, s)
+    }
+
+    #[test]
+    fn headless_m_opens_the_milestone_page_with_rollups() {
+        let (data, mut app, mut t, mut s) = harness_with_milestone();
+        s.feed_bytes(b"m");
+        pump(&mut t, &mut s, &data, &mut app);
+        assert!(matches!(app.mode, Mode::MilestonePage(_)));
+        let d = dump(&t);
+        assert!(d.contains("Milestones"), "page title missing:\n{d}");
+        assert!(d.contains("v0.3"), "milestone row missing:\n{d}");
+        assert!(d.contains("0/1"), "progress rollup missing:\n{d}");
+        assert!(d.contains("2026-08-01"), "target missing:\n{d}");
+        assert!(d.contains("the cutover"), "detail body missing:\n{d}");
+        assert!(
+            !d.contains("BACKLOG"),
+            "the page replaces the board, not layers over it:\n{d}"
+        );
+    }
+
+    #[test]
+    fn headless_capital_c_completes_the_milestone_and_the_page_refreshes() {
+        let (data, mut app, mut t, mut s) = harness_with_milestone();
+        s.feed_bytes(b"mC"); // open the page, cycle open -> completed
+        pump(&mut t, &mut s, &data, &mut app);
+        assert_eq!(app.milestones[0].status, "completed");
+        // The default bucket is `open`, so the completed milestone drops out —
+        // proving the page re-reads `app.milestones` after the write.
+        let d = dump(&t);
+        assert!(d.contains("nothing in this bucket"), "{d}");
+        s.feed_bytes(b"\t"); // Tab -> the completed bucket
+        pump(&mut t, &mut s, &data, &mut app);
+        assert!(dump(&t).contains("v0.3"));
+    }
+
+    #[test]
+    fn headless_enter_on_the_page_scopes_the_board() {
+        let (data, mut app, mut t, mut s) = harness_with_milestone();
+        s.feed_bytes(b"m\r");
+        pump(&mut t, &mut s, &data, &mut app);
+        assert_eq!(app.scope.project.as_deref(), Some("CLI"));
+        assert_eq!(app.scope.milestone.as_deref(), Some("v0.3"));
+        let d = dump(&t);
+        assert!(d.contains("▸v0.3"), "top bar shows the scope chip:\n{d}");
+        assert!(d.contains("BACKLOG (1)"), "board is back:\n{d}");
     }
 
     #[test]

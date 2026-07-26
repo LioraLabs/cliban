@@ -1,12 +1,12 @@
 //! Port of `backend/lib/loom/milestones.ex` + `Loom.Schema.Milestone`.
 
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::contexts::projects;
 use crate::error::{Error, Result};
 use crate::rows;
-use crate::schema::{Milestone, MILESTONE_STATUSES};
+use crate::schema::{Milestone, DONE_STATUS, MILESTONE_STATUSES};
 use crate::time;
 
 #[derive(Debug, Clone)]
@@ -137,6 +137,128 @@ pub fn list(conn: &Connection, project: Option<&str>) -> Result<Vec<Milestone>> 
             .query_map([], rows::milestone)?
             .collect::<rusqlite::Result<Vec<_>>>()?,
     };
+    Ok(out)
+}
+
+/// A milestone plus the rollups a milestone-centric view needs: the owning
+/// project's key, non-archived issue counts, and when the milestone was last
+/// *worked on* (as opposed to last edited).
+#[derive(Debug, Clone)]
+pub struct MilestoneSummary {
+    pub milestone: Milestone,
+    pub project_key: String,
+    /// Non-archived issues carrying this milestone.
+    pub total: i64,
+    /// …of which are `done`.
+    pub done: i64,
+    /// When the milestone was last *worked on*: the newest of any activity-log
+    /// entry on its issues, any issue's `updated_at`, and the milestone row's
+    /// own `updated_at`. Issue `updated_at` carries the weight in practice —
+    /// every move/edit bumps it, while `activity_log_entries` is only written
+    /// by callers that use the log API directly.
+    pub last_activity: DateTime<Utc>,
+}
+
+impl MilestoneSummary {
+    /// Completion as a 0.0–1.0 fraction; an empty milestone reads as 0.
+    pub fn progress(&self) -> f64 {
+        if self.total == 0 {
+            0.0
+        } else {
+            self.done as f64 / self.total as f64
+        }
+    }
+}
+
+/// Orderings for [`summaries`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Sort {
+    /// Most recently worked on first — the milestone page's default.
+    #[default]
+    Activity,
+    Name,
+    /// Soonest target first; undated milestones sort last.
+    Target,
+}
+
+impl Sort {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "activity" => Some(Self::Activity),
+            "name" => Some(Self::Name),
+            "target" => Some(Self::Target),
+            _ => None,
+        }
+    }
+
+    fn order_by(self) -> &'static str {
+        match self {
+            // `last_activity` is the SELECT alias below.
+            Self::Activity => "last_activity DESC, m.name ASC",
+            Self::Name => "p.key ASC, m.name ASC",
+            Self::Target => "m.target_date IS NULL, m.target_date ASC, m.name ASC",
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SummaryOpts<'a> {
+    /// Project key; `None` spans every project.
+    pub project: Option<&'a str>,
+    /// Exact `status` filter; `None` keeps all statuses.
+    pub status: Option<&'a str>,
+    pub sort: Sort,
+}
+
+/// `list/1` with rollups. An unknown project key yields an empty list, same as
+/// [`list`].
+pub fn summaries(conn: &Connection, opts: SummaryOpts) -> Result<Vec<MilestoneSummary>> {
+    let project_id = match opts.project {
+        None => None,
+        Some(key) => match projects::get_by_key(conn, key)? {
+            Some(p) => Some(p.id),
+            None => return Ok(vec![]),
+        },
+    };
+
+    // The counts are correlated subqueries rather than joins: joining both
+    // `issues` and `activity_log_entries` would multiply rows and inflate the
+    // counts. Both filters are always bound and no-op on NULL so the statement
+    // shape (and its param set) stays constant.
+    let sql = format!(
+        "SELECT {cols}, p.key, \
+           (SELECT COUNT(*) FROM issues i \
+              WHERE i.milestone_id = m.id AND i.archived = 0) AS total, \
+           (SELECT COUNT(*) FROM issues i \
+              WHERE i.milestone_id = m.id AND i.archived = 0 AND i.status = '{done}') AS done_count, \
+           MAX(COALESCE((SELECT MAX(a.ts) FROM activity_log_entries a \
+                 JOIN issues i ON i.id = a.issue_id \
+                 WHERE i.milestone_id = m.id AND i.archived = 0), ''), \
+               COALESCE((SELECT MAX(i.updated_at) FROM issues i \
+                 WHERE i.milestone_id = m.id AND i.archived = 0), ''), \
+               m.updated_at) AS last_activity \
+         FROM milestones m JOIN projects p ON p.id = m.project_id \
+         WHERE (?1 IS NULL OR m.project_id = ?1) AND (?2 IS NULL OR m.status = ?2) \
+         ORDER BY {order}",
+        cols = rows::milestone_cols_as("m"),
+        done = DONE_STATUS,
+        order = opts.sort.order_by(),
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+    let out = stmt
+        .query_map(params![project_id, opts.status], |row| {
+            let milestone = rows::milestone(row)?;
+            let last: String = row.get(12)?;
+            Ok(MilestoneSummary {
+                last_activity: time::parse_ts(&last).unwrap_or(milestone.updated_at),
+                milestone,
+                project_key: row.get(9)?,
+                total: row.get(10)?,
+                done: row.get(11)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(out)
 }
 

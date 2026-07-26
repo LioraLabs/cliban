@@ -26,7 +26,7 @@ pub fn map_key(key: KeyEvent, app: &mut App) -> Option<Action> {
         Mode::ConfirmQuit => map_confirm_quit(key),
         Mode::ProjectPicker(_) | Mode::MilestonePicker(_) => map_picker(key),
         Mode::FuzzyFind(_) => map_fuzzy(key),
-        Mode::MilestoneOverlay(_) => map_overlay(key),
+        Mode::MilestonePage(_) => map_milestone_page(key),
     }
 }
 
@@ -79,7 +79,7 @@ fn map_normal(key: KeyEvent, app: &mut App) -> Option<Action> {
         (KeyCode::Char('t'), KeyModifiers::NONE) => Some(Action::TagMilestone),
         (KeyCode::Char(' '), _) => Some(Action::BeginMove),
         (KeyCode::Char('a'), KeyModifiers::NONE) => Some(Action::Archive),
-        (KeyCode::Char('m'), KeyModifiers::NONE) => Some(Action::OpenMilestoneOverlay),
+        (KeyCode::Char('m'), KeyModifiers::NONE) => Some(Action::OpenMilestonePage),
         (KeyCode::Char('M'), _) => Some(Action::CycleMilestoneFilter),
         (KeyCode::Char('p'), KeyModifiers::NONE) => Some(Action::OpenProjectPicker),
         (KeyCode::Char('/'), _) => Some(Action::OpenFuzzyFind),
@@ -135,26 +135,25 @@ fn map_fuzzy(key: KeyEvent) -> Option<Action> {
     }
 }
 
-fn map_overlay(key: KeyEvent) -> Option<Action> {
-    // Mirrors `map_picker` so the milestone overlay scrolls and filters like
-    // the project picker: j/k (and arrows) navigate, Enter selects, Esc
-    // cancels, Backspace edits the query, and any other printable char types
-    // into the filter. `E` (shift+e) stays reserved for editing the focused
-    // milestone — the filter is case-insensitive so a lowercase `e` still
-    // filters and matches names containing `E`.
+fn map_milestone_page(key: KeyEvent) -> Option<Action> {
+    // Typing filters, as on the project picker — so every page *command* is a
+    // capital letter or a named key, leaving the whole lowercase alphabet free
+    // for the query. The filter is case-insensitive, so `e`, `n`, `s` and `c`
+    // still match names containing those letters.
     match (key.code, key.modifiers) {
-        (KeyCode::Enter, _) => Some(Action::OverlaySelect),
+        (KeyCode::Enter, _) => Some(Action::MsPageSelect),
         (KeyCode::Esc, _) => Some(Action::Cancel),
-        (KeyCode::Backspace, _) => Some(Action::OverlayBackspace),
-        (KeyCode::Down, _) => Some(Action::OverlayDown),
-        (KeyCode::Up, _) => Some(Action::OverlayUp),
-        (KeyCode::Char('j'), KeyModifiers::NONE) => Some(Action::OverlayDown),
-        (KeyCode::Char('k'), KeyModifiers::NONE) => Some(Action::OverlayUp),
-        (KeyCode::Char('E'), _) => Some(Action::OverlayEdit),
-        (KeyCode::Char('A'), _) => Some(Action::OverlayToggleAll),
-        (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
-            Some(Action::OverlayInput(c))
-        }
+        (KeyCode::Backspace, _) => Some(Action::MsPageBackspace),
+        (KeyCode::Down, _) => Some(Action::MsPageDown),
+        (KeyCode::Up, _) => Some(Action::MsPageUp),
+        (KeyCode::Char('j'), KeyModifiers::NONE) => Some(Action::MsPageDown),
+        (KeyCode::Char('k'), KeyModifiers::NONE) => Some(Action::MsPageUp),
+        (KeyCode::Tab, _) | (KeyCode::Char('A'), _) => Some(Action::MsPageCycleFilter),
+        (KeyCode::Char('S'), _) => Some(Action::MsPageCycleSort),
+        (KeyCode::Char('E'), _) => Some(Action::MsPageEdit),
+        (KeyCode::Char('N'), _) => Some(Action::MsPageNew),
+        (KeyCode::Char('C'), _) => Some(Action::MsPageCycleStatus),
+        (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => Some(Action::MsPageInput(c)),
         _ => None,
     }
 }
@@ -181,49 +180,63 @@ mod tests {
     }
 
     #[test]
-    fn overlay_types_into_filter_but_reserves_nav_and_edit() {
-        use crate::app::{MilestoneOverlayState, Mode};
+    fn milestone_page_types_into_the_filter_but_reserves_capitals() {
+        use crate::app::{MilestonePageState, Mode};
         let mut app = App::new();
-        app.mode = Mode::MilestoneOverlay(MilestoneOverlayState {
-            items: vec![],
-            cursor: 0,
-            query: String::new(),
-            show_all: false,
-        });
-        // printable char → filter input
+        app.mode = Mode::MilestonePage(MilestonePageState::default());
+        let cap = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT);
+
+        // Lowercase types into the query...
         assert!(matches!(
             map_key(ke(KeyCode::Char('a')), &mut app),
-            Some(Action::OverlayInput('a'))
+            Some(Action::MsPageInput('a'))
         ));
-        // j/k still navigate (mirrors the project picker)
+        assert!(matches!(
+            map_key(ke(KeyCode::Char('s')), &mut app),
+            Some(Action::MsPageInput('s'))
+        ));
+        // ...except j/k, which navigate like everywhere else.
         assert!(matches!(
             map_key(ke(KeyCode::Char('j')), &mut app),
-            Some(Action::OverlayDown)
+            Some(Action::MsPageDown)
         ));
         assert!(matches!(
             map_key(ke(KeyCode::Char('k')), &mut app),
-            Some(Action::OverlayUp)
+            Some(Action::MsPageUp)
         ));
-        // capital E stays reserved for editing the focused milestone
-        let e = KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT);
-        assert!(matches!(map_key(e, &mut app), Some(Action::OverlayEdit)));
-        // capital A toggles open-only vs all statuses; lowercase a still filters
-        let a_cap = KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT);
+        // Capitals are the page's commands.
         assert!(matches!(
-            map_key(a_cap, &mut app),
-            Some(Action::OverlayToggleAll)
+            map_key(cap('E'), &mut app),
+            Some(Action::MsPageEdit)
         ));
         assert!(matches!(
-            map_key(ke(KeyCode::Char('a')), &mut app),
-            Some(Action::OverlayInput('a'))
+            map_key(cap('N'), &mut app),
+            Some(Action::MsPageNew)
+        ));
+        assert!(matches!(
+            map_key(cap('S'), &mut app),
+            Some(Action::MsPageCycleSort)
+        ));
+        assert!(matches!(
+            map_key(cap('C'), &mut app),
+            Some(Action::MsPageCycleStatus)
+        ));
+        // Tab and A both cycle the status bucket.
+        assert!(matches!(
+            map_key(cap('A'), &mut app),
+            Some(Action::MsPageCycleFilter)
+        ));
+        assert!(matches!(
+            map_key(ke(KeyCode::Tab), &mut app),
+            Some(Action::MsPageCycleFilter)
         ));
         assert!(matches!(
             map_key(ke(KeyCode::Backspace), &mut app),
-            Some(Action::OverlayBackspace)
+            Some(Action::MsPageBackspace)
         ));
         assert!(matches!(
             map_key(ke(KeyCode::Enter), &mut app),
-            Some(Action::OverlaySelect)
+            Some(Action::MsPageSelect)
         ));
         assert!(matches!(
             map_key(ke(KeyCode::Esc), &mut app),
@@ -252,7 +265,7 @@ mod tests {
         ));
         assert!(matches!(
             map_key(ke(KeyCode::Char('m')), &mut app),
-            Some(Action::OpenMilestoneOverlay)
+            Some(Action::OpenMilestonePage)
         ));
         assert!(matches!(
             map_key(ke(KeyCode::Char('M')), &mut app),

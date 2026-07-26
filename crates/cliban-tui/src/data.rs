@@ -93,24 +93,62 @@ impl Data {
             .collect())
     }
 
+    /// Milestones with their rollups, most recently worked on first. `None`
+    /// spans every project — the milestone page's unscoped view.
     pub fn load_milestones(&self, project: Option<&str>) -> Result<Vec<MilestoneRef>, DataError> {
-        let Some(project) = project else {
-            return Ok(vec![]);
-        };
-        let project = project.to_string();
-        let ms = self.rt.block_on(
-            self.store
-                .call(move |conn| milestones::list(conn, Some(&project))),
-        )?;
+        let project = project.map(str::to_string);
+        let ms = self.rt.block_on(self.store.call(move |conn| {
+            milestones::summaries(
+                conn,
+                milestones::SummaryOpts {
+                    project: project.as_deref(),
+                    status: None,
+                    sort: milestones::Sort::Activity,
+                },
+            )
+        }))?;
         Ok(ms
             .into_iter()
-            .map(|m| MilestoneRef {
-                id: m.id,
-                name: m.name,
-                status: m.status,
-                target: m.target_date.map(|d| d.format("%Y-%m-%d").to_string()),
+            .map(|s| MilestoneRef {
+                id: s.milestone.id,
+                project: s.project_key,
+                name: s.milestone.name,
+                description: s.milestone.description,
+                status: s.milestone.status,
+                target: s
+                    .milestone
+                    .target_date
+                    .map(|d| d.format("%Y-%m-%d").to_string()),
+                total: s.total,
+                done: s.done,
+                last_activity: s.last_activity,
             })
             .collect())
+    }
+
+    /// Set a milestone's status without going through the $EDITOR buffer
+    /// (the page's `C` key).
+    pub fn set_milestone_status(
+        &self,
+        project: &str,
+        name: &str,
+        status: &str,
+    ) -> Result<(), DataError> {
+        let (project, name, status) = (project.to_string(), name.to_string(), status.to_string());
+        self.rt.block_on(self.store.call(move |conn| {
+            let m = milestones::get(conn, &project, &name)?.ok_or(cliban_core::Error::NotFound)?;
+            milestones::update(
+                conn,
+                &m,
+                milestones::UpdateMilestone {
+                    status: Some(status),
+                    ..Default::default()
+                },
+            )?;
+            Ok(())
+        }))?;
+        self.notify();
+        Ok(())
     }
 
     pub fn list_projects(&self) -> Result<Vec<(String, String)>, DataError> {

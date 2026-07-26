@@ -6,7 +6,7 @@ use serde_json::{json, Map, Value};
 
 use cliban_core::contexts::issues::ListOpts;
 use cliban_core::contexts::milestones::{CreateMilestone, UpdateMilestone};
-use cliban_core::contexts::{issues, milestones, projects};
+use cliban_core::contexts::{issues, milestones};
 use cliban_core::schema::Milestone;
 use cliban_core::time::{format_date, format_usec, parse_date};
 use cliban_core::Store;
@@ -42,11 +42,18 @@ pub enum MilestoneCmd {
     },
     /// List milestones
     Ls {
+        /// project key; omit to list milestones across every project
         #[arg(long)]
-        project: String,
-        /// filter by status
+        project: Option<String>,
+        /// filter by status (open|completed|cancelled)
         #[arg(long)]
         status: Option<String>,
+        /// order: activity (most recently worked on) | name | target
+        #[arg(long, default_value = "name")]
+        sort: String,
+        /// add done/total progress and last-activity columns
+        #[arg(long)]
+        stats: bool,
         #[arg(long)]
         json: bool,
     },
@@ -86,7 +93,8 @@ pub enum MilestoneCmd {
         #[arg(long = "clear-target")]
         clear_target: bool,
     },
-    /// Delete a milestone
+    /// Cancels instead of deleting (kept for muscle memory; hidden)
+    #[command(hide = true)]
     Rm {
         #[arg(long)]
         project: String,
@@ -119,8 +127,10 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
         MilestoneCmd::Ls {
             project,
             status,
+            sort,
+            stats,
             json,
-        } => ls(db, project, status, json).await,
+        } => ls(db, project, status, sort, stats, json).await,
         MilestoneCmd::Show {
             name,
             project,
@@ -151,7 +161,29 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             )
             .await
         }
-        MilestoneCmd::Rm { project, name } => rm(db, project, name).await,
+        MilestoneCmd::Rm { project, name } => {
+            // `cancelled` is a milestone's archived state, so that is what a
+            // delete becomes.
+            let project_key = project.to_uppercase();
+            edit(
+                db,
+                project_key.clone(),
+                name.clone(),
+                None,
+                None,
+                None,
+                Some("cancelled".to_string()),
+                None,
+                false,
+            )
+            .await?;
+            println!(
+                "cancelled milestone {name} in {project_key} — cliban cancels instead of \
+                 deleting (undo: cliban milestone edit --project {project_key} --name {name} \
+                 --status open)"
+            );
+            Ok(())
+        }
     }
 }
 
@@ -284,36 +316,116 @@ async fn add(
 
 async fn ls(
     db: &Option<String>,
-    project: String,
+    project: Option<String>,
     status: Option<String>,
+    sort: String,
+    stats: bool,
     json: bool,
 ) -> CliResult<()> {
-    let project_key = project.to_uppercase();
-    let store = store_open::open(db).await?;
-    let list_key = project_key.clone();
-    let mut ms = store
-        .call(move |conn| milestones::list(conn, Some(&list_key)))
-        .await?;
-    if let Some(s) = status.filter(|s| !s.is_empty()) {
-        ms.retain(|m| m.status == s);
-    }
+    let project_key = project.map(|p| p.to_uppercase());
+    let sort = milestones::Sort::parse(&sort).ok_or_else(|| {
+        CliError::validation(format!(
+            "invalid --sort {sort:?} (want activity, name or target)"
+        ))
+    })?;
+    let status = status.filter(|s| !s.is_empty());
 
+    let store = store_open::open(db).await?;
+    let (key, st) = (project_key.clone(), status.clone());
+    let ms = store
+        .call(move |conn| {
+            milestones::summaries(
+                conn,
+                milestones::SummaryOpts {
+                    project: key.as_deref(),
+                    status: st.as_deref(),
+                    sort,
+                },
+            )
+        })
+        .await?;
+
+    let now = cliban_core::time::now_usec();
     if json {
-        for m in &ms {
-            let count = issue_count(&store, project_key.clone(), m.name.clone()).await?;
-            let v = milestone_json(m, &project_key, count);
+        for s in &ms {
+            let v = if stats {
+                milestone_stats_json(s, now)
+            } else {
+                milestone_json(&s.milestone, &s.project_key, s.total)
+            };
             println!("{}", serde_json::to_string(&v).unwrap());
         }
-    } else {
-        for m in &ms {
-            let tgt = m
-                .target_date
-                .map(format_date)
-                .unwrap_or_else(|| "-".to_string());
-            println!("{:<15} {:<10} {}", m.name, m.status, tgt);
+        return Ok(());
+    }
+
+    // The scoped, no-stats form stays byte-identical to the original three
+    // columns; the project column only appears when the listing spans
+    // projects, and the rollups only when asked for. With `--stats` the name
+    // column is sized to the data (real milestone names run well past 15
+    // chars) so the numeric columns stay in line.
+    let name_width = ms
+        .iter()
+        .map(|s| s.milestone.name.chars().count())
+        .max()
+        .unwrap_or(15)
+        .clamp(15, 44);
+    for s in &ms {
+        let m = &s.milestone;
+        let tgt = m
+            .target_date
+            .map(format_date)
+            .unwrap_or_else(|| "-".to_string());
+        let mut line = String::new();
+        if project_key.is_none() {
+            line.push_str(&format!("{:<8} ", s.project_key));
         }
+        if stats {
+            // Pad the (variable-width) target so the rollup columns line up.
+            line.push_str(&format!(
+                "{:<name_width$} {:<10} {:<12} {:>7}  {}",
+                m.name,
+                m.status,
+                tgt,
+                format!("{}/{}", s.done, s.total),
+                cliban_core::time::relative(s.last_activity, now)
+            ));
+        } else {
+            line.push_str(&format!("{:<15} {:<10} {}", m.name, m.status, tgt));
+        }
+        println!("{}", line.trim_end());
     }
     Ok(())
+}
+
+/// `--stats` JSON: the plain milestone object plus the rollups, keys kept in
+/// alphabetical order like the parity form.
+fn milestone_stats_json(
+    s: &milestones::MilestoneSummary,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Value {
+    let m = &s.milestone;
+    let mut map = Map::new();
+    map.insert("created_at".into(), json!(format_usec(m.inserted_at)));
+    map.insert("description".into(), json!(m.description));
+    map.insert("done_count".into(), json!(s.done));
+    map.insert("issue_count".into(), json!(s.total));
+    map.insert("last_activity".into(), json!(format_usec(s.last_activity)));
+    map.insert(
+        "last_activity_human".into(),
+        json!(cliban_core::time::relative(s.last_activity, now)),
+    );
+    map.insert("name".into(), json!(m.name));
+    map.insert("project".into(), json!(s.project_key));
+    map.insert("status".into(), json!(m.status));
+    map.insert(
+        "target_date".into(),
+        match m.target_date.map(format_date) {
+            Some(t) => json!(t),
+            None => Value::Null,
+        },
+    );
+    map.insert("updated_at".into(), json!(format_usec(m.updated_at)));
+    Value::Object(map)
 }
 
 async fn show(
@@ -491,29 +603,6 @@ async fn edit(
             let cur =
                 milestones::get(conn, &project_key, &name)?.ok_or(cliban_core::Error::NotFound)?;
             milestones::update(conn, &cur, params)?;
-            Ok(())
-        })
-        .await?;
-    Ok(())
-}
-
-async fn rm(db: &Option<String>, project: String, name: String) -> CliResult<()> {
-    let project_key = project.to_uppercase();
-    let store = store_open::open(db).await?;
-    // Go's DeleteMilestone resolves the milestone first (GetMilestone) and
-    // returns an error (exit 1) when project or milestone is missing; replicate
-    // that before the raw DELETE.
-    store
-        .call(move |conn| {
-            let p = projects::get_by_key(conn, &project_key)?
-                .ok_or(cliban_core::Error::ProjectNotFound)?;
-            if milestones::get(conn, &project_key, &name)?.is_none() {
-                return Err(cliban_core::Error::NotFound);
-            }
-            conn.execute(
-                "DELETE FROM milestones WHERE project_id = ?1 AND name = ?2",
-                rusqlite::params![p.id, name],
-            )?;
             Ok(())
         })
         .await?;

@@ -6,7 +6,7 @@ pub mod confirm_quit;
 pub mod detail;
 pub mod fuzzy;
 pub mod help;
-pub mod milestone_overlay;
+pub mod milestone_page;
 pub mod picker;
 pub mod top_bar;
 
@@ -17,9 +17,14 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-const STATUS_HELP: &str = "hjkl move  enter detail  e edit  E proj/ms  n new  N ms+  t tag  Space mv  a arch  m ms  M filter  / find  r refresh  q quit";
+const STATUS_HELP: &str = "hjkl move  enter detail  e edit  E proj/ms  n new  N ms+  t tag  Space mv  a arch  m milestones  M filter  / find  r refresh  q quit";
 
 pub fn render(frame: &mut Frame, app: &App) {
+    // The milestone page owns the whole screen — it's a page, not a popup.
+    if let Mode::MilestonePage(state) = &app.mode {
+        milestone_page::draw(frame, frame.area(), app, state);
+        return;
+    }
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -68,7 +73,8 @@ pub fn render(frame: &mut Frame, app: &App) {
             );
         }
         Mode::FuzzyFind(state) => fuzzy::draw(frame, frame.area(), app, state),
-        Mode::MilestoneOverlay(state) => milestone_overlay::draw(frame, frame.area(), state),
+        // Handled above — it replaces the board rather than layering over it.
+        Mode::MilestonePage(_) => {}
         Mode::Normal | Mode::AwaitingMove => {}
     }
 }

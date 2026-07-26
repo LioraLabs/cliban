@@ -48,6 +48,17 @@ pub fn project(row: &Row) -> rusqlite::Result<Project> {
 pub const MILESTONE_COLS: &str = "id, project_id, name, description, \
     target_date, status, archived, inserted_at, updated_at";
 
+/// [`MILESTONE_COLS`] qualified with a table alias, for joins where a bare
+/// `id` would be ambiguous. Column order (and so [`milestone`]'s indices) is
+/// unchanged.
+pub fn milestone_cols_as(alias: &str) -> String {
+    MILESTONE_COLS
+        .split(", ")
+        .map(|c| format!("{alias}.{c}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 pub fn milestone(row: &Row) -> rusqlite::Result<Milestone> {
     Ok(Milestone {
         id: row.get(0)?,

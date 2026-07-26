@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use chrono::{DateTime, Utc};
+
 use crate::actions::{Action, Command, Direction};
 
 /// Display projection of a `cliban_core` issue. Pure data.
@@ -119,20 +121,114 @@ pub struct FuzzyState {
     pub cursor: usize,
 }
 
-#[derive(Debug, Clone)]
-pub struct MilestoneOverlayState {
-    pub items: Vec<MilestoneRef>,
+/// The milestone page's view state. Deliberately holds no milestone data of
+/// its own — rows are projected from `app.milestones` by [`page_rows`], so a
+/// reload after an edit refreshes the page in place.
+#[derive(Debug, Clone, Default)]
+pub struct MilestonePageState {
     pub cursor: usize,
     pub query: String,
-    pub show_all: bool,
+    pub filter: StatusFilter,
+    pub sort: PageSort,
 }
 
+/// Which statuses the page lists. `archived` is not a separate bucket:
+/// cancelled *is* the archived state for a milestone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StatusFilter {
+    #[default]
+    Open,
+    Completed,
+    Cancelled,
+    All,
+}
+
+impl StatusFilter {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+            Self::All => "all",
+        }
+    }
+    fn next(self) -> Self {
+        match self {
+            Self::Open => Self::Completed,
+            Self::Completed => Self::Cancelled,
+            Self::Cancelled => Self::All,
+            Self::All => Self::Open,
+        }
+    }
+    fn accepts(self, status: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Open => status == "open",
+            Self::Completed => status == "completed",
+            Self::Cancelled => status == "cancelled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PageSort {
+    /// Most recently worked on first — how `data::load_milestones` already
+    /// orders the rows, so this sort is the identity.
+    #[default]
+    Activity,
+    Name,
+    Target,
+}
+
+impl PageSort {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Activity => "activity",
+            Self::Name => "name",
+            Self::Target => "target",
+        }
+    }
+    fn next(self) -> Self {
+        match self {
+            Self::Activity => Self::Name,
+            Self::Name => Self::Target,
+            Self::Target => Self::Activity,
+        }
+    }
+}
+
+/// Display projection of a milestone, with the rollups the page shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MilestoneRef {
     pub id: i64,
+    pub project: String,
     pub name: String,
+    pub description: String,
     pub status: String,
     pub target: Option<String>,
+    pub total: i64,
+    pub done: i64,
+    pub last_activity: DateTime<Utc>,
+}
+
+impl MilestoneRef {
+    /// `done/total` as a percentage; an empty milestone reads as 0.
+    pub fn percent(&self) -> u16 {
+        if self.total == 0 {
+            0
+        } else {
+            ((self.done * 100) / self.total) as u16
+        }
+    }
+
+    /// The next status in the `C` cycle: open → completed → cancelled → open.
+    pub fn next_status(&self) -> &'static str {
+        match self.status.as_str() {
+            "open" => "completed",
+            "completed" => "cancelled",
+            _ => "open",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -145,7 +241,7 @@ pub enum Mode {
     ProjectPicker(PickerState),
     MilestonePicker(PickerState),
     FuzzyFind(FuzzyState),
-    MilestoneOverlay(MilestoneOverlayState),
+    MilestonePage(MilestonePageState),
 }
 
 #[derive(Debug, Clone)]
@@ -351,7 +447,10 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
             Some(Command::EditIssue { key })
         }
         Action::EditScope => match (&app.scope.project, &app.scope.milestone) {
-            (Some(_), Some(m)) => Some(Command::EditMilestone { name: m.clone() }),
+            (Some(p), Some(m)) => Some(Command::EditMilestone {
+                project: p.clone(),
+                name: m.clone(),
+            }),
             (Some(_), None) => Some(Command::EditProject),
             (None, _) => {
                 app.status_msg = Some("scope a project first (p) to edit it".into());
@@ -362,23 +461,32 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
             let status = app.focus.column.status().to_string();
             Some(Command::NewIssue { status })
         }
-        Action::NewMilestone => Some(Command::NewMilestone),
+        Action::NewMilestone => Some(Command::NewMilestone {
+            project: app.scope.project.clone(),
+        }),
         Action::TagMilestone => {
             let card = app.focused_card()?.clone();
-            if app.milestones.is_empty() {
+            // Only this card's own project's milestones are taggable: with no
+            // project scoped, `app.milestones` spans every project.
+            let names: Vec<&MilestoneRef> = app
+                .milestones
+                .iter()
+                .filter(|m| m.project == card.project)
+                .collect();
+            if names.is_empty() {
                 app.status_msg = Some("no milestones to tag (N to create one)".into());
                 return None;
             }
             let cur = card
                 .milestone_id
-                .and_then(|id| app.milestones.iter().position(|m| m.id == id))
+                .and_then(|id| names.iter().position(|m| m.id == id))
                 .map(|i| i + 1)
                 .unwrap_or(0);
-            let next = (cur + 1) % (app.milestones.len() + 1);
+            let next = (cur + 1) % (names.len() + 1);
             let milestone = if next == 0 {
                 None
             } else {
-                Some(app.milestones[next - 1].name.clone())
+                Some(names[next - 1].name.clone())
             };
             Some(Command::TagMilestone {
                 key: card.key,
@@ -411,20 +519,27 @@ fn update_overlays(app: &mut App, action: Action) -> Option<Command> {
             });
             None
         }
-        Action::OpenMilestoneOverlay => {
-            app.mode = Mode::MilestoneOverlay(MilestoneOverlayState {
-                items: app.milestones.clone(),
-                cursor: 0,
-                query: String::new(),
-                show_all: false,
-            });
+        Action::OpenMilestonePage => {
+            app.mode = Mode::MilestonePage(MilestonePageState::default());
             None
         }
         Action::CycleMilestoneFilter => {
-            if app.milestones.is_empty() {
+            let Some(project) = app.scope.project.clone() else {
+                app.status_msg = Some("scope a project first with p".into());
+                return None;
+            };
+            // Name order, so repeated `M` walks a stable cycle regardless of
+            // how `app.milestones` happens to be sorted.
+            let mut scoped: Vec<&MilestoneRef> = app
+                .milestones
+                .iter()
+                .filter(|m| m.project == project)
+                .collect();
+            scoped.sort_by(|a, b| a.name.cmp(&b.name));
+            if scoped.is_empty() {
                 return None;
             }
-            let names: Vec<&str> = app.milestones.iter().map(|m| m.name.as_str()).collect();
+            let names: Vec<&str> = scoped.iter().map(|m| m.name.as_str()).collect();
             let next = match &app.scope.milestone {
                 None => Some(names[0].to_string()),
                 Some(cur) => match names.iter().position(|n| *n == cur.as_str()) {
@@ -494,20 +609,43 @@ pub fn filtered_picker(p: &PickerState) -> Vec<usize> {
         .collect()
 }
 
-/// Case-insensitive substring filter over milestone names; returns indices
-/// into the overlay's `items`. Empty query matches everything. Mirrors
-/// `filtered_picker` so the milestone overlay filters like the project picker.
-pub fn filtered_overlay(o: &MilestoneOverlayState) -> Vec<usize> {
-    // Two conditions: unless `show_all`, keep only open milestones; and the name
-    // must contain the (case-insensitive) query. Empty query matches every name.
-    let q = o.query.to_lowercase();
-    o.items
+/// The milestone page's visible rows, as indices into `app.milestones`:
+/// status bucket, then a case-insensitive substring match on name (or project
+/// key), then the chosen ordering. `app.milestones` already arrives sorted by
+/// activity, so [`PageSort::Activity`] just preserves that order.
+pub fn page_rows(app: &App, state: &MilestonePageState) -> Vec<usize> {
+    let q = state.query.to_lowercase();
+    let mut idx: Vec<usize> = app
+        .milestones
         .iter()
         .enumerate()
-        .filter(|(_, m)| o.show_all || m.status == "open")
-        .filter(|(_, m)| q.is_empty() || m.name.to_lowercase().contains(&q))
+        .filter(|(_, m)| state.filter.accepts(&m.status))
+        .filter(|(_, m)| {
+            q.is_empty()
+                || m.name.to_lowercase().contains(&q)
+                || m.project.to_lowercase().contains(&q)
+        })
         .map(|(i, _)| i)
-        .collect()
+        .collect();
+    match state.sort {
+        PageSort::Activity => {}
+        PageSort::Name => idx.sort_by(|&a, &b| {
+            let (a, b) = (&app.milestones[a], &app.milestones[b]);
+            (&a.project, &a.name).cmp(&(&b.project, &b.name))
+        }),
+        // Undated milestones sort last; `YYYY-MM-DD` compares lexicographically.
+        PageSort::Target => idx.sort_by(|&a, &b| {
+            let (a, b) = (&app.milestones[a], &app.milestones[b]);
+            (a.target.is_none(), &a.target, &a.name).cmp(&(b.target.is_none(), &b.target, &b.name))
+        }),
+    }
+    idx
+}
+
+/// The milestone the page cursor is on, if any.
+pub fn page_focused<'a>(app: &'a App, state: &MilestonePageState) -> Option<&'a MilestoneRef> {
+    let rows = page_rows(app, state);
+    app.milestones.get(*rows.get(state.cursor)?)
 }
 
 fn picker_confirm(app: &mut App) -> Option<Command> {
@@ -603,66 +741,95 @@ fn update_fuzzy_overlay(app: &mut App, action: Action) -> Option<Command> {
             app.mode = Mode::Normal;
             None
         }
-        Action::OverlayInput(c) => {
-            if let Mode::MilestoneOverlay(o) = &mut app.mode {
-                o.query.push(c);
-                o.cursor = 0;
+        _ => update_milestone_page(app, action),
+    }
+}
+
+/// The milestone page. Every arm re-derives its target from `app.milestones`
+/// through [`page_rows`], so the page always acts on what is on screen right
+/// now — including after a reload reorders the list.
+fn update_milestone_page(app: &mut App, action: Action) -> Option<Command> {
+    // Read-only arms first: they need `&App` while the state lives in `app.mode`.
+    let state = match &app.mode {
+        Mode::MilestonePage(s) => s.clone(),
+        _ => return None,
+    };
+    match action {
+        Action::MsPageInput(c) => {
+            if let Mode::MilestonePage(s) = &mut app.mode {
+                s.query.push(c);
+                s.cursor = 0;
             }
             None
         }
-        Action::OverlayBackspace => {
-            if let Mode::MilestoneOverlay(o) = &mut app.mode {
-                o.query.pop();
-                o.cursor = 0;
+        Action::MsPageBackspace => {
+            if let Mode::MilestonePage(s) = &mut app.mode {
+                s.query.pop();
+                s.cursor = 0;
             }
             None
         }
-        Action::OverlayUp => {
-            if let Mode::MilestoneOverlay(o) = &mut app.mode {
-                o.cursor = o.cursor.saturating_sub(1);
+        Action::MsPageUp => {
+            if let Mode::MilestonePage(s) = &mut app.mode {
+                s.cursor = s.cursor.saturating_sub(1);
             }
             None
         }
-        Action::OverlayDown => {
-            if let Mode::MilestoneOverlay(o) = &mut app.mode {
-                let m = filtered_overlay(o).len().saturating_sub(1);
-                if o.cursor < m {
-                    o.cursor += 1;
+        Action::MsPageDown => {
+            let last = page_rows(app, &state).len().saturating_sub(1);
+            if let Mode::MilestonePage(s) = &mut app.mode {
+                if s.cursor < last {
+                    s.cursor += 1;
                 }
             }
             None
         }
-        Action::OverlayEdit => {
-            let name = match &app.mode {
-                Mode::MilestoneOverlay(o) => o
-                    .items
-                    .get(*filtered_overlay(o).get(o.cursor)?)?
-                    .name
-                    .clone(),
-                _ => return None,
-            };
-            Some(Command::EditMilestone { name })
+        Action::MsPageCycleFilter => {
+            if let Mode::MilestonePage(s) = &mut app.mode {
+                s.filter = s.filter.next();
+                s.cursor = 0;
+            }
+            None
         }
-        Action::OverlaySelect => {
-            let name = match &app.mode {
-                Mode::MilestoneOverlay(o) => o
-                    .items
-                    .get(*filtered_overlay(o).get(o.cursor)?)?
-                    .name
-                    .clone(),
-                _ => return None,
-            };
+        Action::MsPageCycleSort => {
+            if let Mode::MilestonePage(s) = &mut app.mode {
+                s.sort = s.sort.next();
+                s.cursor = 0;
+            }
+            None
+        }
+        Action::MsPageEdit => {
+            let m = page_focused(app, &state)?;
+            Some(Command::EditMilestone {
+                project: m.project.clone(),
+                name: m.name.clone(),
+            })
+        }
+        Action::MsPageNew => Some(Command::NewMilestone {
+            // Create into whatever the cursor is sitting in, so the page works
+            // unscoped; fall back to the board's scope on an empty list.
+            project: page_focused(app, &state)
+                .map(|m| m.project.clone())
+                .or_else(|| app.scope.project.clone()),
+        }),
+        Action::MsPageCycleStatus => {
+            let m = page_focused(app, &state)?;
+            Some(Command::SetMilestoneStatus {
+                project: m.project.clone(),
+                name: m.name.clone(),
+                status: m.next_status().to_string(),
+            })
+        }
+        Action::MsPageSelect => {
+            let m = page_focused(app, &state)?;
+            let (project, name) = (m.project.clone(), m.name.clone());
+            // Selecting a milestone from another project re-scopes the board
+            // to that project too, keeping the Scope invariant honest.
+            app.scope.set_project(Some(project));
             app.scope.milestone = Some(name);
             app.mode = Mode::Normal;
             app.auto_focus_if_empty();
             Some(Command::SetScope)
-        }
-        Action::OverlayToggleAll => {
-            if let Mode::MilestoneOverlay(o) = &mut app.mode {
-                o.show_all = !o.show_all;
-                o.cursor = 0;
-            }
-            None
         }
         _ => None,
     }
@@ -739,6 +906,29 @@ fn move_focus(app: &mut App, dir: Direction) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `CLI` milestone with no issues and no target.
+    fn milestone(name: &str, status: &str) -> MilestoneRef {
+        MilestoneRef {
+            id: name.len() as i64,
+            project: "CLI".into(),
+            name: name.into(),
+            description: String::new(),
+            status: status.into(),
+            target: None,
+            total: 0,
+            done: 0,
+            last_activity: DateTime::UNIX_EPOCH,
+        }
+    }
+
+    /// The same, but in a different project — for the cross-project paths.
+    fn other_project(name: &str) -> MilestoneRef {
+        MilestoneRef {
+            project: "LM".into(),
+            ..milestone(name, "open")
+        }
+    }
 
     fn card(key: &str, status: &str, pos: f64) -> Card {
         let project = key.split('-').next().unwrap().to_string();
@@ -871,12 +1061,7 @@ mod tests {
     fn tag_milestone_cycles_none_to_first() {
         let mut app = App::new();
         app.cards = vec![card("CLI-1", "backlog", 1000.0)];
-        app.milestones = vec![MilestoneRef {
-            id: 7,
-            name: "M1".into(),
-            status: "open".into(),
-            target: None,
-        }];
+        app.milestones = vec![milestone("M1", "open")];
         app.auto_focus_if_empty();
         match update(&mut app, Action::TagMilestone).unwrap() {
             Command::TagMilestone { key, milestone } => {
@@ -885,6 +1070,17 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn tag_milestone_ignores_other_projects_milestones() {
+        let mut app = App::new();
+        app.cards = vec![card("CLI-1", "backlog", 1000.0)];
+        // Unscoped, `app.milestones` spans projects; only CLI's are taggable.
+        app.milestones = vec![other_project("LM-only")];
+        app.auto_focus_if_empty();
+        assert!(update(&mut app, Action::TagMilestone).is_none());
+        assert!(app.status_msg.is_some());
     }
 
     #[test]
@@ -913,20 +1109,8 @@ mod tests {
     #[test]
     fn cycle_milestone_filter_advances_then_wraps_to_all() {
         let mut app = App::new();
-        app.milestones = vec![
-            MilestoneRef {
-                id: 1,
-                name: "M1".into(),
-                status: "open".into(),
-                target: None,
-            },
-            MilestoneRef {
-                id: 2,
-                name: "M2".into(),
-                status: "open".into(),
-                target: None,
-            },
-        ];
+        app.scope.set_project(Some("CLI".into()));
+        app.milestones = vec![milestone("M1", "open"), milestone("M2", "open")];
         update(&mut app, Action::CycleMilestoneFilter);
         assert_eq!(app.scope.milestone.as_deref(), Some("M1"));
         update(&mut app, Action::CycleMilestoneFilter);
@@ -936,203 +1120,203 @@ mod tests {
     }
 
     #[test]
-    fn overlay_query_filters_and_select_resolves_against_filtered_list() {
+    fn cycle_milestone_filter_only_walks_the_scoped_project() {
         let mut app = App::new();
-        app.milestones = vec![
-            MilestoneRef {
-                id: 1,
-                name: "alpha".into(),
-                status: "open".into(),
-                target: None,
-            },
-            MilestoneRef {
-                id: 2,
-                name: "beta".into(),
-                status: "open".into(),
-                target: None,
-            },
-            MilestoneRef {
-                id: 3,
-                name: "gamma".into(),
-                status: "open".into(),
-                target: None,
-            },
-        ];
-        update(&mut app, Action::OpenMilestoneOverlay);
-        // Typing narrows the list; only "beta" matches "be".
-        update(&mut app, Action::OverlayInput('b'));
-        update(&mut app, Action::OverlayInput('e'));
-        match &app.mode {
-            Mode::MilestoneOverlay(o) => {
-                assert_eq!(o.query, "be");
-                assert_eq!(o.cursor, 0, "typing resets the cursor to the top");
-                assert_eq!(filtered_overlay(o), vec![1]);
-            }
-            _ => panic!("expected overlay mode"),
-        }
-        // Enter on the single match sets that milestone, not items[cursor].
-        let cmd = update(&mut app, Action::OverlaySelect);
-        assert_eq!(app.scope.milestone.as_deref(), Some("beta"));
-        assert!(matches!(cmd, Some(Command::SetScope)));
-    }
+        app.milestones = vec![milestone("M1", "open"), other_project("LM-only")];
+        // Unscoped: nothing to cycle, and the user is told why.
+        assert!(update(&mut app, Action::CycleMilestoneFilter).is_none());
+        assert_eq!(app.scope.milestone, None);
+        assert!(app.status_msg.is_some());
 
-    #[test]
-    fn overlay_down_is_clamped_to_filtered_len() {
-        let mut app = App::new();
-        app.milestones = vec![
-            MilestoneRef {
-                id: 1,
-                name: "alpha".into(),
-                status: "open".into(),
-                target: None,
-            },
-            MilestoneRef {
-                id: 2,
-                name: "beta".into(),
-                status: "open".into(),
-                target: None,
-            },
-        ];
-        update(&mut app, Action::OpenMilestoneOverlay);
-        update(&mut app, Action::OverlayInput('a')); // matches "alpha" and "beta"? "a" is in both
-        update(&mut app, Action::OverlayInput('l')); // "al" -> only "alpha"
-        update(&mut app, Action::OverlayDown); // one match: cursor must stay at 0
-        match &app.mode {
-            Mode::MilestoneOverlay(o) => assert_eq!(o.cursor, 0),
-            _ => panic!(),
-        }
-    }
-
-    #[test]
-    fn overlay_backspace_widens_the_filter() {
-        let mut app = App::new();
-        app.milestones = vec![
-            MilestoneRef {
-                id: 1,
-                name: "alpha".into(),
-                status: "open".into(),
-                target: None,
-            },
-            MilestoneRef {
-                id: 2,
-                name: "beta".into(),
-                status: "open".into(),
-                target: None,
-            },
-        ];
-        update(&mut app, Action::OpenMilestoneOverlay);
-        update(&mut app, Action::OverlayInput('b'));
-        update(&mut app, Action::OverlayBackspace);
-        match &app.mode {
-            Mode::MilestoneOverlay(o) => {
-                assert_eq!(o.query, "");
-                assert_eq!(filtered_overlay(o).len(), 2);
-            }
-            _ => panic!(),
-        }
-    }
-
-    #[test]
-    fn overlay_enter_sets_milestone_filter_and_closes() {
-        let mut app = App::new();
-        app.milestones = vec![
-            MilestoneRef {
-                id: 1,
-                name: "M1".into(),
-                status: "open".into(),
-                target: None,
-            },
-            MilestoneRef {
-                id: 2,
-                name: "M2".into(),
-                status: "open".into(),
-                target: None,
-            },
-        ];
-        update(&mut app, Action::OpenMilestoneOverlay);
-        update(&mut app, Action::OverlayDown); // cursor -> M2
-        let cmd = update(&mut app, Action::OverlaySelect);
-        assert_eq!(app.scope.milestone.as_deref(), Some("M2"));
-        assert!(
-            matches!(app.mode, Mode::Normal),
-            "overlay should close after select"
+        app.scope.set_project(Some("CLI".into()));
+        update(&mut app, Action::CycleMilestoneFilter);
+        assert_eq!(app.scope.milestone.as_deref(), Some("M1"));
+        update(&mut app, Action::CycleMilestoneFilter);
+        assert_eq!(
+            app.scope.milestone, None,
+            "the other project's milestone is not in the cycle"
         );
+    }
+
+    fn page(app: &App) -> &MilestonePageState {
+        match &app.mode {
+            Mode::MilestonePage(s) => s,
+            _ => panic!("expected the milestone page"),
+        }
+    }
+
+    #[test]
+    fn page_opens_on_the_open_bucket_in_activity_order() {
+        let mut app = App::new();
+        app.milestones = vec![
+            milestone("open-one", "open"),
+            milestone("done-one", "completed"),
+            milestone("axed-one", "cancelled"),
+        ];
+        update(&mut app, Action::OpenMilestonePage);
+        let s = page(&app);
+        assert_eq!(s.filter, StatusFilter::Open);
+        assert_eq!(s.sort, PageSort::Activity);
+        assert_eq!(page_rows(&app, s), vec![0], "only the open milestone shows");
+    }
+
+    #[test]
+    fn cycling_the_status_bucket_walks_open_completed_cancelled_all() {
+        let mut app = App::new();
+        app.milestones = vec![
+            milestone("open-one", "open"),
+            milestone("done-one", "completed"),
+            milestone("axed-one", "cancelled"),
+        ];
+        update(&mut app, Action::OpenMilestonePage);
+        for (expect_filter, expect_rows) in [
+            (StatusFilter::Completed, vec![1]),
+            (StatusFilter::Cancelled, vec![2]),
+            (StatusFilter::All, vec![0, 1, 2]),
+            (StatusFilter::Open, vec![0]),
+        ] {
+            update(&mut app, Action::MsPageCycleFilter);
+            let s = page(&app);
+            assert_eq!(s.filter, expect_filter);
+            assert_eq!(page_rows(&app, s), expect_rows);
+        }
+    }
+
+    #[test]
+    fn sorting_reorders_by_name_then_target_then_back_to_activity() {
+        let mut app = App::new();
+        // Load order is activity order (what `data::load_milestones` returns).
+        let mut zeta = milestone("zeta", "open");
+        zeta.target = Some("2026-01-01".into());
+        let mut alpha = milestone("alpha", "open");
+        alpha.target = None;
+        let mut mid = milestone("mid", "open");
+        mid.target = Some("2026-06-01".into());
+        app.milestones = vec![zeta, alpha, mid];
+        update(&mut app, Action::OpenMilestonePage);
+
+        assert_eq!(page_rows(&app, page(&app)), vec![0, 1, 2], "activity order");
+        update(&mut app, Action::MsPageCycleSort);
+        assert_eq!(page(&app).sort, PageSort::Name);
+        assert_eq!(names(&app, page(&app)), vec!["alpha", "mid", "zeta"]);
+        update(&mut app, Action::MsPageCycleSort);
+        assert_eq!(page(&app).sort, PageSort::Target);
+        assert_eq!(
+            names(&app, page(&app)),
+            vec!["zeta", "mid", "alpha"],
+            "undated sorts last"
+        );
+        update(&mut app, Action::MsPageCycleSort);
+        assert_eq!(page(&app).sort, PageSort::Activity);
+    }
+
+    #[test]
+    fn typing_filters_on_name_or_project_and_resets_the_cursor() {
+        let mut app = App::new();
+        app.milestones = vec![
+            milestone("alpha", "open"),
+            milestone("beta", "open"),
+            other_project("gamma"),
+        ];
+        update(&mut app, Action::OpenMilestonePage);
+        update(&mut app, Action::MsPageDown); // cursor -> 1
+        update(&mut app, Action::MsPageInput('b'));
+        update(&mut app, Action::MsPageInput('e'));
+        let s = page(&app);
+        assert_eq!(s.query, "be");
+        assert_eq!(s.cursor, 0, "typing resets the cursor");
+        assert_eq!(names(&app, s), vec!["beta"]);
+
+        // The project key is searchable too.
+        update(&mut app, Action::MsPageBackspace);
+        update(&mut app, Action::MsPageBackspace);
+        update(&mut app, Action::MsPageInput('l'));
+        update(&mut app, Action::MsPageInput('m'));
+        assert_eq!(names(&app, page(&app)), vec!["gamma"]);
+    }
+
+    #[test]
+    fn cursor_down_is_clamped_to_the_visible_rows() {
+        let mut app = App::new();
+        app.milestones = vec![milestone("alpha", "open"), milestone("beta", "open")];
+        update(&mut app, Action::OpenMilestonePage);
+        update(&mut app, Action::MsPageInput('a'));
+        update(&mut app, Action::MsPageInput('l')); // only "alpha" matches
+        update(&mut app, Action::MsPageDown);
+        assert_eq!(page(&app).cursor, 0);
+    }
+
+    #[test]
+    fn enter_scopes_the_board_to_the_focused_milestone_and_its_project() {
+        let mut app = App::new();
+        app.milestones = vec![milestone("M1", "open"), other_project("LM-only")];
+        update(&mut app, Action::OpenMilestonePage);
+        update(&mut app, Action::MsPageDown); // -> the LM milestone
+        let cmd = update(&mut app, Action::MsPageSelect);
+        assert_eq!(app.scope.project.as_deref(), Some("LM"));
+        assert_eq!(app.scope.milestone.as_deref(), Some("LM-only"));
+        assert!(matches!(app.mode, Mode::Normal), "page closes on select");
         assert!(matches!(cmd, Some(Command::SetScope)));
     }
 
     #[test]
-    fn overlay_opens_showing_open_milestones_only() {
+    fn edit_and_new_carry_the_focused_milestones_project() {
         let mut app = App::new();
-        app.milestones = vec![
-            MilestoneRef {
-                id: 1,
-                name: "open-one".into(),
-                status: "open".into(),
-                target: None,
-            },
-            MilestoneRef {
-                id: 2,
-                name: "done-one".into(),
-                status: "completed".into(),
-                target: None,
-            },
-            MilestoneRef {
-                id: 3,
-                name: "axed-one".into(),
-                status: "cancelled".into(),
-                target: None,
-            },
-        ];
-        update(&mut app, Action::OpenMilestoneOverlay);
-        match &app.mode {
-            // only the open milestone (items index 0) is visible by default
-            Mode::MilestoneOverlay(o) => {
-                assert!(!o.show_all);
-                assert_eq!(filtered_overlay(o), vec![0]);
+        app.milestones = vec![other_project("LM-only")];
+        update(&mut app, Action::OpenMilestonePage);
+        match update(&mut app, Action::MsPageEdit).unwrap() {
+            Command::EditMilestone { project, name } => {
+                assert_eq!((project.as_str(), name.as_str()), ("LM", "LM-only"));
             }
-            _ => panic!("expected overlay mode"),
+            c => panic!("{c:?}"),
+        }
+        match update(&mut app, Action::MsPageNew).unwrap() {
+            Command::NewMilestone { project } => assert_eq!(project.as_deref(), Some("LM")),
+            c => panic!("{c:?}"),
         }
     }
 
     #[test]
-    fn overlay_toggle_all_reveals_then_hides_non_open() {
+    fn c_cycles_the_focused_milestone_through_its_statuses() {
         let mut app = App::new();
-        app.milestones = vec![
-            MilestoneRef {
-                id: 1,
-                name: "open-one".into(),
-                status: "open".into(),
-                target: None,
-            },
-            MilestoneRef {
-                id: 2,
-                name: "done-one".into(),
-                status: "completed".into(),
-                target: None,
-            },
-            MilestoneRef {
-                id: 3,
-                name: "axed-one".into(),
-                status: "cancelled".into(),
-                target: None,
-            },
-        ];
-        update(&mut app, Action::OpenMilestoneOverlay);
-        update(&mut app, Action::OverlayToggleAll); // reveal all statuses
-        match &app.mode {
-            Mode::MilestoneOverlay(o) => {
-                assert!(o.show_all);
-                assert_eq!(filtered_overlay(o), vec![0, 1, 2]);
+        app.milestones = vec![milestone("M1", "open")];
+        update(&mut app, Action::OpenMilestonePage);
+        // The page shows the *current* status, so each press emits the next
+        // one; the reload after the write is what advances the cycle.
+        for (from, to) in [
+            ("open", "completed"),
+            ("completed", "cancelled"),
+            ("cancelled", "open"),
+        ] {
+            app.milestones[0].status = from.into();
+            if let Mode::MilestonePage(s) = &mut app.mode {
+                s.filter = StatusFilter::All;
             }
-            _ => panic!("expected overlay mode"),
-        }
-        update(&mut app, Action::OverlayToggleAll); // back to open-only
-        match &app.mode {
-            Mode::MilestoneOverlay(o) => {
-                assert!(!o.show_all);
-                assert_eq!(filtered_overlay(o), vec![0]);
+            match update(&mut app, Action::MsPageCycleStatus).unwrap() {
+                Command::SetMilestoneStatus { name, status, .. } => {
+                    assert_eq!(name, "M1");
+                    assert_eq!(status, to, "from {from}");
+                }
+                c => panic!("{c:?}"),
             }
-            _ => panic!("expected overlay mode"),
         }
+    }
+
+    #[test]
+    fn page_actions_on_an_empty_list_are_noops() {
+        let mut app = App::new();
+        update(&mut app, Action::OpenMilestonePage);
+        assert!(update(&mut app, Action::MsPageEdit).is_none());
+        assert!(update(&mut app, Action::MsPageSelect).is_none());
+        assert!(update(&mut app, Action::MsPageCycleStatus).is_none());
+        // New still works — it is how you get your first milestone.
+        assert!(update(&mut app, Action::MsPageNew).is_some());
+    }
+
+    fn names<'a>(app: &'a App, s: &MilestonePageState) -> Vec<&'a str> {
+        page_rows(app, s)
+            .into_iter()
+            .map(|i| app.milestones[i].name.as_str())
+            .collect()
     }
 }

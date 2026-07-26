@@ -32,7 +32,7 @@ pub enum Action {
     OpenProjectPicker,
     OpenMilestonePicker,
     CycleMilestoneFilter,
-    OpenMilestoneOverlay,
+    OpenMilestonePage,
     SetScope(Scope),
     PickerInput(char),
     PickerBackspace,
@@ -45,13 +45,20 @@ pub enum Action {
     FuzzyUp,
     FuzzyDown,
     FuzzyConfirm,
-    OverlayUp,
-    OverlayDown,
-    OverlayEdit,
-    OverlaySelect,
-    OverlayInput(char),
-    OverlayBackspace,
-    OverlayToggleAll,
+    // Milestone page (`m`).
+    MsPageUp,
+    MsPageDown,
+    MsPageInput(char),
+    MsPageBackspace,
+    /// Enter: scope the board to the focused milestone and close the page.
+    MsPageSelect,
+    MsPageEdit,
+    MsPageNew,
+    /// Cycle the focused milestone's own status (open → completed → cancelled).
+    MsPageCycleStatus,
+    /// Cycle which status bucket the page lists.
+    MsPageCycleFilter,
+    MsPageCycleSort,
 }
 
 #[derive(Debug, Clone)]
@@ -81,8 +88,17 @@ pub enum Command {
         status: String,
     },
     EditMilestone {
+        project: String,
         name: String,
     },
-    NewMilestone,
+    /// `None` falls back to the board's scoped project (and errors if unscoped).
+    NewMilestone {
+        project: Option<String>,
+    },
+    SetMilestoneStatus {
+        project: String,
+        name: String,
+        status: String,
+    },
     EditProject,
 }

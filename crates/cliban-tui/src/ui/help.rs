@@ -31,11 +31,22 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
         "SCOPE / MILESTONES",
         &[
             ("p", "project picker"),
-            ("m", "milestone overlay"),
+            ("m", "milestone page"),
             ("M", "cycle milestone filter"),
             ("N", "new milestone"),
             ("E", "edit milestone/project ($EDITOR)"),
             ("/", "fuzzy find"),
+        ],
+    ),
+    (
+        "MILESTONE PAGE (m)",
+        &[
+            ("type", "filter by name/project"),
+            ("Enter", "scope board to milestone"),
+            ("Tab", "open/completed/cancelled/all"),
+            ("S", "sort: activity/name/target"),
+            ("C", "cycle milestone status"),
+            ("E / N", "edit / new milestone"),
         ],
     ),
     (
@@ -147,7 +158,8 @@ mod tests {
             "archive",
             "new milestone",
             "fuzzy find",
-            "milestone overlay",
+            "milestone page",
+            "scope board to milestone",
         ] {
             assert!(dump.contains(needle), "missing `{needle}`:\n{dump}");
         }
