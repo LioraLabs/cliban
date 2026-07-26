@@ -1,12 +1,20 @@
-//! Port of `backend/lib/loom/activity_log.ex`.
+//! Append-only per-issue audit log — the entries cliban records for itself
+//! when an issue moves or is archived, as opposed to the narrative an author
+//! writes with `cliban issue log` (which lives in the description's
+//! `## Activity Log` section and is owned by the CLI's `descmd`).
 //!
-//! Append-only per-issue log + the `## Activity Log` markdown mirror that
-//! every append rewrites into `issues.description` (spec §6.7). The mirror
-//! logic is reproduced without a regex engine: the Elixir regex
-//! `^## Activity Log[ \t]*\n(?:.*?)(?=^## |\z)` (multiline, dot-all) just means
-//! "from the `## Activity Log` header line up to the next `## ` header at
-//! column 0, or end of string". We implement that as a line scan.
+//! Originally a port of `backend/lib/loom/activity_log.ex`, whose `append`
+//! mirrored the table back into the description on every write. cliban does
+//! not: two writers rewriting one markdown section is a clobber waiting to
+//! happen, so the two sources are merged at read time by `cliban activity`
+//! and `cliban issue show --section activity`.
+//!
+//! The section helpers below are what remains of the mirror, kept because the
+//! `## Activity Log` section-boundary rules they encode (from the Elixir regex
+//! `^## Activity Log[ \t]*\n(?:.*?)(?=^## |\z)`) are the contract readers
+//! still rely on.
 
+use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 
 use crate::error::Result;
@@ -17,8 +25,14 @@ use crate::time;
 const SECTION_HEADER: &str = "## Activity Log";
 
 /// `append/4`. `extra` is a serde_json value, JSON-encoded into the row
-/// exactly like `Jason.encode!(extra)`. On success, mirrors the full log into
-/// the issue's description (same transaction).
+/// exactly like `Jason.encode!(extra)`.
+///
+/// Unlike the Elixir original this does **not** mirror the log back into the
+/// issue description. In cliban the description's `## Activity Log` section is
+/// the *narrative* an author curates through `cliban issue log` (see the CLI's
+/// `descmd`), while this table is the *audit trail* the tool records on its
+/// own — status moves, archiving. Mirroring would have one clobber the other;
+/// `cliban activity` merges the two at read time instead.
 pub fn append(
     conn: &Connection,
     issue: &Issue,
@@ -27,27 +41,33 @@ pub fn append(
     extra: &serde_json::Value,
 ) -> Result<ActivityLogEntry> {
     let extra_str = serde_json::to_string(extra)?;
-    let now = time::now_usec();
-    let now_str = time::format_usec(now);
+    let now_str = time::format_usec(time::now_usec());
 
-    let tx = conn.unchecked_transaction()?;
-    tx.execute(
+    conn.execute(
         "INSERT INTO activity_log_entries (issue_id, ts, kind, message, extra, \
          inserted_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
         params![issue.id, now_str, kind, message, extra_str, now_str],
     )?;
-    let id = tx.last_insert_rowid();
-    let entry = {
-        let sql = format!(
-            "SELECT {} FROM activity_log_entries WHERE id = ?1",
-            rows::ACTIVITY_COLS
-        );
-        tx.query_row(&sql, params![id], rows::activity_log_entry)?
-    };
+    let id = conn.last_insert_rowid();
+    let sql = format!(
+        "SELECT {} FROM activity_log_entries WHERE id = ?1",
+        rows::ACTIVITY_COLS
+    );
+    Ok(conn.query_row(&sql, params![id], rows::activity_log_entry)?)
+}
 
-    mirror_into_description(&tx, issue.id)?;
-    tx.commit()?;
-    Ok(entry)
+/// Every entry at or after `since`, across all issues, newest first. Backs
+/// `cliban activity`.
+pub fn list_since(conn: &Connection, since: DateTime<Utc>) -> Result<Vec<ActivityLogEntry>> {
+    let sql = format!(
+        "SELECT {} FROM activity_log_entries WHERE ts >= ?1 ORDER BY ts DESC",
+        rows::ACTIVITY_COLS
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let out = stmt
+        .query_map(params![time::format_usec(since)], rows::activity_log_entry)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(out)
 }
 
 /// `list_for_issue/2` — ascending by ts, default limit 200.
@@ -103,28 +123,6 @@ pub fn merge_activity_log_section(description: Option<&str>, body: &str) -> Stri
 }
 
 // ---- internals ----
-
-fn mirror_into_description(conn: &Connection, issue_id: i64) -> Result<()> {
-    let entries = list_for_issue(conn, issue_id, 200)?;
-    let body = render(&entries);
-
-    // Reload description to pick up concurrent edits.
-    let current: String = conn.query_row(
-        "SELECT description FROM issues WHERE id = ?1",
-        params![issue_id],
-        |r| r.get(0),
-    )?;
-
-    let new_desc = merge_activity_log_section(Some(&current), &body);
-    if new_desc != current {
-        let now = time::format_usec(time::now_usec());
-        conn.execute(
-            "UPDATE issues SET description = ?1, updated_at = ?2 WHERE id = ?3",
-            params![new_desc, now, issue_id],
-        )?;
-    }
-    Ok(())
-}
 
 fn build_section(body: &str) -> String {
     let trimmed = body.trim_end();

@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use cliban_core::contexts::issues::{CreateIssue, ListOpts, UpdateIssue};
 use cliban_core::contexts::{issues, milestones, relations};
 use cliban_core::schema::{Issue, ISSUE_PRIORITIES, ISSUE_STATUSES};
-use cliban_core::time::{format_date, format_usec, parse_date, parse_ts};
+use cliban_core::time::{format_date, format_usec, parse_date};
 use cliban_core::Store;
 
 use chrono::Utc;
@@ -46,8 +46,15 @@ pub enum IssueCmd {
     /// Bulk-create issues from an NDJSON file (or stdin with '-')
     Import(ImportArgs),
     /// Move an issue to a new status
-    Mv { key: String, status: String },
-    /// Delete an issue (cascades sub-issues)
+    Mv {
+        key: String,
+        status: String,
+        /// why — recorded on the issue's timeline with the transition
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Archives instead of deleting (kept for muscle memory; hidden)
+    #[command(hide = true)]
     Rm { key: String },
     /// Archive an issue (hides it from the default board and lists)
     Archive { key: String },
@@ -114,7 +121,7 @@ pub struct LsArgs {
     /// include archived issues
     #[arg(long)]
     archived: bool,
-    /// filter issues updated within a duration (e.g. 4h) or since an RFC3339 timestamp
+    /// only issues updated since: 4h, 3d, 2w, today, yesterday, 2026-07-25, or RFC3339
     #[arg(long = "updated-since")]
     updated_since: Option<String>,
     /// fuzzy search query across title/key/labels/description
@@ -323,8 +330,17 @@ pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
         IssueCmd::Promote(a) => promote(db, a).await,
         IssueCmd::ArchiveDone(a) => archive_done(db, a).await,
         IssueCmd::Import(a) => import(db, a).await,
-        IssueCmd::Mv { key, status } => mv(db, key, status).await,
-        IssueCmd::Rm { key } => rm(db, key).await,
+        IssueCmd::Mv { key, status, note } => mv(db, key, status, note).await,
+        IssueCmd::Rm { key } => {
+            // Do the closest safe thing rather than spending a turn refusing.
+            let key = parse_issue_key(&key)?;
+            set_archived(db, key.clone(), true).await?;
+            println!(
+                "archived {key} — cliban archives instead of deleting \
+                 (undo: cliban issue unarchive {key})"
+            );
+            Ok(())
+        }
         IssueCmd::Archive { key } => set_archived(db, key, true).await,
         IssueCmd::Unarchive { key } => set_archived(db, key, false).await,
         IssueCmd::Current { json } => current(db, json).await,
@@ -682,15 +698,37 @@ async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
     // --section is a targeted machine read; mutually exclusive with json/pager.
     if let Some(section) = &a.section {
         let anchor = section_anchor(section)?;
+        // The activity view is the union of the author's narrative and the
+        // transitions cliban recorded; either alone is a partial history.
+        let recorded = if anchor == "Activity Log" {
+            let id = issue.id;
+            store
+                .call(move |conn| {
+                    cliban_core::contexts::activity_log::list_for_issue(conn, id, 200)
+                })
+                .await?
+        } else {
+            Vec::new()
+        };
         let (start, end, ok) = find_section(&issue.description, anchor);
-        if !ok {
+        if !ok && recorded.is_empty() {
             // Go wraps with %w on store.ErrNotFound → "not found: <msg>".
             return Err(CliError::not_found(format!(
                 "not found: no ## {anchor} section in {}",
                 a.key
             )));
         }
-        print!("{}", &issue.description[start..end]);
+        let written = if ok {
+            &issue.description[start..end]
+        } else {
+            ""
+        };
+        if recorded.is_empty() {
+            // Nothing recorded: emit the section byte-for-byte as stored.
+            print!("{written}");
+        } else {
+            print!("{}", merge_activity_view(written, &recorded));
+        }
         return Ok(());
     }
 
@@ -720,6 +758,50 @@ async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
         print!("{body}");
     }
     Ok(())
+}
+
+/// One chronological view over the two activity sources: the `## Activity Log`
+/// lines an author wrote, and the entries cliban recorded itself. Both render
+/// as `- <ts> — <msg>`; recorded ones carry `[actor]` when attribution was set.
+///
+/// Only called when there is something recorded — with an empty table the
+/// stored section is emitted verbatim, so a description that was never
+/// auto-recorded reads exactly as it always did.
+fn merge_activity_view(
+    written: &str,
+    recorded: &[cliban_core::schema::ActivityLogEntry],
+) -> String {
+    const STAMP: &str = "%Y-%m-%dT%H:%MZ";
+    // `issue log` records into both places, so drop the markdown copy of any
+    // line a recorded entry already covers — the recorded one carries the
+    // actor. What survives is hand-written, or predates recording.
+    let already: std::collections::HashSet<(i64, String)> = recorded
+        .iter()
+        .filter(|e| e.kind == "log")
+        .map(|e| crate::audit::log_dedupe_key(e.ts, &e.message))
+        .collect();
+    let mut lines: Vec<(chrono::DateTime<Utc>, String)> =
+        descmd::parse_activity_log(&format!("## Activity Log\n{written}"))
+            .into_iter()
+            .filter(|(ts, msg)| !already.contains(&crate::audit::log_dedupe_key(*ts, msg)))
+            .map(|(ts, msg)| (ts, format!("- {} — {msg}", ts.format(STAMP))))
+            .collect();
+    for e in recorded {
+        let who = crate::audit::actor_of(&e.extra)
+            .map(|a| format!("[{a}] "))
+            .unwrap_or_default();
+        lines.push((
+            e.ts,
+            format!("- {} — {who}{}", e.ts.format(STAMP), e.message),
+        ));
+    }
+    lines.sort_by_key(|(ts, _)| *ts);
+    let mut out = String::from("\n");
+    for (_, line) in &lines {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 fn dash_if_empty(s: &str) -> String {
@@ -756,41 +838,8 @@ fn run_pager(body: &str) -> CliResult<()> {
     }
 }
 
-/// `parseUpdatedSince`: a Go-style duration (e.g. `4h`, `30m`) → now-d, else an
-/// RFC3339 timestamp → that instant.
 fn parse_updated_since(s: &str) -> Result<chrono::DateTime<Utc>, CliError> {
-    if let Some(d) = parse_go_duration(s) {
-        return Ok(Utc::now() - d);
-    }
-    if let Some(ts) = parse_ts(s) {
-        return Ok(ts);
-    }
-    Err(CliError::validation(format!(
-        "invalid --updated-since {s:?} (want duration like 4h or RFC3339 timestamp)"
-    )))
-}
-
-/// Minimal Go `time.ParseDuration` subset: a single signed decimal with a unit
-/// suffix `ns|us|µs|ms|s|m|h`. Returns None on anything unrecognized.
-fn parse_go_duration(s: &str) -> Option<chrono::Duration> {
-    let s = s.trim();
-    if s.is_empty() {
-        return None;
-    }
-    // Find the boundary between the numeric part and the unit suffix.
-    let split = s.find(|c: char| c.is_ascii_alphabetic() || c == 'µ')?;
-    let (num, unit) = s.split_at(split);
-    let val: f64 = num.parse().ok()?;
-    let secs = match unit {
-        "ns" => val / 1_000_000_000.0,
-        "us" | "µs" => val / 1_000_000.0,
-        "ms" => val / 1_000.0,
-        "s" => val,
-        "m" => val * 60.0,
-        "h" => val * 3600.0,
-        _ => return None,
-    };
-    chrono::Duration::try_milliseconds((secs * 1000.0) as i64)
+    crate::since::parse(s, "--updated-since")
 }
 
 async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
@@ -1219,6 +1268,15 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
 
     let description = if desc_set { Some(desc_content) } else { None };
 
+    // Snapshot before anything moves, so the timeline entry can say what
+    // actually changed rather than just "edited".
+    let snapshot_key = key.clone();
+    let before = store
+        .call(move |conn| issues::get_by_key(conn, &snapshot_key))
+        .await?
+        .ok_or(cliban_core::Error::NotFound)?;
+    let (before_milestone, before_parent) = resolve_refs(&store, &before).await?;
+
     // Apply the core update (only when there is a field-level change).
     let has_field_update = title.is_some()
         || description.is_some()
@@ -1253,6 +1311,14 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
             .await?
             .ok_or(cliban_core::Error::NotFound)?;
     }
+
+    // Capture the relation/label intent before the loops below consume it.
+    let added_labels = a.label.clone();
+    let removed_labels = a.remove_label.clone();
+    let summary_blocks = blocks.clone();
+    let summary_blocked_by = blocked_by.clone();
+    let summary_related_to = related_to.clone();
+    let summary_remove_relation = remove_relation.clone();
 
     // Labels.
     for lbl in a.label {
@@ -1312,6 +1378,68 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
         .call(move |conn| issues::get_by_key(conn, &reload))
         .await?
         .ok_or(cliban_core::Error::NotFound)?;
+
+    // Everything applied; record what moved.
+    let (after_milestone, after_parent) = resolve_refs(&store, &issue).await?;
+    let mut summary = crate::audit::EditSummary::default();
+    summary.field("title", &before.title, &issue.title);
+    summary.field("priority", &before.priority, &issue.priority);
+    summary.field("milestone", &before_milestone, &after_milestone);
+    summary.field("parent", &before_parent, &after_parent);
+    summary.field(
+        "due",
+        &before.due_date.map(format_date).unwrap_or_default(),
+        &issue.due_date.map(format_date).unwrap_or_default(),
+    );
+    if before.description != issue.description {
+        // The text itself is not worth replaying, but a rewrite that drops
+        // sections is exactly what someone auditing the ticket wants to see.
+        let lost: Vec<&str> = ["Spec", "Plan", "Activity Log", "Notes"]
+            .into_iter()
+            .filter(|anchor| {
+                find_section(&before.description, anchor).2
+                    && !find_section(&issue.description, anchor).2
+            })
+            .collect();
+        if lost.is_empty() {
+            summary.note("description rewritten");
+        } else {
+            summary.note(format!(
+                "description rewritten, dropped ## {}",
+                lost.join(", ## ")
+            ));
+        }
+    }
+    for l in &added_labels {
+        summary.note(format!("+label {l}"));
+    }
+    for l in &removed_labels {
+        summary.note(format!("-label {l}"));
+    }
+    for (verb, keys) in [
+        ("blocks", &summary_blocks),
+        ("blocked-by", &summary_blocked_by),
+        ("related-to", &summary_related_to),
+    ] {
+        for k in keys {
+            summary.note(format!("+{verb} {k}"));
+        }
+    }
+    for k in &summary_remove_relation {
+        summary.note(format!("-relation {k}"));
+    }
+    if !summary.is_empty() {
+        let (id, message) = (issue.id, summary.message());
+        store
+            .call(move |conn| {
+                if let Some(i) = issues::get_by_id(conn, id)? {
+                    crate::audit::record(conn, &i, "edit", &message);
+                }
+                Ok(())
+            })
+            .await?;
+    }
+
     print_issue_result(&store, &issue, "updated", a.json).await
 }
 
@@ -1351,6 +1479,10 @@ async fn log(db: &Option<String>, a: LogArgs) -> CliResult<()> {
                 "UPDATE issues SET description = ?1, updated_at = ?2 WHERE id = ?3",
                 rusqlite::params![new_desc, updated, issue.id],
             )?;
+            // Also record it durably: the markdown line lives in the
+            // description and a later `--description` rewrite would erase it,
+            // taking the note out of the timeline with it.
+            crate::audit::record(&tx, &issue, "log", &entry);
             tx.commit()?;
             Ok(())
         })
@@ -1390,6 +1522,12 @@ async fn tick(db: &Option<String>, a: TickArgs) -> CliResult<()> {
                 "UPDATE issues SET description = ?1, updated_at = ?2 WHERE id = ?3",
                 rusqlite::params![new_desc, now, issue.id],
             )?;
+            crate::audit::record(
+                &tx,
+                &issue,
+                "plan",
+                &format!("ticked Task {task} Step {step}"),
+            );
             tx.commit()?;
             Ok(now)
         })
@@ -1429,6 +1567,7 @@ async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
 
     let store = store_open::open(db).await?;
     let lookup = key.clone();
+    let child_origin = key.clone();
     let task = a.task;
     let step = a.step;
     let title = a.title.clone();
@@ -1529,6 +1668,25 @@ async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
                 "UPDATE issues SET description = ?1, updated_at = ?2 WHERE id = ?3",
                 rusqlite::params![new_desc, now, parent_id],
             )?;
+
+            // Both sides of the split get the record: the parent lost a step,
+            // the new issue says where it came from.
+            if let Some(parent_issue) = issues::get_by_id(&tx, parent_id)? {
+                crate::audit::record(
+                    &tx,
+                    &parent_issue,
+                    "plan",
+                    &format!("promoted Task {task} Step {step} → {new_key}"),
+                );
+            }
+            if let Some(child) = issues::get_by_id(&tx, new_id)? {
+                crate::audit::record(
+                    &tx,
+                    &child,
+                    "plan",
+                    &format!("promoted from {} Task {task} Step {step}", child_origin),
+                );
+            }
 
             tx.commit()?;
             Ok(new_key)
@@ -1811,27 +1969,23 @@ fn parse_issue_key_lined(s: &str, line_no: i64) -> Result<String, CliError> {
         .map_err(|e| CliError::Coded(e.code(), format!("line {line_no}: {}", e.message())))
 }
 
-async fn mv(db: &Option<String>, key: String, status: String) -> CliResult<()> {
+async fn mv(
+    db: &Option<String>,
+    key: String,
+    status: String,
+    note: Option<String>,
+) -> CliResult<()> {
     let key = parse_issue_key(&key)?;
     let status = parse_status(&status)?;
     let store = store_open::open(db).await?;
     store
         .call(move |conn| {
             let issue = issues::get_by_key(conn, &key)?.ok_or(cliban_core::Error::NotFound)?;
+            let from = issue.status.clone();
             issues::move_issue(conn, &issue, &status)?;
+            // The move is the event worth recording; `--note` carries the why.
+            crate::audit::record_move(conn, &issue, &from, &status, note.as_deref());
             Ok(())
-        })
-        .await?;
-    Ok(())
-}
-
-async fn rm(db: &Option<String>, key: String) -> CliResult<()> {
-    let key = parse_issue_key(&key)?;
-    let store = store_open::open(db).await?;
-    store
-        .call(move |conn| {
-            let issue = issues::get_by_key(conn, &key)?.ok_or(cliban_core::Error::NotFound)?;
-            issues::delete(conn, &issue)
         })
         .await?;
     Ok(())
@@ -1851,6 +2005,12 @@ async fn set_archived(db: &Option<String>, key: String, archived: bool) -> CliRe
                     ..Default::default()
                 },
             )?;
+            crate::audit::record(
+                conn,
+                &issue,
+                "archive",
+                if archived { "archived" } else { "unarchived" },
+            );
             Ok(())
         })
         .await?;

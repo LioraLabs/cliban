@@ -4,9 +4,11 @@ mod cmd;
 mod descmd;
 use cliban::migrate;
 
+mod audit;
 mod errors;
 mod output;
 mod search;
+mod since;
 mod store_open;
 
 #[derive(clap::Args)]
@@ -42,6 +44,8 @@ enum Command {
     Label(cmd::label::LabelArgs),
     /// Manage issues
     Issue(cmd::issue::IssueArgs),
+    /// What changed on the board recently (newest first)
+    Activity(cmd::activity::ActivityArgs),
     /// Manage milestones
     Milestone(cmd::milestone::MilestoneArgs),
     /// Fuzzy-find issues; print selected key to stdout
@@ -80,6 +84,7 @@ async fn run(cli: Cli) -> errors::CliResult<()> {
         Some(Command::Project(args)) => cmd::project::run(&cli.db, args).await,
         Some(Command::Label(args)) => cmd::label::run(&cli.db, args).await,
         Some(Command::Issue(args)) => cmd::issue::run(&cli.db, args).await,
+        Some(Command::Activity(args)) => cmd::activity::run(&cli.db, args).await,
         Some(Command::Milestone(args)) => cmd::milestone::run(&cli.db, args).await,
         Some(Command::Fff(args)) => cmd::fff::run(&cli.db, args).await,
         Some(Command::MigrateLegacy(args)) => {

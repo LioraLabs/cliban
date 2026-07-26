@@ -205,6 +205,35 @@ pub fn append_activity_log(desc: &str, msg: &str, ts: DateTime<Utc>) -> String {
     format!("{}{}{}", &desc[..start], rebuilt, &desc[end..])
 }
 
+/// Reads back the entries [`append_activity_log`] wrote: `- <ts> — <msg>`,
+/// oldest first. Lines that don't match that shape (hand-written prose, an
+/// entry from some other tool) are skipped rather than guessed at.
+pub fn parse_activity_log(desc: &str) -> Vec<(DateTime<Utc>, String)> {
+    let (start, end, ok) = find_section(desc, "Activity Log");
+    if !ok {
+        return Vec::new();
+    }
+    desc[start..end]
+        .lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix("- ")?;
+            // The separator is an em dash surrounded by spaces; the timestamp
+            // may not contain one, so the first occurrence is the split point.
+            let (stamp, msg) = rest.split_once(" — ")?;
+            let ts = chrono::NaiveDateTime::parse_from_str(
+                stamp.trim(),
+                // Minute precision, as written; fall back to full RFC3339 for
+                // entries someone recorded by hand.
+                ACTIVITY_LOG_TIME_FORMAT,
+            )
+            .map(|t| t.and_utc())
+            .or_else(|_| DateTime::parse_from_rfc3339(stamp.trim()).map(|t| t.with_timezone(&Utc)))
+            .ok()?;
+            Some((ts, msg.trim().to_string()))
+        })
+        .collect()
+}
+
 /// Replaces the M-th step line in task N with the provided `new_line`.
 /// `new_line` must end with a single newline character; otherwise an error is
 /// returned. The caller is responsible for ensuring `new_line` remains a valid
