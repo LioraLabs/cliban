@@ -3,9 +3,8 @@
 
 use std::io::Read;
 
-use cliban_core::contexts::issues::ListOpts;
+use cliban_core::contexts::projects;
 use cliban_core::contexts::projects::{CreateProject, UpdateProject};
-use cliban_core::contexts::{issues, projects};
 use cliban_core::time::format_usec;
 
 use crate::errors::{CliError, CliResult};
@@ -75,9 +74,11 @@ pub enum ProjectCmd {
     Archive { key: String },
     /// Unarchive a project
     Unarchive { key: String },
-    /// Delete a project
+    /// Archives instead of deleting (kept for muscle memory; hidden)
+    #[command(hide = true)]
     Rm {
         key: String,
+        /// accepted and ignored — archiving needs no force
         #[arg(long)]
         force: bool,
     },
@@ -120,7 +121,15 @@ pub async fn run(db: &Option<String>, args: ProjectArgs) -> CliResult<()> {
         }
         ProjectCmd::Archive { key } => set_archived(db, key, true).await,
         ProjectCmd::Unarchive { key } => set_archived(db, key, false).await,
-        ProjectCmd::Rm { key, force } => rm(db, key, force).await,
+        ProjectCmd::Rm { key, force: _ } => {
+            let key = key.to_uppercase();
+            set_archived(db, key.clone(), true).await?;
+            println!(
+                "archived project {key} — cliban archives instead of deleting \
+                 (undo: cliban project unarchive {key})"
+            );
+            Ok(())
+        }
     }
 }
 
@@ -513,36 +522,6 @@ async fn set_archived(db: &Option<String>, key: String, archived: bool) -> CliRe
                 },
             )?;
             Ok(())
-        })
-        .await?;
-    Ok(())
-}
-
-async fn rm(db: &Option<String>, key: String, force: bool) -> CliResult<()> {
-    let key = key.to_uppercase();
-    let store = store_open::open(db).await?;
-    store
-        .call(move |conn| {
-            let issues = issues::list(
-                conn,
-                ListOpts {
-                    project: Some(&key),
-                    archived: false,
-                    ..Default::default()
-                },
-            )?;
-            if !issues.is_empty() && !force {
-                return Err(cliban_core::Error::validation(
-                    "project",
-                    &format!(
-                        "project {} has {} issues; pass --force to delete",
-                        key,
-                        issues.len()
-                    ),
-                ));
-            }
-            let cur = projects::fetch_by_key(conn, &key)?;
-            projects::delete(conn, &cur)
         })
         .await?;
     Ok(())
