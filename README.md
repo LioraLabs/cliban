@@ -39,8 +39,24 @@ cliban             # opens the TUI
 `hjkl` move the cursor · `H/L` move the focused issue across columns · `J/K` reorder it
 within a column · `Enter` detail · `e` edit ($EDITOR) · `E` edit project/milestone ·
 `n` new issue · `N` new milestone · `t` cycle milestone tag · `a` archive ·
-`m` milestone overlay (`Enter` filters to the highlighted milestone) ·
-`M` cycle milestone filter · `/` fuzzy find · `r` refresh · `?` help · `q` quit.
+`m` milestone page · `M` cycle milestone filter · `/` fuzzy find · `r` refresh ·
+`?` help · `q` quit.
+
+### Milestone page (`m`)
+
+A full-screen view of every milestone — across all projects when the board is
+unscoped — ordered by *recent activity* (the newest activity-log entry on any
+of the milestone's issues), with done/total progress, target date and a detail
+pane for the focused row.
+
+Type to filter by name or project key · `j/k` move · `Enter` scopes the board
+to the milestone (and to its project) · `Tab` cycles the status bucket
+(open / completed / cancelled / all) · `S` cycles the sort (activity / name /
+target) · `C` cycles the focused milestone's own status · `E` edit ($EDITOR) ·
+`N` new · `Esc` back to the board.
+
+Cancelled is the archived state for a milestone: there is no separate archive
+flag.
 
 ## Hosting shared boards over SSH (cliband)
 
@@ -181,6 +197,76 @@ Three coordinated surfaces share one matcher:
 - `/` inside `cliban tui` — fuzzy filter overlay; selecting a card snaps the board cursor onto it.
 
 The matcher weights matches across title (×3.0), key (×2.5), labels (×2.0), and description (×1.0). Default scope is all non-archived issues across all projects; narrow with `--project`, `--label`, etc.
+
+## What changed recently
+
+```bash
+cliban activity                                   # last 24h, every project
+cliban activity --since yesterday --json
+cliban activity --since 3d --project CLI --limit 200 --json
+```
+
+A merged, newest-first feed: `created` / `completed` when an issue opened or
+finished in the window, `updated` for any other change neither of those
+explains, `status` / `archive` for the transitions cliban recorded itself, and
+one `log` event per `## Activity Log` line written in the window. `--json`
+emits NDJSON of `ts`, `key`, `project`, `kind`, `issue_status`, `title`,
+`message`, `actor`, `milestone` (`issue_status` is the issue's status *now*,
+not at the time of the event).
+
+### Recorded automatically
+
+Every mutation writes to the issue's timeline without being asked — moves,
+archives, field edits, label and relation changes, plan ticks, promotions, and
+`issue log` notes — so the history is complete even when nobody remembers to
+narrate it:
+
+```bash
+export CLIBAN_ACTOR=claude                # attribute what you do
+cliban issue mv CLI-42 blocked --note "upstream fix needed"
+cliban issue edit CLI-42 --priority urgent --label regression
+cliban issue show CLI-42 --section activity
+#   - 15:10Z — [claude] found it: positions collapse after ~50 reorders
+#   - 15:12Z — [claude] in-progress → blocked: upstream fix needed
+#   - 15:13Z — [claude] priority: high → urgent, +label regression
+```
+
+Nothing is ever deleted. A deleted row would take its timeline with it, so
+`issue rm` and `project rm` archive, and `milestone rm` cancels — each reports
+what it really did and how to undo it:
+
+```console
+$ cliban issue rm CLI-12
+archived CLI-12 — cliban archives instead of deleting (undo: cliban issue unarchive CLI-12)
+```
+
+(`label rm` still deletes: a label is a tag, not a work item.)
+
+Two sources feed that view: the entries cliban records (`activity_log_entries`,
+attributed and durable) and the `## Activity Log` markdown an author writes
+with `cliban issue log`. `issue log` writes both, so a note survives a later
+`--description` rewrite that erases the markdown — and the rewrite itself is
+recorded as `description rewritten, dropped ## Activity Log`. Reads merge the
+two chronologically and de-duplicate, so nothing appears twice.
+
+`--since` — and `issue ls --updated-since`, which shares the same parser —
+accepts a duration (`45s`, `90m`, `4h`, `3d`, `2w`), `today`, `yesterday`, a
+bare date (`2026-07-25`), or a full RFC3339 timestamp. All UTC.
+
+## Milestones from the CLI
+
+```bash
+cliban milestone ls --project CLI                      # name, status, target
+cliban milestone ls                                    # every project
+cliban milestone ls --sort activity --stats            # + done/total and recency
+cliban milestone ls --status open --sort target        # what's due next
+cliban milestone edit --project CLI --name v0.1 --status completed
+```
+
+`--sort` takes `activity` (most recently worked on first), `name` (the default)
+or `target` (soonest first, undated last). `--stats` adds a `done/total` column
+and a last-activity column, and — with `--json` — the `done_count`,
+`last_activity` and `last_activity_human` keys.
 
 ## Persistent agent memory
 
