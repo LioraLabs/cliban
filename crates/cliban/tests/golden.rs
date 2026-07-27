@@ -105,6 +105,31 @@ fn run(bin: &str, db: &str, args: &[&str], stdin: Option<&str>) -> Run {
     run_env(bin, db, args, stdin, &[])
 }
 
+/// Strip the `description` member from every JSON object in `s`.
+///
+/// The one field the Rust implementation deliberately no longer agrees with the
+/// frozen Go oracle on. A list command emitting a full body per row made
+/// `issue ls --json` 2.27 MB on a real board, 95% of it descriptions that list
+/// consumers do not read, so `ls`-shaped commands now omit the body and take
+/// `--full` to restore it. Go predates that flag and exits non-zero on it, so a
+/// parity case cannot simply ask for the old shape; it compares everything
+/// else instead.
+///
+/// Applied per-case, never globally: `issue show --json` and the mutation
+/// echoes still emit `description` and are still compared on it in full, which
+/// is where a description-corrupting bug would actually show up.
+fn strip_description(s: &str) -> String {
+    // Compact NDJSON (`issue ls`) puts the member inline; pretty output
+    // (`milestone show`) puts it on its own line. Handle both, and apply the
+    // same transform to each side so what survives is compared verbatim.
+    let inline = Regex::new(r#""description":\s*("(\\.|[^"\\])*"|null),?"#).unwrap();
+    s.lines()
+        .filter(|l| !l.trim_start().starts_with(r#""description":"#))
+        .map(|l| inline.replace_all(l, "").into_owned())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Replace volatile timestamp fields with a stable placeholder so the two
 /// binaries' outputs can be compared. Scores and positions are NOT volatile and
 /// are deliberately left untouched.
@@ -126,6 +151,25 @@ fn assert_parity_env(
     stdin: Option<&str>,
     extra_env: &[(&str, &str)],
 ) {
+    assert_parity_env_opts(seed, cmd, stdin, extra_env, false)
+}
+
+/// `lean` marks a case whose Rust output intentionally omits `description`
+/// (see [`strip_description`]); everything else is still compared verbatim.
+fn assert_parity_env_opts(
+    seed: &[&[&str]],
+    cmd: &[&str],
+    stdin: Option<&str>,
+    extra_env: &[(&str, &str)],
+    lean: bool,
+) {
+    let prep = |s: &str| {
+        if lean {
+            normalize(&strip_description(s))
+        } else {
+            normalize(s)
+        }
+    };
     let gdb = tmp_db("go");
     let rdb = tmp_db("rust");
     for s in seed {
@@ -135,8 +179,8 @@ fn assert_parity_env(
     let g = run_env(&go_bin(), &gdb, cmd, stdin, extra_env);
     let r = run_env(&rust_bin(), &rdb, cmd, stdin, extra_env);
     assert_eq!(
-        normalize(&g.stdout),
-        normalize(&r.stdout),
+        prep(&g.stdout),
+        prep(&r.stdout),
         "stdout mismatch for {:?}\nGO:\n{}\nRUST:\n{}",
         cmd,
         g.stdout,
@@ -159,6 +203,30 @@ fn assert_parity_env(
 
 fn assert_parity(seed: &[&[&str]], cmd: &[&str], stdin: Option<&str>) {
     assert_parity_env(seed, cmd, stdin, &[]);
+}
+
+/// Parity for a list-shaped `--json` case, where the Rust binary intentionally
+/// omits `description` and Go (frozen pre-`--full`) still emits it.
+fn assert_parity_lean(seed: &[&[&str]], cmd: &[&str], stdin: Option<&str>) {
+    assert_parity_env_opts(seed, cmd, stdin, &[], true);
+}
+
+/// True for the commands whose Rust output is lean: `issue ls` (including its
+/// `--search` form), `issue blocked`, `milestone ls`, the issue rows nested in
+/// `milestone show --with-issues`, and `fff` (always NDJSON, no flag).
+/// `issue show`, the mutation echoes, `import`, and every human-table case stay
+/// total and are still compared on `description`.
+fn is_lean_json_case(cmd: &[&str]) -> bool {
+    match (cmd.first().copied(), cmd.get(1).copied()) {
+        (Some("fff"), _) => true,
+        (Some("milestone"), Some("show")) => {
+            cmd.contains(&"--json") && cmd.contains(&"--with-issues")
+        }
+        (Some("issue"), Some("ls"))
+        | (Some("issue"), Some("blocked"))
+        | (Some("milestone"), Some("ls")) => cmd.contains(&"--json"),
+        _ => false,
+    }
 }
 
 /// The shared, realistic seed dataset replayed through each binary.
@@ -246,11 +314,16 @@ macro_rules! skip_if_no_go {
     };
 }
 
-/// Convenience: run a list of `cmd`s against the base seed.
+/// Convenience: run a list of `cmd`s against the base seed. List-shaped
+/// `--json` cases are compared leanly (see [`is_lean_json_case`]).
 fn parity_all(seed: &[Vec<&'static str>], cmds: &[&[&str]]) {
     for cmd in cmds {
         let s: Vec<&[&str]> = seed.iter().map(|v| v.as_slice()).collect();
-        assert_parity(&s, cmd, None);
+        if is_lean_json_case(cmd) {
+            assert_parity_lean(&s, cmd, None);
+        } else {
+            assert_parity(&s, cmd, None);
+        }
     }
 }
 

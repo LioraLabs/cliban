@@ -15,7 +15,7 @@ use rusqlite::OptionalExtension;
 use crate::descmd;
 use crate::descmd::find_section;
 use crate::errors::{CliError, CliResult};
-use crate::output::{build_issue_json, write_issue_table, IssueJsonInputs, IssueRow, RelationOut};
+use crate::output::{build_issue_json, write_issue_table, Detail, IssueJsonInputs, IssueRow, RelationOut};
 use crate::store_open;
 
 #[derive(clap::Args)]
@@ -71,6 +71,9 @@ pub enum IssueCmd {
         project: Option<String>,
         #[arg(long)]
         json: bool,
+        /// include each issue's `description` body in --json output
+        #[arg(long)]
+        full: bool,
     },
 }
 
@@ -118,6 +121,9 @@ pub struct LsArgs {
     /// NDJSON output (one compact JSON object per line)
     #[arg(long)]
     json: bool,
+    /// include each issue's `description` body in --json output
+    #[arg(long)]
+    full: bool,
     /// include archived issues
     #[arg(long)]
     archived: bool,
@@ -344,7 +350,7 @@ pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
         IssueCmd::Archive { key } => set_archived(db, key, true).await,
         IssueCmd::Unarchive { key } => set_archived(db, key, false).await,
         IssueCmd::Current { json } => current(db, json).await,
-        IssueCmd::Blocked { project, json } => blocked(db, project, json).await,
+        IssueCmd::Blocked { project, json, full } => blocked(db, project, json, full).await,
     }
 }
 
@@ -584,7 +590,7 @@ async fn print_issue_result(store: &Store, issue: &Issue, verb: &str, json: bool
         let inputs = issue_json_inputs(store, issue).await?;
         println!(
             "{}",
-            serde_json::to_string_pretty(&build_issue_json(inputs)).unwrap()
+            serde_json::to_string_pretty(&build_issue_json(inputs, Detail::Full)).unwrap()
         );
     } else {
         println!("{verb} {}: {}", issue.key, issue.title);
@@ -736,7 +742,7 @@ async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
         let inputs = issue_json_inputs(&store, &issue).await?;
         println!(
             "{}",
-            serde_json::to_string_pretty(&build_issue_json(inputs)).unwrap()
+            serde_json::to_string_pretty(&build_issue_json(inputs, Detail::Full)).unwrap()
         );
         return Ok(());
     }
@@ -971,7 +977,7 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
             let inputs = issue_json_inputs(&store, i).await?;
             println!(
                 "{}",
-                serde_json::to_string(&build_issue_json(inputs)).unwrap()
+                serde_json::to_string(&build_issue_json(inputs, Detail::from_full_flag(a.full))).unwrap()
             );
         }
         return Ok(());
@@ -1007,7 +1013,7 @@ async fn run_search(db: &Option<String>, a: &LsArgs, query: String) -> CliResult
             let inputs = issue_json_inputs(&store, &m.issue).await?;
             println!(
                 "{}",
-                serde_json::to_string(&crate::output::build_search_match_json(inputs, m.score))
+                serde_json::to_string(&crate::output::build_search_match_json(inputs, m.score, Detail::from_full_flag(a.full)))
                     .unwrap()
             );
         }
@@ -1937,7 +1943,7 @@ async fn import(db: &Option<String>, a: ImportArgs) -> CliResult<()> {
             let inputs = issue_json_inputs(&store, &issue).await?;
             println!(
                 "{}",
-                serde_json::to_string(&build_issue_json(inputs)).unwrap()
+                serde_json::to_string(&build_issue_json(inputs, Detail::Full)).unwrap()
             );
         }
     }
@@ -2102,7 +2108,7 @@ async fn current(db: &Option<String>, json: bool) -> CliResult<()> {
         let inputs = issue_json_inputs(&store, &issue).await?;
         println!(
             "{}",
-            serde_json::to_string_pretty(&build_issue_json(inputs)).unwrap()
+            serde_json::to_string_pretty(&build_issue_json(inputs, Detail::Full)).unwrap()
         );
     } else {
         println!("{} {}", issue.key, issue.title);
@@ -2110,7 +2116,12 @@ async fn current(db: &Option<String>, json: bool) -> CliResult<()> {
     Ok(())
 }
 
-async fn blocked(db: &Option<String>, project: Option<String>, json: bool) -> CliResult<()> {
+async fn blocked(
+    db: &Option<String>,
+    project: Option<String>,
+    json: bool,
+    full: bool,
+) -> CliResult<()> {
     let project = project.map(|p| p.to_uppercase()).filter(|p| !p.is_empty());
     let store = store_open::open(db).await?;
     let pk = project.clone();
@@ -2124,7 +2135,7 @@ async fn blocked(db: &Option<String>, project: Option<String>, json: bool) -> Cl
             let inputs = issue_json_inputs(&store, i).await?;
             println!(
                 "{}",
-                serde_json::to_string(&build_issue_json(inputs)).unwrap()
+                serde_json::to_string(&build_issue_json(inputs, Detail::from_full_flag(full))).unwrap()
             );
         }
         return Ok(());

@@ -45,14 +45,47 @@ fn opt_str(o: &Option<String>) -> Value {
     }
 }
 
-pub fn build_issue_json(i: IssueJsonInputs) -> Value {
+/// Whether a serialised row carries its `description` body.
+///
+/// A list command emits one row per issue and a body per row; on a real board
+/// that is the whole payload. `cliban issue ls --project COOK --json` was
+/// 2.27 MB, 95% of it descriptions that list consumers do not read — the
+/// documented recipes all go `ls` to find keys, then `show` for detail. `ls`
+/// and `show` shared one serialiser, so a list command emitted full bodies
+/// with no way to decline them.
+///
+/// Every call site states which it wants, so a new list command cannot inherit
+/// `Full` by forgetting to think about it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Detail {
+    /// Every field except `description`. The default for query commands that
+    /// return many rows.
+    Brief,
+    /// Every field. Single-issue output, mutation echoes, and `--full`.
+    Full,
+}
+
+impl Detail {
+    /// `Full` when the caller passed `--full`, else `Brief`.
+    pub fn from_full_flag(full: bool) -> Self {
+        if full {
+            Self::Full
+        } else {
+            Self::Brief
+        }
+    }
+}
+
+pub fn build_issue_json(i: IssueJsonInputs, detail: Detail) -> Value {
     let mut m = Map::new();
     m.insert("archived".into(), json!(i.archived));
     if let Some(c) = &i.completed_at {
         m.insert("completed_at".into(), json!(c));
     }
     m.insert("created_at".into(), json!(i.created_at));
-    m.insert("description".into(), json!(i.description));
+    if detail == Detail::Full {
+        m.insert("description".into(), json!(i.description));
+    }
     m.insert("due_date".into(), opt_str(&i.due_date));
     m.insert(
         "git_branch_name".into(),
@@ -85,8 +118,8 @@ pub fn build_issue_json(i: IssueJsonInputs) -> Value {
 /// `score` field, with keys in alphabetical order (Go serializes a
 /// `map[string]any` so adding `out["score"]` lands it alphabetically between
 /// `relations` and `status`).
-pub fn build_search_match_json(i: IssueJsonInputs, score: i64) -> Value {
-    let base = build_issue_json(i);
+pub fn build_search_match_json(i: IssueJsonInputs, score: i64, detail: Detail) -> Value {
+    let base = build_issue_json(i, detail);
     let mut entries: Vec<(String, Value)> = match base {
         Value::Object(m) => m.into_iter().collect(),
         _ => unreachable!("build_issue_json always returns an object"),
@@ -166,10 +199,13 @@ pub fn build_milestone_json(
     created_at: &str,
     updated_at: &str,
     issue_count: i64,
+    detail: Detail,
 ) -> Value {
     let mut m = Map::new();
     m.insert("created_at".into(), json!(created_at));
-    m.insert("description".into(), json!(description));
+    if detail == Detail::Full {
+        m.insert("description".into(), json!(description));
+    }
     m.insert("issue_count".into(), json!(issue_count));
     m.insert("name".into(), json!(name));
     m.insert("project".into(), opt_str(&project));
@@ -303,9 +339,14 @@ pub fn write_search_table(rows: &[SearchRow]) -> String {
 mod tests {
     use super::*;
 
+    /// The pre-`Detail` shape, for tests that assert the full key set.
+    fn build_issue_json_full(i: IssueJsonInputs) -> Value {
+        build_issue_json(i, Detail::Full)
+    }
+
     #[test]
     fn issue_json_keys_alpha_and_position_is_integer() {
-        let v = build_issue_json(IssueJsonInputs {
+        let v = build_issue_json_full(IssueJsonInputs {
             key: "CLI-1".into(),
             title: "First".into(),
             description: "".into(),
@@ -341,7 +382,7 @@ mod tests {
 
     #[test]
     fn issue_json_completed_at_present_when_some() {
-        let v = build_issue_json(IssueJsonInputs {
+        let v = build_issue_json_full(IssueJsonInputs {
             key: "CLI-9".into(),
             title: "Done thing".into(),
             description: "d".into(),
@@ -431,6 +472,7 @@ mod tests {
             "2026-01-01T00:00:00.000000Z",
             "2026-01-02T00:00:00.000000Z",
             5,
+            Detail::Full,
         );
         let s = serde_json::to_string(&v).unwrap();
         assert!(s.starts_with(r#"{"created_at":"#), "got {s}");
@@ -439,7 +481,7 @@ mod tests {
             "got {s}"
         );
 
-        let v2 = build_milestone_json("M2", None, "", None, "planned", "t", "t", 0);
+        let v2 = build_milestone_json("M2", None, "", None, "planned", "t", "t", 0, Detail::Full);
         let s2 = serde_json::to_string(&v2).unwrap();
         assert!(s2.contains(r#""project":null"#), "got {s2}");
         assert!(s2.contains(r#""target_date":null"#), "got {s2}");

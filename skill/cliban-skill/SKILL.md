@@ -133,11 +133,23 @@ read and most writes.
 Stable and agent-facing. Optional refs are `null` (never omitted), so
 destructuring is safe:
 
+**`description` is a `show` field, not an `ls` field.** Listing commands omit
+the body; `--full` restores it. That is not a nicety: on a real board the
+bodies ARE the payload — `issue ls --project COOK --json` was 2.27 MB, 95% of
+it descriptions, against 119 KB without them. Reach for `ls` to find keys and
+`show` to read one issue. Pass `--full` only when you genuinely need every body
+at once, and never without `--project`.
+
+Lean by default: `issue ls`, `issue blocked`, `milestone ls`, `fff`, and the
+issues nested in `milestone show --with-issues`.
+Always full: `issue show`, `issue current`, `milestone show`'s own body, the
+JSON echoed by `add` / `edit` / `mv` / `import`.
+
 ```json
 {
   "key":            "CLI-42",
   "title":          "...",
-  "description":    "...",
+  "description":    "...",     // ls: omitted unless --full; show: always
   "status":         "backlog",
   "priority":       "high",
   "position":       12000.5,
@@ -165,6 +177,26 @@ cliban issue ls --status in-progress --json
 cliban issue blocked --json                # what's stuck on something
 cliban milestone ls --sort activity --stats --json
 ```
+
+Scope reads with `--project KEY` once you know which board you are on. An
+unfiltered `ls` walks every project on the machine.
+
+### Finding a milestone and its work
+
+Two calls, not five. `milestone ls` gives you the exact names (needed because
+milestones are addressed by name, not a key); `milestone show` gives you the
+one you want.
+
+```bash
+cliban milestone ls --project COOK --json | jq -c '{name, status}'
+cliban milestone show "code-path unification" --project COOK --json | jq -r '.description'
+cliban issue ls --project COOK --milestone "code-path unification" --json \
+  | jq -c '{key, title, status, priority}'
+```
+
+Do NOT read a milestone's spec out of `milestone ls` — it is not there, and it
+was never the right call even when it was: you would be fetching every
+milestone on the board to read one.
 
 ## What changed recently
 

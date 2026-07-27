@@ -13,7 +13,7 @@ use cliban_core::Store;
 
 use crate::cmd::issue::issue_json_inputs;
 use crate::errors::{CliError, CliResult};
-use crate::output::{build_issue_json, write_issue_table, IssueRow};
+use crate::output::{build_issue_json, write_issue_table, Detail, IssueRow};
 use crate::store_open;
 
 #[derive(clap::Args)]
@@ -56,6 +56,9 @@ pub enum MilestoneCmd {
         stats: bool,
         #[arg(long)]
         json: bool,
+        /// include each milestone's `description` body in --json output
+        #[arg(long)]
+        full: bool,
     },
     /// Show a milestone (accepts positional NAME or --name)
     Show {
@@ -69,6 +72,9 @@ pub enum MilestoneCmd {
         json: bool,
         #[arg(long = "with-issues")]
         with_issues: bool,
+        /// include each listed issue's `description` body (--with-issues)
+        #[arg(long)]
+        full: bool,
     },
     /// Edit a milestone
     Edit {
@@ -130,14 +136,16 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             sort,
             stats,
             json,
-        } => ls(db, project, status, sort, stats, json).await,
+            full,
+        } => ls(db, project, status, sort, stats, json, full).await,
         MilestoneCmd::Show {
             name,
             project,
             name_flag,
             json,
             with_issues,
-        } => show(db, name, project, name_flag, json, with_issues).await,
+            full,
+        } => show(db, name, project, name_flag, json, with_issues, full).await,
         MilestoneCmd::Edit {
             project,
             name,
@@ -260,7 +268,7 @@ async fn issue_count(store: &Store, project: String, milestone: String) -> CliRe
     Ok(n)
 }
 
-fn milestone_json(m: &Milestone, project: &str, count: i64) -> Value {
+fn milestone_json(m: &Milestone, project: &str, count: i64, detail: Detail) -> Value {
     crate::output::build_milestone_json(
         &m.name,
         Some(project.to_string()),
@@ -270,6 +278,7 @@ fn milestone_json(m: &Milestone, project: &str, count: i64) -> Value {
         &format_usec(m.inserted_at),
         &format_usec(m.updated_at),
         count,
+        detail,
     )
 }
 
@@ -306,7 +315,7 @@ async fn add(
 
     if json {
         let count = issue_count(&store, project_key.clone(), m.name.clone()).await?;
-        let v = milestone_json(&m, &project_key, count);
+        let v = milestone_json(&m, &project_key, count, Detail::Full);
         println!("{}", serde_json::to_string_pretty(&v).unwrap());
     } else {
         println!("created milestone {} in {}", m.name, project_key);
@@ -321,6 +330,7 @@ async fn ls(
     sort: String,
     stats: bool,
     json: bool,
+    full: bool,
 ) -> CliResult<()> {
     let project_key = project.map(|p| p.to_uppercase());
     let sort = milestones::Sort::parse(&sort).ok_or_else(|| {
@@ -351,7 +361,7 @@ async fn ls(
             let v = if stats {
                 milestone_stats_json(s, now)
             } else {
-                milestone_json(&s.milestone, &s.project_key, s.total)
+                milestone_json(&s.milestone, &s.project_key, s.total, Detail::from_full_flag(full))
             };
             println!("{}", serde_json::to_string(&v).unwrap());
         }
@@ -435,6 +445,7 @@ async fn show(
     name_flag: Option<String>,
     json: bool,
     with_issues: bool,
+    full: bool,
 ) -> CliResult<()> {
     // name = positional XOR --name (equal is ok); none → validation error.
     let mut resolved = name_flag.clone().unwrap_or_default();
@@ -493,7 +504,7 @@ async fn show(
             let mut arr = Vec::with_capacity(issue_list.len());
             for i in &issue_list {
                 let inputs = issue_json_inputs(&store, i).await?;
-                arr.push(build_issue_json(inputs));
+                arr.push(build_issue_json(inputs, Detail::from_full_flag(full)));
             }
             map.insert("issues".into(), Value::Array(arr));
         }
