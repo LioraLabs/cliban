@@ -17,6 +17,17 @@ pub struct Data {
     on_mutate: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
+/// A status entry whose move landed in done — the same test the activity
+/// page's closed filter applies, on the raw row.
+fn lands_done(kind: &str, message: &str) -> bool {
+    kind == "status"
+        && message
+            .rsplit('→')
+            .next()
+            .map(|t| t.trim_start().starts_with("done"))
+            .unwrap_or(false)
+}
+
 #[derive(Debug)]
 pub struct DataError(pub String);
 impl std::fmt::Display for DataError {
@@ -97,22 +108,55 @@ impl Data {
     }
 
     /// Milestones with their rollups, most recently worked on first. `None`
-    /// spans every project — the milestone page's unscoped view.
+    /// spans every project — the milestone page's unscoped view. Each also
+    /// carries an 8-week closes histogram from the activity log, for the
+    /// detail pane's burndown sparkline.
     pub fn load_milestones(&self, project: Option<&str>) -> Result<Vec<MilestoneRef>, DataError> {
         let project = project.map(str::to_string);
+        let now = chrono::Utc::now();
         let ms = self.rt.block_on(self.store.call(move |conn| {
-            milestones::summaries(
+            let sums = milestones::summaries(
                 conn,
                 milestones::SummaryOpts {
                     project: project.as_deref(),
                     status: None,
                     sort: milestones::Sort::Activity,
                 },
-            )
+            )?;
+            // Bucket done-moves by (milestone, week). One pass over the last
+            // eight weeks of the log, issue→milestone resolved through a
+            // cache so a busy issue costs one lookup.
+            let mut closes: std::collections::HashMap<i64, [i64; 8]> =
+                std::collections::HashMap::new();
+            let mut issue_ms: std::collections::HashMap<i64, Option<i64>> =
+                std::collections::HashMap::new();
+            for e in activity_log::list_since(conn, now - chrono::Duration::weeks(8))? {
+                if !lands_done(&e.kind, &e.message) {
+                    continue;
+                }
+                let mid = match issue_ms.get(&e.issue_id) {
+                    Some(m) => *m,
+                    None => {
+                        let m = issues::get_by_id(conn, e.issue_id)?.and_then(|i| i.milestone_id);
+                        issue_ms.insert(e.issue_id, m);
+                        m
+                    }
+                };
+                let Some(mid) = mid else { continue };
+                let weeks_ago = ((now - e.ts).num_days() / 7).clamp(0, 7) as usize;
+                closes.entry(mid).or_default()[7 - weeks_ago] += 1;
+            }
+            Ok(sums
+                .into_iter()
+                .map(|s| {
+                    let closes_8w = closes.get(&s.milestone.id).copied().unwrap_or_default();
+                    (s, closes_8w)
+                })
+                .collect::<Vec<_>>())
         }))?;
         Ok(ms
             .into_iter()
-            .map(|s| MilestoneRef {
+            .map(|(s, closes_8w)| MilestoneRef {
                 id: s.milestone.id,
                 project: s.project_key,
                 name: s.milestone.name,
@@ -125,6 +169,7 @@ impl Data {
                 total: s.total,
                 done: s.done,
                 last_activity: s.last_activity,
+                closes_8w,
             })
             .collect())
     }
@@ -822,6 +867,27 @@ mod tests {
         let rels = d.load_relations("PULSE-2").unwrap();
         assert_eq!(rels[0].kind, "blocks");
         assert!(!rels[0].open_blocker());
+    }
+
+    #[test]
+    fn milestone_closes_land_in_the_newest_week_bucket() {
+        let d = Data::open_in_memory_for_test();
+        d.seed_project_issue("PULSE", "First");
+        d.create_milestone(
+            "PULSE",
+            &MilestoneBuffer {
+                name: "m1".into(),
+                status: "open".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        d.tag_milestone("PULSE-1", Some("m1".into())).unwrap();
+        d.move_issue("PULSE-1", "done").unwrap();
+        let ms = d.load_milestones(None).unwrap();
+        assert_eq!(ms.len(), 1);
+        assert_eq!(ms[0].closes_8w[7], 1, "just-now close → newest bucket");
+        assert_eq!(ms[0].closes_8w.iter().sum::<i64>(), 1);
     }
 
     #[test]

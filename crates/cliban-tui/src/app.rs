@@ -219,6 +219,9 @@ pub struct MilestoneRef {
     pub total: i64,
     pub done: i64,
     pub last_activity: DateTime<Utc>,
+    /// Issues moved to done per week, oldest week first (8 weeks) — the
+    /// burndown sparkline's buckets, counted from the activity log.
+    pub closes_8w: [i64; 8],
 }
 
 impl MilestoneRef {
@@ -1612,6 +1615,7 @@ mod tests {
             total: 0,
             done: 0,
             last_activity: DateTime::UNIX_EPOCH,
+            closes_8w: [0; 8],
         }
     }
 

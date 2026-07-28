@@ -280,6 +280,12 @@ fn draw_detail(frame: &mut Frame, area: Rect, m: Option<&MilestoneRef>) {
             ),
             Span::styled(empty, dim),
             Span::styled(format!(" {percent}%"), dim),
+            Span::styled("    closes/wk ", dim),
+            Span::styled(
+                sparkline(&m.closes_8w),
+                Style::default().fg(theme::milestone_status_color("completed")),
+            ),
+            Span::styled(format!(" {}", m.closes_8w.iter().sum::<i64>()), dim),
         ]),
     ];
     if !m.description.trim().is_empty() {
@@ -300,6 +306,24 @@ fn draw_detail(frame: &mut Frame, area: Rect, m: Option<&MilestoneRef>) {
 fn bar_parts(percent: u16, width: usize) -> (String, String) {
     let filled = (percent as usize * width).div_ceil(100).min(width);
     ("█".repeat(filled), "░".repeat(width - filled))
+}
+
+/// Eight weekly buckets, oldest left: quiet weeks are dots, busy weeks
+/// scale through the block ramp — a glance says whether the pace holds.
+fn sparkline(buckets: &[i64; 8]) -> String {
+    const LEVELS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let max = buckets.iter().copied().max().unwrap_or(0);
+    buckets
+        .iter()
+        .map(|&v| {
+            if v == 0 {
+                '·'
+            } else {
+                let idx = (v * LEVELS.len() as i64 / max).clamp(1, 8) as usize - 1;
+                LEVELS[idx]
+            }
+        })
+        .collect()
 }
 
 /// In-flight bars fill in the open-status blue; a finished bar goes green.
@@ -338,6 +362,7 @@ mod tests {
             total,
             done,
             last_activity: chrono::Utc::now(),
+            closes_8w: [0, 0, 0, 1, 0, 2, 4, 3],
         }
     }
 
@@ -413,6 +438,25 @@ mod tests {
         for label in ["open", "completed", "cancelled", "all"] {
             assert!(d.contains(label), "missing bucket chip {label}:\n{d}");
         }
+    }
+
+    #[test]
+    fn sparkline_scales_to_the_busiest_week_and_dots_the_quiet_ones() {
+        assert_eq!(sparkline(&[0; 8]), "········");
+        let s = sparkline(&[0, 0, 0, 1, 0, 2, 4, 3]);
+        assert_eq!(s.chars().count(), 8);
+        assert!(s.ends_with("█▆"), "4 is the peak, 3 close behind: {s}");
+        assert!(s.contains('·'), "quiet weeks stay dots: {s}");
+        assert_eq!(sparkline(&[5; 8]), "████████", "uniform pace maxes out");
+    }
+
+    #[test]
+    fn detail_pane_shows_the_burndown() {
+        let mut app = App::new();
+        app.milestones = vec![ms("v0.3-cutover", "open", 12, 18)];
+        let d = render(&app, &MilestonePageState::default());
+        assert!(d.contains("closes/wk"), "{d}");
+        assert!(d.contains("10"), "8-week total missing:\n{d}");
     }
 
     #[test]
