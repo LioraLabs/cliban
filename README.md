@@ -6,6 +6,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square" alt="MIT license"></a>
 </p>
 
+<p align="center"><img src="assets/board.png" width="880" alt="the cliban board"></p>
+
 Your agent wrote a five-task plan, finished two tasks, compacted its context,
 and greeted the next session with a cheerful blank stare? cliban is a
 self-hosted kanban board built for exactly that agent. The spec and the plan
