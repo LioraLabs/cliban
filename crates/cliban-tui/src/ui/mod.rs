@@ -90,12 +90,12 @@ pub fn render(frame: &mut Frame, app: &App) {
         let mut line = theme::hints(MOVE_HELP);
         let mut spans = vec![Span::styled(
             "move to:  ",
-            Style::default().fg(theme::MARKER),
+            Style::default().fg(theme::marker()),
         )];
         spans.append(&mut line.spans);
         spans.push(Span::styled(
             "   any other key cancels",
-            Style::default().fg(theme::DIM),
+            Style::default().fg(theme::dim()),
         ));
         ratatui::text::Line::from(spans)
     } else {
@@ -103,8 +103,8 @@ pub fn render(frame: &mut Frame, app: &App) {
     };
     if let Some(m) = &app.status_msg {
         let mut spans = vec![
-            Span::styled(m.clone(), Style::default().fg(theme::MARKER)),
-            Span::styled("  |  ", Style::default().fg(theme::DIM)),
+            Span::styled(m.clone(), Style::default().fg(theme::marker())),
+            Span::styled("  |  ", Style::default().fg(theme::dim())),
         ];
         spans.extend(status.spans);
         status = ratatui::text::Line::from(spans);

@@ -26,7 +26,7 @@ fn draw_column(frame: &mut Frame, area: Rect, app: &App, col: ColumnId, now_ms: 
     let focused = app.focus.column == col;
     // The column frame stays quiet so the cards carry the color; the header
     // wears the column's hue, and focus lights the whole frame up.
-    let border = if focused { accent } else { theme::DIM };
+    let border = if focused { accent } else { theme::dim() };
     let header = Line::from(vec![
         Span::styled(
             format!(" {} ", col.label()),
@@ -34,7 +34,7 @@ fn draw_column(frame: &mut Frame, area: Rect, app: &App, col: ColumnId, now_ms: 
         ),
         Span::styled(
             format!("({}) ", cards.len()),
-            Style::default().fg(theme::DIM),
+            Style::default().fg(theme::dim()),
         ),
     ]);
     let block = Block::default()
@@ -47,7 +47,10 @@ fn draw_column(frame: &mut Frame, area: Rect, app: &App, col: ColumnId, now_ms: 
     if cards.is_empty() {
         if inner.height > 0 {
             frame.render_widget(
-                Paragraph::new(Line::styled("  · empty ·", Style::default().fg(theme::DIM))),
+                Paragraph::new(Line::styled(
+                    "  · empty ·",
+                    Style::default().fg(theme::dim()),
+                )),
                 Rect::new(inner.x, inner.y, inner.width, 1),
             );
         }

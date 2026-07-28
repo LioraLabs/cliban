@@ -48,7 +48,7 @@ pub fn draw(frame: &mut Frame, area: Rect, view: PickerView) {
     let popup = centered_rect(60, 20, area);
     frame.render_widget(Clear, popup);
 
-    frame.render_widget(theme::popup_block(view.title, theme::ACCENT), popup);
+    frame.render_widget(theme::popup_block(view.title, theme::accent()), popup);
 
     // Inner rect (inside the border): 1-cell margin all around.
     let inner = Rect::new(
@@ -74,7 +74,7 @@ pub fn draw(frame: &mut Frame, area: Rect, view: PickerView) {
     // Query line — `> <typed>_` with the caret rendered as a visible
     // underscore so users see where the cursor is.
     let query_line = Line::from(vec![
-        Span::styled("> ", Style::default().fg(theme::MARKER)),
+        Span::styled("> ", Style::default().fg(theme::marker())),
         Span::raw(view.query),
         Span::styled("_", Style::default().add_modifier(Modifier::SLOW_BLINK)),
     ]);
@@ -98,7 +98,7 @@ pub fn draw(frame: &mut Frame, area: Rect, view: PickerView) {
     let lines: Vec<Line> = if total == 0 {
         vec![Line::styled(
             "  (no matches)",
-            Style::default().fg(theme::DIM),
+            Style::default().fg(theme::dim()),
         )]
     } else {
         view.items[start..end]

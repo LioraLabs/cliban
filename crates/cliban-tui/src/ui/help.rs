@@ -97,7 +97,7 @@ pub fn draw_help(frame: &mut Frame, area: Rect) {
     let height = lines.len() as u16 + 2; // +2 for top/bottom border
     let popup = centered_rect(56, height, area);
     frame.render_widget(Clear, popup);
-    let p = Paragraph::new(lines).block(theme::popup_block("Help · cliban", theme::ACCENT));
+    let p = Paragraph::new(lines).block(theme::popup_block("Help · cliban", theme::accent()));
     frame.render_widget(p, popup);
 }
 
@@ -112,13 +112,15 @@ fn build_lines() -> Vec<Line<'static>> {
         // Dim bold headers let the accent-colored keys carry the page.
         lines.push(Line::from(Span::styled(
             format!(" {}", header),
-            Style::default().fg(theme::DIM).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::dim())
+                .add_modifier(Modifier::BOLD),
         )));
         for (key, desc) in rows.iter() {
             let padded_key = format!("{:<width$}", key, width = KEY_COL_WIDTH);
             lines.push(Line::from(vec![
                 Span::raw("   "),
-                Span::styled(padded_key, Style::default().fg(theme::ACCENT)),
+                Span::styled(padded_key, Style::default().fg(theme::accent())),
                 Span::raw(*desc),
             ]));
         }
@@ -127,7 +129,9 @@ fn build_lines() -> Vec<Line<'static>> {
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
         format!(" {}", FOOTER),
-        Style::default().fg(theme::DIM).add_modifier(Modifier::DIM),
+        Style::default()
+            .fg(theme::dim())
+            .add_modifier(Modifier::DIM),
     )));
     lines.push(Line::raw(""));
     lines

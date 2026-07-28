@@ -27,7 +27,7 @@ pub fn draw_card(frame: &mut Frame, area: Rect, card: &Card, is_focused: bool, n
     let prio = theme::priority_color(&card.priority);
     let border_style = if is_focused {
         Style::default()
-            .fg(theme::ACCENT)
+            .fg(theme::accent())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(prio)
@@ -154,7 +154,7 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(30, 4)).unwrap();
         t.draw(|f| draw_card(f, Rect::new(0, 0, 30, 4), &card("CLI-8", "urgent"), true, 0))
             .unwrap();
-        assert_eq!(t.backend().buffer()[(0, 0)].fg, theme::ACCENT);
+        assert_eq!(t.backend().buffer()[(0, 0)].fg, theme::accent());
         let mut t2 = Terminal::new(TestBackend::new(30, 4)).unwrap();
         t2.draw(|f| {
             draw_card(

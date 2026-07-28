@@ -13,7 +13,7 @@ use ratatui::Frame;
 pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &FuzzyState) {
     let popup = centered_rect(60, 20, area);
     frame.render_widget(Clear, popup);
-    frame.render_widget(theme::popup_block("Fuzzy find", theme::ACCENT), popup);
+    frame.render_widget(theme::popup_block("Fuzzy find", theme::accent()), popup);
     let inner = Rect::new(
         popup.x + 1,
         popup.y + 1,
@@ -32,7 +32,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &FuzzyState) {
         ])
         .split(inner);
     let query_line = Line::from(vec![
-        Span::styled("/ ", Style::default().fg(theme::MARKER)),
+        Span::styled("/ ", Style::default().fg(theme::marker())),
         Span::raw(state.query.as_str()),
         Span::styled("_", Style::default().add_modifier(Modifier::SLOW_BLINK)),
     ]);
@@ -54,7 +54,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &FuzzyState) {
     let lines: Vec<Line> = if total == 0 {
         vec![Line::styled(
             "  (no matches)",
-            Style::default().fg(theme::DIM),
+            Style::default().fg(theme::dim()),
         )]
     } else {
         labels[start..end]

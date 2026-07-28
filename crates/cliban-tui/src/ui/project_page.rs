@@ -31,7 +31,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &ProjectPageState) 
     let rows = project_rows(app, state);
     let cursor = state.cursor.min(rows.len().saturating_sub(1));
 
-    let block = theme::popup_block("Projects", theme::ACCENT).borders(Borders::ALL);
+    let block = theme::popup_block("Projects", theme::accent()).borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height < 3 {
@@ -57,7 +57,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &ProjectPageState) 
     frame.render_widget(Paragraph::new(chips(state, rows.len())), chunks[0]);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(" > ", Style::default().fg(theme::MARKER)),
+            Span::styled(" > ", Style::default().fg(theme::marker())),
             Span::raw(state.query.as_str()),
             Span::styled("_", Style::default().add_modifier(Modifier::SLOW_BLINK)),
         ])),
@@ -83,8 +83,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &ProjectPageState) 
     footer.spans.insert(0, Span::raw("  "));
     if let Some(m) = &app.status_msg {
         let mut spans = vec![
-            Span::styled(format!("  {m}"), Style::default().fg(theme::MARKER)),
-            Span::styled("  |", Style::default().fg(theme::DIM)),
+            Span::styled(format!("  {m}"), Style::default().fg(theme::marker())),
+            Span::styled("  |", Style::default().fg(theme::dim())),
         ];
         spans.extend(footer.spans);
         footer = Line::from(spans);
@@ -100,7 +100,7 @@ fn chips(state: &ProjectPageState, count: usize) -> Line<'static> {
         let accent = match f {
             ProjFilter::Active => theme::milestone_status_color("open"),
             ProjFilter::Archived => theme::milestone_status_color("cancelled"),
-            ProjFilter::All => theme::ACCENT,
+            ProjFilter::All => theme::accent(),
         };
         let style = if f == state.filter {
             Style::default()
@@ -108,14 +108,14 @@ fn chips(state: &ProjectPageState, count: usize) -> Line<'static> {
                 .bg(accent)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::DIM)
+            Style::default().fg(theme::dim())
         };
         spans.push(Span::styled(format!(" {} ", f.label()), style));
         spans.push(Span::raw(" "));
     }
     spans.push(Span::styled(
         format!("   sort: {}   {} shown", state.sort.label(), count),
-        Style::default().fg(theme::DIM),
+        Style::default().fg(theme::dim()),
     ));
     Line::from(spans)
 }
@@ -128,7 +128,7 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, rows: &[usize], cursor: u
             "  nothing in this bucket (Tab switches, / clears with backspace)"
         };
         frame.render_widget(
-            Paragraph::new(Line::styled(msg, Style::default().fg(theme::DIM))),
+            Paragraph::new(Line::styled(msg, Style::default().fg(theme::dim()))),
             area,
         );
         return;
@@ -157,7 +157,7 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, rows: &[usize], cursor: u
 /// Archived rows dim their name so the working set pops in the all bucket.
 fn row_line(p: &ProjectRef, selected: bool, width: usize) -> Line<'static> {
     let base = if selected {
-        Style::default().bg(theme::SELECTION_BG)
+        Style::default().bg(theme::selection_bg())
     } else {
         Style::default()
     };
@@ -166,12 +166,12 @@ fn row_line(p: &ProjectRef, selected: bool, width: usize) -> Line<'static> {
     let percent = percent(p);
     let (filled, empty) = bar_parts(percent, BAR_WIDTH);
     let name_style = if p.archived {
-        style(theme::DIM).add_modifier(Modifier::BOLD)
+        style(theme::dim()).add_modifier(Modifier::BOLD)
     } else {
         base.add_modifier(Modifier::BOLD)
     };
     let marker = if selected {
-        Span::styled("▸ ", style(theme::MARKER))
+        Span::styled("▸ ", style(theme::marker()))
     } else {
         Span::styled("  ", base)
     };
@@ -183,12 +183,15 @@ fn row_line(p: &ProjectRef, selected: bool, width: usize) -> Line<'static> {
         ),
         Span::styled(format!("{:<24} ", truncate(&p.name, 24)), name_style),
         Span::styled(filled, style(bar_color(percent))),
-        Span::styled(format!("{empty} "), style(theme::DIM)),
+        Span::styled(format!("{empty} "), style(theme::dim())),
         Span::styled(format!("{:>7}  ", format!("{}/{}", p.done, p.total)), base),
-        Span::styled(format!("{:>2} ms  ", p.milestones), style(theme::MILESTONE)),
+        Span::styled(
+            format!("{:>2} ms  ", p.milestones),
+            style(theme::milestone_accent()),
+        ),
         Span::styled(
             format!("{:<12}", relative(p.last_activity, chrono::Utc::now())),
-            style(theme::DIM),
+            style(theme::dim()),
         ),
         Span::styled(
             if p.archived { "archived" } else { "" }.to_string(),
@@ -207,14 +210,14 @@ fn row_line(p: &ProjectRef, selected: bool, width: usize) -> Line<'static> {
 fn draw_detail(frame: &mut Frame, area: Rect, p: Option<&ProjectRef>) {
     let block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(theme::DIM));
+        .border_style(Style::default().fg(theme::dim()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let Some(p) = p else {
         return;
     };
 
-    let dim = Style::default().fg(theme::DIM);
+    let dim = Style::default().fg(theme::dim());
     let pct = percent(p);
     let (filled, empty) = bar_parts(pct, DETAIL_BAR_WIDTH);
     let mut lines = vec![

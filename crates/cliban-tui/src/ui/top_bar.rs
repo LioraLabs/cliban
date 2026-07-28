@@ -20,29 +20,32 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         None => Span::styled(
             "▸all".to_string(),
             Style::default()
-                .fg(theme::ACCENT)
+                .fg(theme::accent())
                 .add_modifier(Modifier::BOLD),
         ),
     };
     let milestone_span = match &app.scope.milestone {
-        Some(m) => Span::styled(format!("▸{m}"), Style::default().fg(theme::MILESTONE)),
-        None => Span::styled("—".to_string(), Style::default().fg(theme::DIM)),
+        Some(m) => Span::styled(
+            format!("▸{m}"),
+            Style::default().fg(theme::milestone_accent()),
+        ),
+        None => Span::styled("—".to_string(), Style::default().fg(theme::dim())),
     };
     let count = app.scoped_card_count();
     let blocked = app.blocked_count();
     let blocked_style = if blocked > 0 {
         Style::default()
-            .fg(theme::ALARM)
+            .fg(theme::alarm())
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(theme::DIM)
+        Style::default().fg(theme::dim())
     };
     let mut spans = vec![
         project_span,
         Span::raw("  "),
         milestone_span,
         Span::raw("    "),
-        Span::styled(format!("{count} issues"), Style::default().fg(theme::DIM)),
+        Span::styled(format!("{count} issues"), Style::default().fg(theme::dim())),
         Span::raw("    "),
         Span::styled(format!("⚠ {blocked} blocked"), blocked_style),
     ];
@@ -54,7 +57,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::styled(
             format!("✉ {unseen} new"),
             Style::default()
-                .fg(theme::MARKER)
+                .fg(theme::marker())
                 .add_modifier(Modifier::BOLD),
         ));
     }

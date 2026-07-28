@@ -212,6 +212,7 @@ fn seed_milestone_picker(app: &mut App) {
 }
 
 pub fn run(path: &Path) -> Result<(), DynErr> {
+    crate::ui::theme::load_overrides();
     let data = Data::open(path)?;
     let mut app = App::new();
     // The mailbox badge: pick up where the last session left off. A first

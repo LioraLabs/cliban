@@ -79,11 +79,11 @@ fn render(f: &mut Frame, title: &str, items: &[String], cursor: usize) {
     let list = List::new(items.iter().map(String::as_str))
         .block(crate::ui::theme::popup_block(
             title,
-            crate::ui::theme::ACCENT,
+            crate::ui::theme::accent(),
         ))
         .highlight_style(
             Style::default()
-                .bg(crate::ui::theme::SELECTION_BG)
+                .bg(crate::ui::theme::selection_bg())
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▸ ");

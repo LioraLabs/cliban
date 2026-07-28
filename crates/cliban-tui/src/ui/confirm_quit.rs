@@ -24,7 +24,7 @@ fn draw_confirm(frame: &mut Frame, area: Rect, title: &str, question: &str) {
     let width = (question.chars().count() as u16 + 18).max(40);
     let popup = centered_rect(width, 5, area);
     frame.render_widget(Clear, popup);
-    let block = theme::popup_block(title, theme::MARKER);
+    let block = theme::popup_block(title, theme::marker());
     let body = vec![
         Line::raw(""),
         Line::from(vec![

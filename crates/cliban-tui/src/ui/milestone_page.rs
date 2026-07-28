@@ -36,7 +36,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &MilestonePageState
         Some(p) => format!("Milestones · {p}"),
         None => "Milestones · all projects".to_string(),
     };
-    let block = theme::popup_block(&title, theme::ACCENT).borders(Borders::ALL);
+    let block = theme::popup_block(&title, theme::accent()).borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height < 3 {
@@ -63,7 +63,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &MilestonePageState
     frame.render_widget(Paragraph::new(chips(state, rows.len())), chunks[0]);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(" > ", Style::default().fg(theme::MARKER)),
+            Span::styled(" > ", Style::default().fg(theme::marker())),
             Span::raw(state.query.as_str()),
             Span::styled("_", Style::default().add_modifier(Modifier::SLOW_BLINK)),
         ])),
@@ -91,8 +91,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &MilestonePageState
     footer.spans.insert(0, Span::raw("  "));
     if let Some(m) = &app.status_msg {
         let mut spans = vec![
-            Span::styled(format!("  {m}"), Style::default().fg(theme::MARKER)),
-            Span::styled("  |", Style::default().fg(theme::DIM)),
+            Span::styled(format!("  {m}"), Style::default().fg(theme::marker())),
+            Span::styled("  |", Style::default().fg(theme::dim())),
         ];
         spans.extend(footer.spans);
         footer = Line::from(spans);
@@ -114,7 +114,7 @@ fn chips(state: &MilestonePageState, count: usize) -> Line<'static> {
             StatusFilter::Open => theme::milestone_status_color("open"),
             StatusFilter::Completed => theme::milestone_status_color("completed"),
             StatusFilter::Cancelled => theme::milestone_status_color("cancelled"),
-            StatusFilter::All => theme::ACCENT,
+            StatusFilter::All => theme::accent(),
         };
         let style = if f == state.filter {
             Style::default()
@@ -122,14 +122,14 @@ fn chips(state: &MilestonePageState, count: usize) -> Line<'static> {
                 .bg(accent)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::DIM)
+            Style::default().fg(theme::dim())
         };
         spans.push(Span::styled(format!(" {} ", f.label()), style));
         spans.push(Span::raw(" "));
     }
     spans.push(Span::styled(
         format!("   sort: {}   {} shown", state.sort.label(), count),
-        Style::default().fg(theme::DIM),
+        Style::default().fg(theme::dim()),
     ));
     Line::from(spans)
 }
@@ -142,7 +142,7 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, rows: &[usize], cursor: u
             "  nothing in this bucket (Tab switches, / clears with backspace)"
         };
         frame.render_widget(
-            Paragraph::new(Line::styled(msg, Style::default().fg(theme::DIM))),
+            Paragraph::new(Line::styled(msg, Style::default().fg(theme::dim()))),
             area,
         );
         return;
@@ -176,7 +176,7 @@ fn row_line(m: &MilestoneRef, selected: bool, width: usize) -> Line<'static> {
     let now = chrono::Utc::now();
     let today = now.date_naive();
     let base = if selected {
-        Style::default().bg(theme::SELECTION_BG)
+        Style::default().bg(theme::selection_bg())
     } else {
         Style::default()
     };
@@ -186,7 +186,7 @@ fn row_line(m: &MilestoneRef, selected: bool, width: usize) -> Line<'static> {
     let percent = m.percent();
     let (filled, empty) = bar_parts(percent, BAR_WIDTH);
     let marker = if selected {
-        Span::styled("▸ ", style(theme::MARKER))
+        Span::styled("▸ ", style(theme::marker()))
     } else {
         Span::styled("  ", base)
     };
@@ -205,7 +205,7 @@ fn row_line(m: &MilestoneRef, selected: bool, width: usize) -> Line<'static> {
             style(theme::milestone_status_color(&m.status)),
         ),
         Span::styled(filled, style(bar_color(percent))),
-        Span::styled(format!("{empty} "), style(theme::DIM)),
+        Span::styled(format!("{empty} "), style(theme::dim())),
         Span::styled(format!("{:>7}  ", format!("{}/{}", m.done, m.total)), base),
         Span::styled(
             format!("{:<11} ", target),
@@ -215,7 +215,7 @@ fn row_line(m: &MilestoneRef, selected: bool, width: usize) -> Line<'static> {
                 today,
             )),
         ),
-        Span::styled(relative(m.last_activity, now), style(theme::DIM)),
+        Span::styled(relative(m.last_activity, now), style(theme::dim())),
     ];
     // Pad the selected row so its background wash runs the full width.
     if selected {
@@ -230,7 +230,7 @@ fn row_line(m: &MilestoneRef, selected: bool, width: usize) -> Line<'static> {
 fn draw_detail(frame: &mut Frame, area: Rect, m: Option<&MilestoneRef>) {
     let block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(theme::DIM));
+        .border_style(Style::default().fg(theme::dim()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let Some(m) = m else {
@@ -238,7 +238,7 @@ fn draw_detail(frame: &mut Frame, area: Rect, m: Option<&MilestoneRef>) {
     };
 
     let now = chrono::Utc::now();
-    let dim = Style::default().fg(theme::DIM);
+    let dim = Style::default().fg(theme::dim());
     let percent = m.percent();
     let (filled, empty) = bar_parts(percent, DETAIL_BAR_WIDTH);
     let mut lines = vec![
@@ -473,12 +473,16 @@ mod tests {
         app.milestones = vec![ms("v0.3-cutover", "open", 12, 18)];
         let cells = colors(&app, &MilestonePageState::default());
         assert!(
-            cells.iter().any(|(_, bg)| *bg == Some(theme::SELECTION_BG)),
+            cells
+                .iter()
+                .any(|(_, bg)| *bg == Some(theme::selection_bg())),
             "selected row should carry the selection background"
         );
         assert!(
-            cells.iter().any(|(fg, bg)| *bg == Some(theme::SELECTION_BG)
-                && *fg == Some(theme::milestone_status_color("open"))),
+            cells
+                .iter()
+                .any(|(fg, bg)| *bg == Some(theme::selection_bg())
+                    && *fg == Some(theme::milestone_status_color("open"))),
             "status color should survive selection"
         );
     }
@@ -491,7 +495,7 @@ mod tests {
         app.milestones = vec![m];
         let cells = colors(&app, &MilestonePageState::default());
         assert!(
-            cells.iter().any(|(fg, _)| *fg == Some(theme::ALARM)),
+            cells.iter().any(|(fg, _)| *fg == Some(theme::alarm())),
             "an overdue open milestone should paint its target red"
         );
     }

@@ -28,20 +28,20 @@ fn kind_color(e: &ActivityRef) -> Color {
     match e.kind.as_str() {
         "status" => Color::Indexed(81),
         "edit" => Color::Indexed(179),
-        "log" => theme::MILESTONE,
+        "log" => theme::milestone_accent(),
         "plan" => Color::Indexed(75),
         "archive" => Color::Indexed(245),
-        _ => theme::DIM,
+        _ => theme::dim(),
     }
 }
 
 fn filter_color(f: ActFilter) -> Color {
     match f {
-        ActFilter::All => theme::ACCENT,
+        ActFilter::All => theme::accent(),
         ActFilter::Closed => theme::milestone_status_color("completed"),
         ActFilter::Moves => Color::Indexed(81),
         ActFilter::Edits => Color::Indexed(179),
-        ActFilter::Notes => theme::MILESTONE,
+        ActFilter::Notes => theme::milestone_accent(),
         ActFilter::Plan => Color::Indexed(75),
         ActFilter::Archive => Color::Indexed(245),
     }
@@ -52,7 +52,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &ActivityPageState)
     let rows = activity_rows(app, state);
     let cursor = state.cursor.min(rows.len().saturating_sub(1));
 
-    let block = theme::popup_block("Activity", theme::ACCENT).borders(Borders::ALL);
+    let block = theme::popup_block("Activity", theme::accent()).borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height < 3 {
@@ -78,7 +78,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &ActivityPageState)
     frame.render_widget(Paragraph::new(chips(state, rows.len())), chunks[0]);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(" > ", Style::default().fg(theme::MARKER)),
+            Span::styled(" > ", Style::default().fg(theme::marker())),
             Span::raw(state.query.as_str()),
             Span::styled("_", Style::default().add_modifier(Modifier::SLOW_BLINK)),
         ])),
@@ -100,8 +100,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &ActivityPageState)
     footer.spans.insert(0, Span::raw("  "));
     if let Some(m) = &app.status_msg {
         let mut spans = vec![
-            Span::styled(format!("  {m}"), Style::default().fg(theme::MARKER)),
-            Span::styled("  |", Style::default().fg(theme::DIM)),
+            Span::styled(format!("  {m}"), Style::default().fg(theme::marker())),
+            Span::styled("  |", Style::default().fg(theme::dim())),
         ];
         spans.extend(footer.spans);
         footer = Line::from(spans);
@@ -119,14 +119,14 @@ fn chips(state: &ActivityPageState, count: usize) -> Line<'static> {
                 .bg(filter_color(f))
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::DIM)
+            Style::default().fg(theme::dim())
         };
         spans.push(Span::styled(format!(" {} ", f.label()), style));
         spans.push(Span::raw(" "));
     }
     spans.push(Span::styled(
         format!("   {count} shown"),
-        Style::default().fg(theme::DIM),
+        Style::default().fg(theme::dim()),
     ));
     Line::from(spans)
 }
@@ -139,7 +139,7 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, rows: &[usize], cursor: u
             "  nothing of this kind (Tab switches, / clears with backspace)"
         };
         frame.render_widget(
-            Paragraph::new(Line::styled(msg, Style::default().fg(theme::DIM))),
+            Paragraph::new(Line::styled(msg, Style::default().fg(theme::dim()))),
             area,
         );
         return;
@@ -167,14 +167,14 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, rows: &[usize], cursor: u
 /// One entry: `▸ 2h ago   PULSE-4  status   backlog → done   · claude`.
 fn row_line(e: &ActivityRef, selected: bool, width: usize) -> Line<'static> {
     let base = if selected {
-        Style::default().bg(theme::SELECTION_BG)
+        Style::default().bg(theme::selection_bg())
     } else {
         Style::default()
     };
     let style = |fg: Color| base.fg(fg);
 
     let marker = if selected {
-        Span::styled("▸ ", style(theme::MARKER))
+        Span::styled("▸ ", style(theme::marker()))
     } else {
         Span::styled("  ", base)
     };
@@ -186,7 +186,7 @@ fn row_line(e: &ActivityRef, selected: bool, width: usize) -> Line<'static> {
         marker,
         Span::styled(
             format!("{:<10} ", relative(e.ts, chrono::Utc::now())),
-            style(theme::DIM),
+            style(theme::dim()),
         ),
         Span::styled(
             format!("{:<9} ", truncate(&e.issue_key, 9)),
@@ -194,7 +194,7 @@ fn row_line(e: &ActivityRef, selected: bool, width: usize) -> Line<'static> {
         ),
         Span::styled(format!("{:<8} ", e.kind), style(kind_color(e))),
         Span::styled(format!("{:<52} ", truncate(&e.message, 52)), base),
-        Span::styled(actor, style(theme::DIM)),
+        Span::styled(actor, style(theme::dim())),
     ];
     if selected {
         let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
@@ -208,14 +208,14 @@ fn row_line(e: &ActivityRef, selected: bool, width: usize) -> Line<'static> {
 fn draw_detail(frame: &mut Frame, area: Rect, e: Option<&ActivityRef>) {
     let block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(theme::DIM));
+        .border_style(Style::default().fg(theme::dim()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let Some(e) = e else {
         return;
     };
 
-    let dim = Style::default().fg(theme::DIM);
+    let dim = Style::default().fg(theme::dim());
     let mut lines = vec![
         Line::from(vec![
             Span::styled(

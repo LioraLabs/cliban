@@ -426,6 +426,17 @@ ranked by score and capped by `--limit` (default 20). Retrieval is
 progressive: search first, load the full `## Notes` section only when
 needed. `--section all` searches every `###` subsection in the description.
 
+## Theming
+
+The TUI's palette is built for dark terminals, but every named slot can be
+re-colored from `~/.config/cliban/theme.toml` (`$XDG_CONFIG_HOME`
+respected; `CLIBAN_THEME_FILE` overrides the path). One `slot = color` per
+line — named colors, 256-color indexes, or `#rrggbb` — and anything unset
+keeps its default, so a light theme only overrides what hurts.
+[`assets/themes/light.toml`](assets/themes/light.toml) is a ready-made
+starting point; the full slot list is documented in
+`crates/cliban-tui/src/ui/theme.rs`.
+
 ## Roadmap
 
 **Loom**, a milestone orchestrator built on this store, is in development:

@@ -1,0 +1,28 @@
+# A light-terminal palette for cliban. Copy to ~/.config/cliban/theme.toml
+# (or point CLIBAN_THEME_FILE at it) and adjust to taste. Any slot you
+# leave out keeps the built-in dark default — override only what hurts.
+#
+# Colors parse like ratatui reads them: named ("blue", "light red"),
+# 256-color indexes (208), or hex (#rrggbb).
+
+accent = #0366d6
+dim = #6a737d
+selection-bg = #e8e8e8
+marker = #b08800
+alarm = #cb2431
+milestone = #6f42c1
+
+priority-urgent = #cb2431
+priority-high = #d15704
+priority-medium = #b08800
+priority-low = #0366d6
+
+column-backlog = #586069
+column-in-progress = #0366d6
+column-blocked = #cb2431
+column-in-review = #6f42c1
+column-done = #22863a
+
+status-open = #0366d6
+status-completed = #22863a
+status-cancelled = #959da5

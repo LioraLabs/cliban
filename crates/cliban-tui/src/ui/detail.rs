@@ -10,13 +10,13 @@ use ratatui::Frame;
 pub fn draw(frame: &mut Frame, area: Rect, card: &Card, relations: &[RelationRef]) {
     let popup = centered_rect(70, 20, area);
     frame.render_widget(Clear, popup);
-    let block = theme::popup_block(&card.key, theme::ACCENT);
+    let block = theme::popup_block(&card.key, theme::accent());
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
     // A label column in dim gray, values in the same colors the board uses:
     // status wears its column hue, priority its ramp, milestone its violet.
-    let dim = Style::default().fg(theme::DIM);
+    let dim = Style::default().fg(theme::dim());
     let field = |label: &str| Span::styled(format!("  {label:<11}"), dim);
     let mut lines = vec![
         Line::raw(""),
@@ -43,7 +43,7 @@ pub fn draw(frame: &mut Frame, area: Rect, card: &Card, relations: &[RelationRef
     if let Some(m) = &card.milestone {
         lines.push(Line::from(vec![
             field("milestone"),
-            Span::styled(m.clone(), Style::default().fg(theme::MILESTONE)),
+            Span::styled(m.clone(), Style::default().fg(theme::milestone_accent())),
         ]));
     }
     if !card.labels.is_empty() {
@@ -71,11 +71,11 @@ pub fn draw(frame: &mut Frame, area: Rect, card: &Card, relations: &[RelationRef
             _ => "related",
         };
         let color = if r.open_blocker() {
-            theme::ALARM
+            theme::alarm()
         } else if r.kind == "blocked_by" {
             Color::Indexed(78)
         } else {
-            theme::DIM
+            theme::dim()
         };
         lines.push(Line::from(vec![
             field(label),
