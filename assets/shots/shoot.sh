@@ -1,16 +1,36 @@
 #!/usr/bin/env bash
-# Regenerate assets/board.png: seed a demo board, capture the TUI from a
-# real tmux session, render to styled HTML, screenshot with chromium.
+# Regenerate assets/{board,milestones,editor}.png from a seeded demo board.
+# Needs: tmux, chromium, imagemagick, python3; nvim for the editor shot.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"; tmux kill-session -t cliban-shot 2>/dev/null || true' EXIT
 bash "$HERE/seed-demo.sh" "$WORK/demo.db"
-tmux new-session -d -s cliban-shot -x 132 -y 25 "cliban --db $WORK/demo.db tui"
-sleep 2; tmux send-keys -t cliban-shot j; sleep 1
-tmux capture-pane -e -p -t cliban-shot > "$WORK/board.ans"
-python3 "$HERE/ansi2html.py" "$WORK/board.ans" "$WORK/board.html" "cliban — Pulse"
-chromium --headless=new --disable-gpu --screenshot="$HERE/../board.png" \
-  --window-size=1560,780 --force-device-scale-factor=2 --hide-scrollbars \
-  "file://$WORK/board.html" 2>/dev/null
-echo "wrote $HERE/../board.png"
+
+run() { tmux new-session -d -s cliban-shot -x "$1" -y "$2" "env EDITOR=nvim cliban --db $WORK/demo.db tui"; sleep 2; }
+snap() { tmux capture-pane -e -p -t cliban-shot > "$1"; }
+kill_() { tmux kill-session -t cliban-shot 2>/dev/null || true; }
+
+# The board.
+run 132 25; tmux send-keys -t cliban-shot j; sleep 1
+snap "$WORK/board.ans"; kill_
+bash "$HERE/shoot-one.sh" "$WORK/board.ans" "$HERE/../board.png" "cliban — Pulse"
+
+# The milestone page, all statuses, focused on a mid-flight milestone.
+run 132 22; tmux send-keys -t cliban-shot m; sleep 1
+tmux send-keys -t cliban-shot Tab Tab Tab; sleep 1; tmux send-keys -t cliban-shot j j; sleep 1
+snap "$WORK/milestones.ans"; kill_
+bash "$HERE/shoot-one.sh" "$WORK/milestones.ans" "$HERE/../milestones.png" "cliban — milestones"
+
+# Editing an issue in $EDITOR (TUI 'e'), diagnostics silenced for the shot.
+if command -v nvim >/dev/null; then
+  run 132 33; tmux send-keys -t cliban-shot l; sleep 1
+  tmux send-keys -t cliban-shot e; sleep 6; tmux send-keys -t cliban-shot Escape; sleep 1
+  tmux send-keys -t cliban-shot ":lua pcall(vim.diagnostic.enable, false)" Enter; sleep 1
+  tmux send-keys -t cliban-shot ":set nospell cmdheight=0" Enter; sleep 1
+  tmux send-keys -t cliban-shot ":echo ''" Enter; sleep 1
+  snap "$WORK/editor.ans"; kill_
+  bash "$HERE/shoot-one.sh" "$WORK/editor.ans" "$HERE/../editor.png" "cliban issue edit — nvim"
+else
+  echo "nvim not found; skipping editor shot"
+fi

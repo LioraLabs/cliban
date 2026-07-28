@@ -48,11 +48,19 @@ def render(text):
     i = 0
     for line in text.split("\n"):
         pos = 0
-        for m in re.finditer(r"\x1b\[([0-9;]*)m", line):
+        for m in re.finditer(r"\x1b\[([0-9;:]*)m", line):
             buf.append(line[pos:m.start()])
             flush()
             pos = m.end()
-            ps = [int(x) for x in m.group(1).split(";") if x] or [0]
+            toks = m.group(1).split(";")
+            # colon-form params (nvim: 4:3 undercurl, 58:2::r:g:b underline
+            # color) are self-delimited; consume them without styling.
+            ps = []
+            for t in toks:
+                if ":" in t:
+                    continue
+                ps.append(int(t) if t else 0)
+            ps = ps or ([0] if not any(":" in t for t in toks) else ps)
             j = 0
             while j < len(ps):
                 p = ps[j]
@@ -91,10 +99,8 @@ def render(text):
 
 TPL = """<!doctype html><meta charset="utf-8"><style>
 html,body{margin:0;height:100%%}
-body{display:flex;align-items:center;justify-content:center;
-  background:radial-gradient(120%% 130%% at 20%% 0%%,#3b4261 0%%,#1a1b26 55%%,#0f0f17 100%%)}
-.win{border-radius:12px;overflow:hidden;
-  box-shadow:0 30px 80px rgba(0,0,0,.65),0 4px 16px rgba(0,0,0,.5);
+body{display:flex;align-items:center;justify-content:center;%(bodybg)s}
+.win{border-radius:12px;overflow:hidden;%(shadow)s
   border:1px solid rgba(255,255,255,.09)}
 .bar{background:#1e2030;display:flex;align-items:center;padding:10px 14px;gap:8px}
 .dot{width:12px;height:12px;border-radius:50%%}
@@ -110,8 +116,16 @@ pre{margin:0;padding:14px 18px;background:%(bg)s;
 <div class="title">%(title)s</div></div><pre>%(body)s</pre></div></body>
 """
 
-src, dst, title = sys.argv[1], sys.argv[2], sys.argv[3]
+measure = "--measure" in sys.argv
+argv = [a for a in sys.argv if a != "--measure"]
+src, dst, title = argv[1], argv[2], argv[3]
 text = open(src).read().rstrip("\n")
+style = {
+    "bodybg": "" if measure else """
+  background:radial-gradient(120% 130% at 20% 0%,#3b4261 0%,#1a1b26 55%,#0f0f17 100%)""",
+    "shadow": "" if measure else """
+  box-shadow:0 30px 80px rgba(0,0,0,.65),0 4px 16px rgba(0,0,0,.5);""",
+}
 open(dst, "w").write(TPL % {"body": render(text), "title": html.escape(title),
-                            "bg": BG_DEF, "fg": FG_DEF})
+                            "bg": BG_DEF, "fg": FG_DEF, **style})
 print("wrote", dst)

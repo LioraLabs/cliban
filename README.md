@@ -213,9 +213,10 @@ done-timestamps.
 
 By default `cliban issue add` and `cliban issue edit` never open an editor:
 they fail fast if no content flags are supplied, which is the right behavior
-for agents. Pass `--editor` to opt in to the frontmatter + markdown buffer in
-`$EDITOR` (`$VISUAL` first, falls back to `vi`). Inside the TUI, select a
-card and press `e`.
+for agents. Inside the TUI, select a card and press `e` for the frontmatter
++ markdown buffer in `$EDITOR` (`$VISUAL` first, falls back to `vi`):
+
+<p align="center"><img src="assets/editor.png" width="880" alt="editing an issue in nvim"></p>
 
 ## The description contract
 
@@ -348,7 +349,14 @@ nothing appears twice.
 accepts a duration (`45s`, `90m`, `4h`, `3d`, `2w`), `today`, `yesterday`, a
 bare date (`2026-07-25`), or a full RFC3339 timestamp. All UTC.
 
-## Milestones from the CLI
+## Milestones
+
+The TUI's milestone page (`m`) shows every milestone across projects,
+ordered by recent activity, with progress and a detail pane:
+
+<p align="center"><img src="assets/milestones.png" width="880" alt="the milestone page"></p>
+
+From the CLI:
 
 ```bash
 cliban milestone ls --project PROJ                     # name, status, target
