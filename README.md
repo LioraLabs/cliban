@@ -1,21 +1,84 @@
 # cliban
 
-Self-hosted, AI-agent-first kanban board for the terminal.
+Self-hosted, AI-agent-first kanban for the terminal. A small Rust workspace,
+one binary, SQLite underneath, no daemon required.
 
-- A small Rust workspace, one binary, no daemon required.
-- SQLite (WAL mode) at `$XDG_DATA_HOME/cliban/cliban.db` by default.
-- Three front doors: a ratatui TUI (lifted from loom, no daemon/agent machinery),
-  a flat CLI, and a Claude Code skill bundle.
-- Optional shared hosting: `cliband`, an SSH daemon that serves the same board
-  to your whole team — `ssh boards.example.com` and you're in. See
+Your coding agent's plan shouldn't live in its context window. Context gets
+compacted, sessions get cleared, agents crash — and the plan, the progress,
+and the *why* evaporate with them. Cliban keeps that state on disk behind
+atomic CLI mutations any agent can drive: the spec and plan live in the
+issue, steps are ticked as they land, every mutation is recorded on a
+timeline automatically, and durable lessons persist as searchable project
+memory. Kill the session, `/clear`, compact — then `cliban issue current`
+and the agent picks up exactly where it left off.
+
+Three front doors to the same board:
+
+- **A flat CLI** built for agents — every read has a `--json` form, no
+  command opens an editor unless asked, and mutations are atomic and safe to
+  run unattended.
+- **A ratatui TUI** for you — priority-colored bordered cards over five
+  columns (`backlog / in-progress / blocked / in-review / done`).
+- **`cliband`** for your team — an SSH daemon serving the same live board to
+  everyone: `ssh boards.example.com` and you're in. SSH keys are the auth;
+  one SQLite database per tenant is the isolation. See
   [Hosting shared boards](#hosting-shared-boards-over-ssh-cliband).
+
+## Why not markdown plan files, or a heavier tracker?
+
+Persistent planning for agents is usually done with loose markdown files
+(`task_plan.md`, `progress.md`) re-injected each turn. That survives context
+loss, but the files have no structure a tool can enforce: an agent can
+clobber the plan wholesale, two agents corrupt it in parallel, and "how far
+did we get" is a diff, not a query. Traditional trackers solve structure but
+aren't built to be driven unattended by an agent — and your plans end up on
+someone else's server.
+
+|  | plan state | concurrent agents | progress | team | self-hosted |
+|---|---|---|---|---|---|
+| markdown plan files | loose files in the repo | last write wins | re-read the file | via git | yes |
+| cliban | structured issues in SQLite | serialized, atomic `tick`/`log`/`promote` | a query (`--section plan`, `activity`) | `cliband` over SSH | yes |
+| hosted trackers | structured, remote | API-dependent | a query | yes | no |
+
+Cliban's bet: the unit of agent planning should be an *issue* with a
+contract — `## Spec`, `## Plan` with tickable steps, an append-only
+`## Activity Log` — mutated through commands that fail loudly (exit 2) when
+the structure is violated, never through freehand file edits. Nothing is
+ever deleted; archiving is reversible and history survives.
+
+## Agents
+
+The [Claude Code plugin](plugin/) ships the full workflow: the `cliban` CLI
+skill, a convention layer for brainstorm → plan → execute → finish, `/bugs`
+and `/status` commands, ticket capture, and `complete-milestone` — an
+orchestrator that runs every issue in a milestone through its own agent in
+dependency order, each in an isolated git worktree.
+
+```bash
+claude plugin marketplace add LioraLabs/claude-plugins
+claude plugin install cliban@lioralabs
+```
+
+Session recovery is the point: after a crash, `/clear`, or compaction, an
+agent re-derives its entire working state from the board —
+
+```bash
+cliban issue current --json               # which issue is this branch?
+cliban issue show PROJ-42 --section plan   # ticked steps ARE the progress file
+cliban activity --since 1d --json         # what happened while I was gone
+cliban project search PROJ "wal mode" --json   # recall durable lessons
+```
+
+Other harnesses can use the same skill file directly:
+[`plugin/skills/cliban/SKILL.md`](plugin/skills/cliban/SKILL.md) follows the
+Agent Skills format and documents the complete command surface (a test keeps
+it honest against the real CLI).
 
 ## Workspace
 
 - `cliban-core` — storage + domain layer (rusqlite; owns the schema and migrations).
-- `cliban-tui` — the kanban board, loom's ratatui frontend rewired to call `cliban-core`
-  in-process. Priority-colored bordered cards over cliban's five columns
-  (`backlog / in-progress / blocked / in-review / done`).
+- `cliban-tui` — the kanban board: priority-colored bordered cards over cliban's
+  five columns.
 - `cliban` — the CLI binary; `cliban <subcommand>` for scripting, `cliban` (no args) or
   `cliban tui` to launch the board.
 - `cliban-tenancy` — multi-tenant storage for the daemon: a `registry.db`
@@ -29,8 +92,8 @@ Self-hosted, AI-agent-first kanban board for the terminal.
 ```bash
 cargo build --release
 install -m755 target/release/cliban ~/.local/bin/cliban   # or anywhere on PATH
-cliban project add CLI --name "Cliban"
-cliban issue add --project CLI --title "First issue" --priority high
+cliban project add PROJ --name "Cliban"
+cliban issue add --project PROJ --title "First issue" --priority high
 cliban             # opens the TUI
 ```
 
@@ -137,7 +200,8 @@ to opt in to the frontmatter + markdown buffer in `$EDITOR` (`$VISUAL` first, fa
 ## Documentation
 
 - Design spec: `docs/specs/2026-05-19-cliban-design.md`
-- Skill bundle for Claude Code: `skill/cliban-skill/SKILL.md`
+- Claude Code plugin (skills + commands): [`plugin/`](plugin/)
+- Agent skill reference: [`plugin/skills/cliban/SKILL.md`](plugin/skills/cliban/SKILL.md)
 
 ## Description contract
 
@@ -179,7 +243,7 @@ Within `## Plan`, tasks are numbered H3 headings:
 A step that has been split into its own issue is suffixed with ` → KEY`:
 
 ```markdown
-- [ ] **Step 3: CSRF middleware** → CLI-18
+- [ ] **Step 3: CSRF middleware** → PROJ-18
 ```
 
 This is produced by `cliban issue promote` and consumed by readers (humans, and any tooling that walks plans).
@@ -203,7 +267,7 @@ The matcher weights matches across title (×3.0), key (×2.5), labels (×2.0), a
 ```bash
 cliban activity                                   # last 24h, every project
 cliban activity --since yesterday --json
-cliban activity --since 3d --project CLI --limit 200 --json
+cliban activity --since 3d --project PROJ --limit 200 --json
 ```
 
 A merged, newest-first feed: `created` / `completed` when an issue opened or
@@ -223,9 +287,9 @@ narrate it:
 
 ```bash
 export CLIBAN_ACTOR=claude                # attribute what you do
-cliban issue mv CLI-42 blocked --note "upstream fix needed"
-cliban issue edit CLI-42 --priority urgent --label regression
-cliban issue show CLI-42 --section activity
+cliban issue mv PROJ-42 blocked --note "upstream fix needed"
+cliban issue edit PROJ-42 --priority urgent --label regression
+cliban issue show PROJ-42 --section activity
 #   - 15:10Z — [claude] found it: positions collapse after ~50 reorders
 #   - 15:12Z — [claude] in-progress → blocked: upstream fix needed
 #   - 15:13Z — [claude] priority: high → urgent, +label regression
@@ -236,8 +300,8 @@ Nothing is ever deleted. A deleted row would take its timeline with it, so
 what it really did and how to undo it:
 
 ```console
-$ cliban issue rm CLI-12
-archived CLI-12 — cliban archives instead of deleting (undo: cliban issue unarchive CLI-12)
+$ cliban issue rm PROJ-12
+archived PROJ-12 — cliban archives instead of deleting (undo: cliban issue unarchive PROJ-12)
 ```
 
 (`label rm` still deletes: a label is a tag, not a work item.)
@@ -256,11 +320,11 @@ bare date (`2026-07-25`), or a full RFC3339 timestamp. All UTC.
 ## Milestones from the CLI
 
 ```bash
-cliban milestone ls --project CLI                      # name, status, target
+cliban milestone ls --project PROJ                      # name, status, target
 cliban milestone ls                                    # every project
 cliban milestone ls --sort activity --stats            # + done/total and recency
 cliban milestone ls --status open --sort target        # what's due next
-cliban milestone edit --project CLI --name v0.1 --status completed
+cliban milestone edit --project PROJ --name v0.1 --status completed
 ```
 
 `--sort` takes `activity` (most recently worked on first), `name` (the default)
@@ -275,12 +339,12 @@ under `## Notes`. Give each independently useful lesson its own `###` heading
 so cliban can retrieve it without loading the whole section.
 
 ```bash
-cliban project add CLI --name "Cliban" --description-file project.md
-cliban project show CLI --section notes
-cliban project search CLI "sqlte canonical" --section notes --json
-cliban project edit CLI --description-file updated-project.md
+cliban project add PROJ --name "Cliban" --description-file project.md
+cliban project show PROJ --section notes
+cliban project search PROJ "sqlte canonical" --section notes --json
+cliban project edit PROJ --description-file updated-project.md
 # stdin works too:
-cliban project edit CLI --description-file - < updated-project.md
+cliban project edit PROJ --description-file - < updated-project.md
 ```
 
 `project search` fuzzy-matches every whitespace-separated query term against
@@ -288,6 +352,15 @@ each `###` heading and body. It returns only matching subsections as NDJSON,
 ranked by score and capped by `--limit` (default 20). This makes retrieval
 progressive: search first, then load the full `## Notes` section only when
 needed. `--section all` searches every `###` subsection in the description.
+
+## Roadmap
+
+**Loom** — a milestone orchestrator built on this store — is in development:
+it snapshots a milestone, freezes a validated execution manifest (dependency
+waves, roles, restart policies), and drives the whole thing to completion
+restart-safely, with cliban remaining the source of truth for the work items
+themselves. The `complete-milestone` skill in the plugin is the manual
+version of that loop today.
 
 ## Test
 

@@ -21,11 +21,11 @@ unless you ask, and mutations are safe to run unattended.
 2. **Always pass `--json` for reads.** The table format is for humans and will
    change. `ls` emits NDJSON (one compact object per line), `show` emits one
    pretty object.
-3. **`--project` takes the KEY, not the name**: `--project CLI`, not
+3. **`--project` takes the KEY, not the name**: `--project PROJ`, not
    `--project Cliban`. Keys are uppercase; the CLI upcases what you pass.
-4. **`project add` takes the key positionally**: `cliban project add CLI --name
+4. **`project add` takes the key positionally**: `cliban project add PROJ --name
    "Cliban"`. There is no `--key` flag. (`issue add` is the opposite — it needs
-   `--project CLI --title "..."`.)
+   `--project PROJ --title "..."`.)
 5. **Time arguments accept `3d` / `yesterday` / `2026-07-25` / RFC3339** —
    `--since` and `--updated-since` share one parser, so anything one takes the
    other takes.
@@ -54,10 +54,10 @@ export CLIBAN_ACTOR=claude       # tags everything cliban records for you
 than no board. Attach the reason in the same call:
 
 ```bash
-cliban issue mv CLI-42 in-progress
-cliban issue mv CLI-42 blocked --note "upstream fix needed: rusqlite #1234"
-cliban issue mv CLI-42 in-review --note "PR #88, tests green"
-cliban issue mv CLI-42 done --note "merged as abc1234"
+cliban issue mv PROJ-42 in-progress
+cliban issue mv PROJ-42 blocked --note "upstream fix needed: rusqlite #1234"
+cliban issue mv PROJ-42 in-review --note "PR #88, tests green"
+cliban issue mv PROJ-42 done --note "merged as abc1234"
 ```
 
 **Log the things a diff won't tell anyone**, with `cliban issue log`:
@@ -68,26 +68,26 @@ cliban issue mv CLI-42 done --note "merged as abc1234"
 - anything you had to discover the hard way
 
 ```bash
-cliban issue log CLI-42 "Root cause: position is f64 and collapses after ~50 reorders. Renumbering on write, not read."
-cliban issue log CLI-42 "Tried a rebalance-on-read pass first — needs a write lock on every read. Abandoned."
+cliban issue log PROJ-42 "Root cause: position is f64 and collapses after ~50 reorders. Renumbering on write, not read."
+cliban issue log PROJ-42 "Tried a rebalance-on-read pass first — needs a write lock on every read. Abandoned."
 ```
 
 Log **facts and reasons, not narration**. "Working on it" and "still going" are
 noise. If a future agent wouldn't act differently for having read it, don't
 write it.
 
-**Tick plan steps as you finish them** — `cliban issue tick CLI-42 --task 1
+**Tick plan steps as you finish them** — `cliban issue tick PROJ-42 --task 1
 --step 2` — so progress is visible without reading the code.
 
 **Promote scope you discover** rather than silently widening the ticket:
-`cliban issue promote CLI-42 --task 1 --step 3 --title "..."`, or file a fresh
+`cliban issue promote PROJ-42 --task 1 --step 3 --title "..."`, or file a fresh
 issue and link it with `--blocked-by` / `--related-to`.
 
 **Put durable lessons in project memory**, not in the ticket. A ticket is
 closed and forgotten; `## Notes` on the project is what the next session reads.
 
 **Read the timeline before you start**: `cliban activity --since 3d --json`
-and `cliban issue show CLI-42 --section activity` tell you what already
+and `cliban issue show PROJ-42 --section activity` tell you what already
 happened, including what a previous agent tried and rejected.
 
 ## Command inventory
@@ -115,7 +115,7 @@ read and most writes.
 - **Priorities**: `none` | `low` | `medium` | `high` | `urgent`
 - **Milestone statuses**: `open` | `completed` | `cancelled` (cancelled is the
   archived state — there is no separate milestone archive flag)
-- **Issue keys**: `{PROJECT}-{N}` like `CLI-42`. Project keys are uppercase
+- **Issue keys**: `{PROJECT}-{N}` like `PROJ-42`. Project keys are uppercase
   letters/digits, 2-10 chars, starting with a letter.
 - **Sub-issues**: depth limited to 2 — a sub-issue cannot have children. Exit
   code 2 if you try to nest a third level.
@@ -147,7 +147,7 @@ JSON echoed by `add` / `edit` / `mv` / `import`.
 
 ```json
 {
-  "key":            "CLI-42",
+  "key":            "PROJ-42",
   "title":          "...",
   "description":    "...",     // ls: omitted unless --full; show: always
   "status":         "backlog",
@@ -155,11 +155,11 @@ JSON echoed by `add` / `edit` / `mv` / `import`.
   "position":       12000.5,
   "archived":       false,
   "milestone":      "v0.1" | null,
-  "parent":         "CLI-3" | null,
+  "parent":         "PROJ-3" | null,
   "due_date":       "2026-06-01" | null,
   "labels":         ["bug", "ui"],
-  "relations":      [{"type": "blocks", "target": "CLI-9"}, {"type": "blocked_by", "target": "CLI-3"}],
-  "git_branch_name":"cli-42-fix-column-ordering",
+  "relations":      [{"type": "blocks", "target": "PROJ-9"}, {"type": "blocked_by", "target": "PROJ-3"}],
+  "git_branch_name":"proj-42-fix-column-ordering",
   "created_at":     "2026-...Z",
   "updated_at":     "2026-...Z",
   "completed_at":   "2026-...Z" | (absent when not done)
@@ -203,7 +203,7 @@ milestone on the board to read one.
 ```bash
 cliban activity                                  # last 24h, all projects
 cliban activity --since yesterday --json
-cliban activity --since 3d --project CLI --json
+cliban activity --since 3d --project PROJ --json
 cliban activity --since 2026-07-20 --limit 200 --json
 cliban activity --since 1w --milestone "v0.1" --json
 ```
@@ -216,7 +216,7 @@ Emits a merged, newest-first feed of:
   explain it
 - `status` — a move: `"backlog → in-progress"`, plus your `--note` if you gave one
 - `edit` — what one `issue edit` changed: `"priority: low → urgent, +label bug"`
-- `plan` — `"ticked Task 1 Step 2"`, `"promoted Task 1 Step 3 → CLI-18"`
+- `plan` — `"ticked Task 1 Step 2"`, `"promoted Task 1 Step 3 → PROJ-18"`
 - `archive` — `"archived"` / `"unarchived"`
 - `log` — a note you wrote with `issue log`
 
@@ -236,7 +236,7 @@ For "which issues did I touch" rather than an event feed:
 
 ```bash
 cliban issue ls --updated-since 2d --json
-cliban issue ls --updated-since today --project CLI --status done --json
+cliban issue ls --updated-since today --project PROJ --status done --json
 ```
 
 Accepted by both flags: `45s`, `90m`, `4h`, `3d`, `2w`, `today`, `yesterday`,
@@ -246,33 +246,35 @@ Accepted by both flags: `45s`, `90m`, `4h`, `3d`, `2w`, `today`, `yesterday`,
 
 ### Create a project (KEY is positional)
 ```bash
-cliban project add CLI --name "Cliban" --description "kanban board"
+cliban project add PROJ --name "Cliban" --description "kanban board"
 ```
 
 ### Capture a new issue
 ```bash
-cliban issue add --project CLI \
+cliban issue add --project PROJ \
   --title "Fix the kanban column ordering" \
   --description "When more than 5 cards exist in IN-REVIEW, positions go negative." \
   --priority high --due 2026-06-01 \
   --label bug --label ui \
-  --blocked-by CLI-3 --related-to CLI-7 \
+  --blocked-by PROJ-3 --related-to PROJ-7 \
   --json
 ```
+`add` also accepts `--status` and `--milestone "NAME"` — set them at creation
+instead of a follow-up `mv`/`edit`. Status defaults to `backlog`.
 
 ### Move work along
 ```bash
-cliban issue mv CLI-12 in-progress
-cliban issue mv CLI-12 blocked --note "waiting on upstream fix"
-cliban issue mv CLI-12 done          # stamps completed_at
+cliban issue mv PROJ-12 in-progress
+cliban issue mv PROJ-12 blocked --note "waiting on upstream fix"
+cliban issue mv PROJ-12 done          # stamps completed_at
 ```
 Every move is recorded on the issue's timeline automatically (`backlog →
 in-progress`, attributed to `$CLIBAN_ACTOR`). `--note` adds the why.
 
 ### Read an issue
 ```bash
-cliban issue show CLI-42 --json
-cliban issue show CLI-42 --section plan       # just one section: spec|plan|activity|notes
+cliban issue show PROJ-42 --json
+cliban issue show PROJ-42 --section plan       # just one section: spec|plan|activity|notes
 cliban issue current --json                   # the issue for the current git branch
 ```
 `--section` and `issue current` exit **1** when the section (or a branch-matched
@@ -281,11 +283,11 @@ handle it rather than retrying.
 
 ### Filter and sort
 ```bash
-cliban issue ls --project CLI --status blocked --json
-cliban issue ls --project CLI --label bug --json        # ALL-of semantics
-cliban issue ls --project CLI --sort priority --json    # urgent first (default desc)
-cliban issue ls --project CLI --sort created:asc --json
-cliban issue ls --parent CLI-12 --json                  # sub-issues of one parent
+cliban issue ls --project PROJ --status blocked --json
+cliban issue ls --project PROJ --label bug --json        # ALL-of semantics
+cliban issue ls --project PROJ --sort priority --json    # urgent first (default desc)
+cliban issue ls --project PROJ --sort created:asc --json
+cliban issue ls --parent PROJ-12 --json                  # sub-issues of one parent
 cliban issue ls --no-subs --json                        # top-level only
 cliban issue ls --search "column ordering" --limit 20 --json
 ```
@@ -296,7 +298,7 @@ is 50 when `--search` is set, uncapped otherwise.
 ```bash
 cat <<'EOF' > /tmp/imp.ndjson
 {"project":"CLI","title":"alpha","priority":"high","labels":["bug"]}
-{"project":"CLI","title":"beta","milestone":"v0.1","blocked_by":"CLI-1"}
+{"project":"CLI","title":"beta","milestone":"v0.1","blocked_by":"PROJ-1"}
 EOF
 cliban issue import /tmp/imp.ndjson --json
 cliban issue import - < /tmp/imp.ndjson --json     # or stream
@@ -306,55 +308,74 @@ parent, labels]}`. With `--project KEY`, records may omit `project`.
 
 ### Sub-issues, parents, relations
 ```bash
-cliban issue add --project CLI --parent CLI-12 --title "Repro test" --json
-cliban issue edit CLI-12 --clear-parent          # promote back to top level
-cliban issue edit CLI-12 --blocks CLI-9
-cliban issue edit CLI-12 --blocked-by CLI-3
-cliban issue edit CLI-12 --related-to CLI-7
-cliban issue edit CLI-12 --remove-relation CLI-9
+cliban issue add --project PROJ --parent PROJ-12 --title "Repro test" --json
+cliban issue edit PROJ-12 --clear-parent          # promote back to top level
+cliban issue edit PROJ-12 --blocks PROJ-9
+cliban issue edit PROJ-12 --blocked-by PROJ-3
+cliban issue edit PROJ-12 --related-to PROJ-7
+cliban issue edit PROJ-12 --remove-relation PROJ-9
 ```
 
 ### Multi-line text
 ```bash
-cliban issue add --project CLI --title "Plan" --description-file ./plan.md
-cliban issue edit CLI-12 --description - < /tmp/desc.md      # '-' reads stdin
+cliban issue add --project PROJ --title "Plan" --description-file ./plan.md
+cliban issue edit PROJ-12 --description - < /tmp/desc.md      # '-' reads stdin
+cliban issue add --project PROJ --title "..." --description-file - --json <<'EOF'
+## Spec
+...
+EOF
 ```
 On `edit` these **replace** the description — see trap 1. Safe on `add`, where
 there is nothing to lose.
 
+### Append to a description without clobbering it
+There is no append flag; adding a section means round-tripping the current
+body (same pattern for `milestone edit` and `project edit`):
+```bash
+cliban issue show PROJ-12 --json | jq -r '.description' > /tmp/d.md
+printf '\n## Update\n...\n' >> /tmp/d.md     # or edit /tmp/d.md in place
+cliban issue edit PROJ-12 --description-file /tmp/d.md
+```
+For progress notes and plan ticks, prefer `issue log` / `issue tick` — they
+append atomically without the round-trip.
+
 ### Labels
 ```bash
-cliban label add bug --project CLI
-cliban label ls --project CLI --json
-cliban issue edit CLI-12 --label bug --remove-label stale
+cliban label add bug --project PROJ
+cliban label ls --project PROJ --json
+cliban issue edit PROJ-12 --label bug --remove-label stale
 ```
 
 ### Milestones
 ```bash
-cliban milestone add --project CLI --name "v0.1" --target 2026-06-01
-cliban milestone show v0.1 --project CLI --with-issues --json   # positional NAME
-cliban issue edit CLI-12 --milestone "v0.1"
-cliban issue edit CLI-12 --clear-milestone
+cliban milestone add --project PROJ --name "v0.1" --target 2026-06-01
+cliban milestone show v0.1 --project PROJ --with-issues --json   # positional NAME
+cliban issue edit PROJ-12 --milestone "v0.1"
+cliban issue edit PROJ-12 --clear-milestone
 
 cliban milestone ls --sort activity --stats --json   # all projects, recent first
-cliban milestone ls --project CLI --status open --sort target --json
-cliban milestone edit --project CLI --name v0.1 --status completed
+cliban milestone ls --project PROJ --status open --sort target --json
+cliban milestone edit --project PROJ --name v0.1 --status completed
+cliban milestone edit --project PROJ --name v0.1 --rename "v0.1.0"
 ```
+Milestones are addressed **by name, not a key** — and only `show` accepts the
+name positionally. `add`, `edit`, and `rm` require `--name`; a positional name
+there fails with `error: unexpected argument`. When in doubt, pass `--name`.
 `--sort` is `activity` (most recently worked on) | `name` (default) | `target`
 (soonest first, undated last). `--stats` adds done/total and last-activity
 columns; in `--json`, `done_count`, `last_activity`, `last_activity_human`.
 
 ### Archiving — there is no delete
 ```bash
-cliban issue archive CLI-12
-cliban issue unarchive CLI-12
-cliban issue ls --project CLI --archived --json      # archived are excluded by default
-cliban issue archive-done --project CLI --json       # sweep the done column
-cliban project edit CLI --auto-archive-done-after 7d # then:
+cliban issue archive PROJ-12
+cliban issue unarchive PROJ-12
+cliban issue ls --project PROJ --archived --json      # archived are excluded by default
+cliban issue archive-done --project PROJ --json       # sweep the done column
+cliban project edit PROJ --auto-archive-done-after 7d # then:
 cliban issue archive-done --auto --json              # honors each project's policy
 
 cliban project archive CLI                           # same for projects
-cliban milestone edit --project CLI --name v0.1 --status cancelled
+cliban milestone edit --project PROJ --name v0.1 --status cancelled
 ```
 `--auto-archive-done-after 0` disables the policy.
 
@@ -364,8 +385,8 @@ therefore *archive*, and `milestone rm` *cancels* — each succeeds, reports wha
 it actually did, and names the undo:
 
 ```bash
-$ cliban issue rm CLI-12
-archived CLI-12 — cliban archives instead of deleting (undo: cliban issue unarchive CLI-12)
+$ cliban issue rm PROJ-12
+archived PROJ-12 — cliban archives instead of deleting (undo: cliban issue unarchive PROJ-12)
 ```
 
 Prefer the real command (`issue archive`) when you know what you want;
@@ -400,10 +421,10 @@ Plan tasks are numbered H3 headings; steps are GFM checkboxes at column zero
 ```
 
 ```bash
-cliban issue log CLI-42 "rebased onto main, tests green"
-cliban issue log CLI-42 --message-file - < /tmp/note.md
-cliban issue tick CLI-42 --task 1 --step 2                  # - [ ] -> - [x]
-cliban issue promote CLI-42 --task 1 --step 3 \
+cliban issue log PROJ-42 "rebased onto main, tests green"
+cliban issue log PROJ-42 --message-file - < /tmp/note.md
+cliban issue tick PROJ-42 --task 1 --step 2                  # - [ ] -> - [x]
+cliban issue promote PROJ-42 --task 1 --step 3 \
   --title "CSRF middleware" --as sub-issue                  # or --as related
 ```
 
@@ -432,10 +453,10 @@ Durable knowledge that does not belong to any one issue goes under `## Notes`
 in the *project* description, one lesson per `###` subsection.
 
 ```bash
-cliban project search CLI "sqlite canonical" --json      # search first
-cliban project search CLI "wal" --section all --limit 5 --json
-cliban project show CLI --section notes
-cliban project edit CLI --description-file - < updated-project.md
+cliban project search PROJ "sqlite canonical" --json      # search first
+cliban project search PROJ "wal" --section all --limit 5 --json
+cliban project show PROJ --section notes
+cliban project edit PROJ --description-file - < updated-project.md
 ```
 
 `search` fuzzy-matches every whitespace-separated term against each heading and

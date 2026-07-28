@@ -1,4 +1,4 @@
-//! Keeps `skill/cliban-skill/SKILL.md` honest.
+//! Keeps `plugin/skills/cliban/SKILL.md` honest.
 //!
 //! The skill is the map agents navigate by, so a command that gets renamed or
 //! dropped without the doc following turns into an agent fumbling through
@@ -13,7 +13,7 @@ use std::process::Command;
 
 fn skill_md() -> String {
     let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skill/cliban-skill/SKILL.md");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugin/skills/cliban/SKILL.md");
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
