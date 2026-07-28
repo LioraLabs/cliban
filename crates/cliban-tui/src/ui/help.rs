@@ -26,7 +26,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("e", "edit issue ($EDITOR)"),
             ("Space b/i/k/r/d", "move to status"),
             ("t", "cycle milestone tag"),
-            ("a", "archive"),
+            ("A", "archive (confirms)"),
             ("n", "new issue"),
         ],
     ),
@@ -42,7 +42,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
-        "ACTIVITY (A)",
+        "ACTIVITY (a)",
         &[
             ("type", "filter by key/text/actor"),
             ("Tab / S-Tab", "all/closed/moves/edits/…"),

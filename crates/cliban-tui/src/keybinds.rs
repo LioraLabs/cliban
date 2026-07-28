@@ -110,8 +110,10 @@ fn map_normal(key: KeyEvent, app: &mut App) -> Option<Action> {
         (KeyCode::Char('N'), _) => Some(Action::NewMilestone),
         (KeyCode::Char('t'), KeyModifiers::NONE) => Some(Action::TagMilestone),
         (KeyCode::Char(' '), _) => Some(Action::BeginMove),
-        (KeyCode::Char('a'), KeyModifiers::NONE) => Some(Action::ArchiveRequest),
-        (KeyCode::Char('A'), _) => Some(Action::OpenActivityPage),
+        // The mailbox gets the lowercase key: checking activity is routine,
+        // archiving is not.
+        (KeyCode::Char('a'), KeyModifiers::NONE) => Some(Action::OpenActivityPage),
+        (KeyCode::Char('A'), _) => Some(Action::ArchiveRequest),
         (KeyCode::Char('m'), KeyModifiers::NONE) => Some(Action::OpenMilestonePage),
         (KeyCode::Char('M'), _) => Some(Action::CycleMilestoneFilter),
         (KeyCode::Char('p'), KeyModifiers::NONE) => Some(Action::OpenProjectPage),
@@ -274,12 +276,11 @@ mod tests {
     }
 
     #[test]
-    fn capital_a_opens_the_activity_page_where_typing_filters_and_tab_cycles() {
+    fn a_opens_the_activity_page_where_typing_filters_and_tab_cycles() {
         use crate::app::{ActivityPageState, Mode};
-        let cap = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT);
         let mut app = App::new();
         assert!(matches!(
-            map_key(cap('A'), &mut app),
+            map_key(ke(KeyCode::Char('a')), &mut app),
             Some(Action::OpenActivityPage)
         ));
         app.mode = Mode::ActivityPage(ActivityPageState::default());
@@ -564,6 +565,13 @@ mod tests {
         ));
         assert!(matches!(
             map_key(ke(KeyCode::Char('a')), &mut app),
+            Some(Action::OpenActivityPage)
+        ));
+        assert!(matches!(
+            map_key(
+                KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT),
+                &mut app
+            ),
             Some(Action::ArchiveRequest)
         ));
         assert!(matches!(

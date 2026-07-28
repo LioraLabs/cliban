@@ -302,7 +302,7 @@ projects; narrow with `--project`, `--label`, and friends.
 
 ## What changed recently
 
-The TUI's activity page (`A`) is a mailbox for the board: every recorded
+The TUI's activity page (`a`) is a mailbox for the board: every recorded
 event newest-first, with chips to filter by kind — `closed` answers "what
 shipped recently" — type-to-filter across keys, titles, messages, and
 actors, and `Enter` to jump to the issue on the board:

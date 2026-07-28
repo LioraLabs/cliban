@@ -37,7 +37,7 @@ snap "$WORK/projects.ans"; kill_
 bash "$HERE/shoot-one.sh" "$WORK/projects.ans" "$HERE/../projects.png" "cliban — projects"
 
 # The activity page, cursor on the reopen so the detail pane shows a note.
-run 132 22; tmux send-keys -t cliban-shot A; sleep 1
+run 132 22; tmux send-keys -t cliban-shot a; sleep 1
 snap "$WORK/activity.ans"; kill_
 bash "$HERE/shoot-one.sh" "$WORK/activity.ans" "$HERE/../activity.png" "cliban — activity"
 
