@@ -9,6 +9,7 @@ pub mod keybinds;
 pub mod picker;
 pub mod remote;
 pub mod runtime;
+pub mod seen;
 pub mod session;
 pub mod ui;
 

@@ -10,7 +10,9 @@ trap 'rm -rf "$WORK"; tmux kill-session -t cliban-shot 2>/dev/null || true' EXIT
 BIN=$(command -v "${CLIBAN_BIN:-cliban}")
 CLIBAN_BIN="$BIN" bash "$HERE/seed-demo.sh" "$WORK/demo.db"
 
-run() { tmux new-session -d -s cliban-shot -x "$1" -y "$2" "env EDITOR=nvim $BIN --db $WORK/demo.db tui"; sleep 2; }
+# The seen file starts at the epoch so the board shot shows the mailbox badge.
+printf '1970-01-01T00:00:00Z' > "$WORK/seen"
+run() { tmux new-session -d -s cliban-shot -x "$1" -y "$2" "env EDITOR=nvim CLIBAN_TUI_SEEN_FILE=$WORK/seen $BIN --db $WORK/demo.db tui"; sleep 2; }
 snap() { tmux capture-pane -e -p -t cliban-shot > "$1"; }
 kill_() { tmux kill-session -t cliban-shot 2>/dev/null || true; }
 

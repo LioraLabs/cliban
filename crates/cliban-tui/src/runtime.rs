@@ -206,6 +206,14 @@ fn seed_milestone_picker(app: &mut App) {
 pub fn run(path: &Path) -> Result<(), DynErr> {
     let data = Data::open(path)?;
     let mut app = App::new();
+    // The mailbox badge: pick up where the last session left off. A first
+    // run starts read — an all-history badge on day one is noise, not news.
+    let seen_path = crate::seen::path_for(path);
+    app.last_seen = crate::seen::load(&seen_path);
+    app.seen_path = Some(seen_path);
+    if app.last_seen.is_none() {
+        app.mark_seen();
+    }
     reload(&data, &mut app)?;
     enable_raw_mode()?;
     execute!(stdout(), EnterAlternateScreen)?;
@@ -260,7 +268,14 @@ fn handle_key<B: Backend>(
         return Ok(true);
     }
     let open_mp = matches!(action, Action::OpenMilestonePicker);
+    // Entering or leaving the mailbox reads it: events that arrive while
+    // the page is open are on screen, so closing counts as having seen them.
+    let touches_mailbox = matches!(action, Action::OpenActivityPage)
+        || (matches!(app.mode, Mode::ActivityPage(_)) && matches!(action, Action::Cancel));
     let cmd = crate::app::update(app, action);
+    if touches_mailbox {
+        app.mark_seen();
+    }
     if open_mp {
         seed_milestone_picker(app);
     }

@@ -37,7 +37,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     } else {
         Style::default().fg(theme::DIM)
     };
-    let spans = vec![
+    let mut spans = vec![
         project_span,
         Span::raw("  "),
         milestone_span,
@@ -46,6 +46,18 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         Span::raw("    "),
         Span::styled(format!("⚠ {blocked} blocked"), blocked_style),
     ];
+    // Unread mail lights up only when someone else did something — `a` opens
+    // the mailbox and clears it.
+    let unseen = app.unseen_count();
+    if unseen > 0 {
+        spans.push(Span::raw("    "));
+        spans.push(Span::styled(
+            format!("✉ {unseen} new"),
+            Style::default()
+                .fg(theme::MARKER)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -88,5 +100,27 @@ mod tests {
         assert!(d.contains("▸CLI"), "scope chip:\n{d}");
         assert!(d.contains("1 issues"), "count:\n{d}");
         assert!(d.contains("⚠ 1 blocked"), "blocked:\n{d}");
+        assert!(!d.contains('✉'), "no badge without unread mail:\n{d}");
+    }
+
+    #[test]
+    fn top_bar_shows_the_mailbox_badge_when_there_is_unread_mail() {
+        use crate::app::ActivityRef;
+        let mut app = App::new();
+        app.self_actor = None;
+        app.activity = vec![ActivityRef {
+            issue_key: "PULSE-1".into(),
+            title: "t".into(),
+            project: "PULSE".into(),
+            kind: "status".into(),
+            message: "backlog → done".into(),
+            actor: Some("alex".into()),
+            ts: chrono::Utc::now(),
+        }];
+        app.last_seen = Some(chrono::Utc::now() - chrono::Duration::hours(1));
+        let mut t = Terminal::new(TestBackend::new(100, 1)).unwrap();
+        t.draw(|f| draw(f, Rect::new(0, 0, 100, 1), &app)).unwrap();
+        let d = dump(t.backend().buffer());
+        assert!(d.contains("✉ 1 new"), "badge missing:\n{d}");
     }
 }

@@ -455,6 +455,13 @@ pub struct App {
     pub last_card_idx_per_column: HashMap<ColumnId, usize>,
     pub pending_g: bool,
     pub boot_at: Instant,
+    /// Everything at or before this instant has been read in the mailbox.
+    pub last_seen: Option<DateTime<Utc>>,
+    /// Where `last_seen` persists between sessions; `None` skips persistence
+    /// (headless tests, hosts without a state dir).
+    pub seen_path: Option<std::path::PathBuf>,
+    /// `$CLIBAN_ACTOR` at startup — own events don't count as unread mail.
+    pub self_actor: Option<String>,
 }
 
 impl App {
@@ -471,6 +478,31 @@ impl App {
             last_card_idx_per_column: HashMap::new(),
             pending_g: false,
             boot_at: Instant::now(),
+            last_seen: None,
+            seen_path: None,
+            self_actor: cliban_core::audit::actor(),
+        }
+    }
+
+    /// Unread mail: activity newer than `last_seen`, excluding your own
+    /// events — what you did yourself is not news to you.
+    pub fn unseen_count(&self) -> usize {
+        self.activity
+            .iter()
+            .filter(|e| match self.last_seen {
+                Some(seen) => e.ts > seen,
+                None => true,
+            })
+            .filter(|e| self.self_actor.is_none() || e.actor != self.self_actor)
+            .count()
+    }
+
+    /// Opening (or leaving) the mailbox reads everything up to now.
+    pub fn mark_seen(&mut self) {
+        let now = Utc::now();
+        self.last_seen = Some(now);
+        if let Some(p) = &self.seen_path {
+            crate::seen::store(p, now);
         }
     }
 
@@ -2094,6 +2126,33 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(keys(&app, &s), ["TIDE-3"]);
+    }
+
+    #[test]
+    fn unseen_counts_only_news_from_others() {
+        let mut app = App::new();
+        app.self_actor = Some("claude".into());
+        let now = chrono::Utc::now();
+        let at = |secs_ago: i64, actor: Option<&str>| {
+            let mut e = act("PULSE-9", "status", "backlog → done");
+            e.ts = now - chrono::Duration::seconds(secs_ago);
+            e.actor = actor.map(String::from);
+            e
+        };
+        app.activity = vec![
+            at(10, Some("alex")),   // new, someone else → counts
+            at(20, Some("claude")), // new, but mine → not news
+            at(30, None),           // new, unattributed → counts
+            at(300, Some("alex")),  // old → already seen
+        ];
+        app.last_seen = Some(now - chrono::Duration::seconds(60));
+        assert_eq!(app.unseen_count(), 2);
+        // With no last-seen, everything foreign is unread.
+        app.last_seen = None;
+        assert_eq!(app.unseen_count(), 3);
+        // Reading the mailbox clears it.
+        app.mark_seen();
+        assert_eq!(app.unseen_count(), 0);
     }
 
     #[test]
