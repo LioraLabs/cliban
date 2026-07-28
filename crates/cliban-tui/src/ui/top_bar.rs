@@ -1,38 +1,51 @@
+use super::theme;
 use crate::app::App;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
-    let project_chip = match &app.scope.project {
-        Some(k) => format!("▸{k}"),
-        None => "▸all".into(),
+    // The project chip wears the project's own color (matching the milestone
+    // page), the milestone scope is violet, counts stay quiet, and the
+    // blocked tally only turns alarm-red when it has something to say.
+    let project_span = match &app.scope.project {
+        Some(k) => Span::styled(
+            format!("▸{k}"),
+            Style::default()
+                .fg(theme::project_color(k))
+                .add_modifier(Modifier::BOLD),
+        ),
+        None => Span::styled(
+            "▸all".to_string(),
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
     };
-    let milestone_chip = match &app.scope.milestone {
-        Some(m) => format!("▸{m}"),
-        None => "—".into(),
+    let milestone_span = match &app.scope.milestone {
+        Some(m) => Span::styled(format!("▸{m}"), Style::default().fg(theme::MILESTONE)),
+        None => Span::styled("—".to_string(), Style::default().fg(theme::DIM)),
     };
     let count = app.scoped_card_count();
     let blocked = app.blocked_count();
-    let mut spans = vec![
-        Span::styled(project_chip, Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw("  "),
-        Span::raw(milestone_chip),
-        Span::raw("    "),
-        Span::raw(format!("{count} issues")),
-        Span::raw("    "),
-    ];
-    let blocked_color = if blocked > 0 {
-        Color::Red
+    let blocked_style = if blocked > 0 {
+        Style::default()
+            .fg(theme::ALARM)
+            .add_modifier(Modifier::BOLD)
     } else {
-        Color::DarkGray
+        Style::default().fg(theme::DIM)
     };
-    spans.push(Span::styled(
-        format!("⚠ {blocked} blocked"),
-        Style::default().fg(blocked_color),
-    ));
+    let spans = vec![
+        project_span,
+        Span::raw("  "),
+        milestone_span,
+        Span::raw("    "),
+        Span::styled(format!("{count} issues"), Style::default().fg(theme::DIM)),
+        Span::raw("    "),
+        Span::styled(format!("⚠ {blocked} blocked"), blocked_style),
+    ];
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 

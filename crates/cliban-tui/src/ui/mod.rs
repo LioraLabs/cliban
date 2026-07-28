@@ -8,16 +8,32 @@ pub mod fuzzy;
 pub mod help;
 pub mod milestone_page;
 pub mod picker;
+pub mod theme;
 pub mod top_bar;
 
 use crate::app::{App, Mode};
 use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Color, Style};
-use ratatui::text::Line;
+use ratatui::style::Style;
+use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-const STATUS_HELP: &str = "hjkl move  enter detail  e edit  E proj/ms  n new  N ms+  t tag  Space mv  a arch  m milestones  M filter  / find  r refresh  q quit";
+const STATUS_HELP: &[(&str, &str)] = &[
+    ("hjkl", "move"),
+    ("enter", "detail"),
+    ("e", "edit"),
+    ("E", "proj/ms"),
+    ("n", "new"),
+    ("N", "ms+"),
+    ("t", "tag"),
+    ("Space", "mv"),
+    ("a", "arch"),
+    ("m", "milestones"),
+    ("M", "filter"),
+    ("/", "find"),
+    ("r", "refresh"),
+    ("q", "quit"),
+];
 
 pub fn render(frame: &mut Frame, app: &App) {
     // The milestone page owns the whole screen — it's a page, not a popup.
@@ -35,14 +51,18 @@ pub fn render(frame: &mut Frame, app: &App) {
         .split(frame.area());
     top_bar::draw(frame, chunks[0], app);
     board::draw_board(frame, chunks[1], app);
-    let status = match &app.status_msg {
-        Some(m) => format!("{m}  |  {STATUS_HELP}"),
-        None => STATUS_HELP.to_string(),
-    };
-    frame.render_widget(
-        Paragraph::new(Line::styled(status, Style::default().fg(Color::Gray))),
-        chunks[2],
-    );
+    // Status messages are feedback — they get the marker color and push the
+    // hints right; the hints alone otherwise fill the row quietly.
+    let mut status = theme::hints(STATUS_HELP);
+    if let Some(m) = &app.status_msg {
+        let mut spans = vec![
+            Span::styled(m.clone(), Style::default().fg(theme::MARKER)),
+            Span::styled("  |  ", Style::default().fg(theme::DIM)),
+        ];
+        spans.extend(status.spans);
+        status = ratatui::text::Line::from(spans);
+    }
+    frame.render_widget(Paragraph::new(status), chunks[2]);
 
     match &app.mode {
         Mode::Help => help::draw_help(frame, frame.area()),

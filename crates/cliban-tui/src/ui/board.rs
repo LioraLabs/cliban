@@ -1,6 +1,9 @@
+use super::theme;
 use crate::app::{App, ColumnId};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::widgets::{Block, Borders};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
 pub fn draw_board(frame: &mut Frame, area: Rect, app: &App) {
@@ -19,11 +22,35 @@ pub fn draw_board(frame: &mut Frame, area: Rect, app: &App) {
 
 fn draw_column(frame: &mut Frame, area: Rect, app: &App, col: ColumnId, now_ms: u128) {
     let cards = app.column_cards(col);
-    let header = format!(" {} ({}) ", col.label(), cards.len());
-    let block = Block::default().title(header).borders(Borders::ALL);
+    let accent = theme::column_color(col.status());
+    let focused = app.focus.column == col;
+    // The column frame stays quiet so the cards carry the color; the header
+    // wears the column's hue, and focus lights the whole frame up.
+    let border = if focused { accent } else { theme::DIM };
+    let header = Line::from(vec![
+        Span::styled(
+            format!(" {} ", col.label()),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("({}) ", cards.len()),
+            Style::default().fg(theme::DIM),
+        ),
+    ]);
+    let block = Block::default()
+        .title(header)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if cards.is_empty() {
+        if inner.height > 0 {
+            frame.render_widget(
+                Paragraph::new(Line::styled("  · empty ·", Style::default().fg(theme::DIM))),
+                Rect::new(inner.x, inner.y, inner.width, 1),
+            );
+        }
         return;
     }
     let card_height: u16 = 4;

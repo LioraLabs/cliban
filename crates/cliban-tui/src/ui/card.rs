@@ -1,20 +1,12 @@
+use super::theme;
 use crate::app::Card;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
-fn priority_color(p: &str) -> Color {
-    match p {
-        "urgent" => Color::Indexed(196),
-        "high" => Color::Indexed(208),
-        "medium" => Color::Indexed(226),
-        "low" => Color::Indexed(33),
-        _ => Color::DarkGray,
-    }
-}
-fn priority_letter(p: &str) -> &'static str {
+pub fn priority_letter(p: &str) -> &'static str {
     match p {
         "low" => "(L)",
         "medium" => "(M)",
@@ -32,30 +24,39 @@ pub fn card_lines(card: &Card) -> (String, String) {
 }
 
 pub fn draw_card(frame: &mut Frame, area: Rect, card: &Card, is_focused: bool, now_ms: u128) {
+    let prio = theme::priority_color(&card.priority);
     let border_style = if is_focused {
         Style::default()
-            .fg(Color::Cyan)
+            .fg(theme::ACCENT)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(priority_color(&card.priority))
+        Style::default().fg(prio)
     };
-    let (key_line, title_line) = card_lines(card);
-    let title_inner = title_line.strip_prefix("  ").unwrap_or(&title_line);
+    let title_inner = card.title.as_str();
     let viewport = area.width.saturating_sub(4) as usize;
     let display = if is_focused && title_inner.chars().count() > viewport {
         marquee_slice(title_inner, viewport, now_ms)
     } else {
         truncate(title_inner, viewport)
     };
+    // Key bold, priority letter in the priority color — the letter and the
+    // border tell the same story even when the border is busy showing focus.
     let lines = vec![
-        Line::from(Span::styled(
-            key_line,
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
+        Line::from(vec![
+            Span::styled(
+                card.key.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" {}", priority_letter(&card.priority)),
+                Style::default().fg(prio).add_modifier(Modifier::BOLD),
+            ),
+        ]),
         Line::from(format!("  {}", display)),
     ];
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(border_style);
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
@@ -94,6 +95,7 @@ pub fn marquee_slice(text: &str, viewport: usize, now_ms: u128) -> String {
 mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Color;
     use ratatui::Terminal;
 
     fn card(key: &str, prio: &str) -> Card {
@@ -118,19 +120,11 @@ mod tests {
     }
 
     #[test]
-    fn priority_palette_matches_cliban() {
-        assert_eq!(priority_color("urgent"), Color::Indexed(196));
-        assert_eq!(priority_color("high"), Color::Indexed(208));
-        assert_eq!(priority_color("medium"), Color::Indexed(226));
-        assert_eq!(priority_color("low"), Color::Indexed(33));
-    }
-
-    #[test]
     fn focused_border_cyan_unfocused_border_priority() {
         let mut t = Terminal::new(TestBackend::new(30, 4)).unwrap();
         t.draw(|f| draw_card(f, Rect::new(0, 0, 30, 4), &card("CLI-8", "urgent"), true, 0))
             .unwrap();
-        assert_eq!(t.backend().buffer()[(0, 0)].fg, Color::Cyan);
+        assert_eq!(t.backend().buffer()[(0, 0)].fg, theme::ACCENT);
         let mut t2 = Terminal::new(TestBackend::new(30, 4)).unwrap();
         t2.draw(|f| {
             draw_card(

@@ -3,7 +3,7 @@
 set -euo pipefail
 DB=${1:?usage: seed-demo.sh /path/to/demo.db}
 export CLIBAN_ACTOR=alex
-c() { cliban --db "$DB" "$@" >/dev/null; }
+c() { "${CLIBAN_BIN:-cliban}" --db "$DB" "$@" >/dev/null; }
 c project add PULSE --name "Pulse" --description "Self-hosted uptime and status pages"
 c milestone add --project PULSE --name "v1.0 hardening" --target 2026-08-21
 add() { c issue add --project PULSE --title "$1" --priority "$2" --status "$3" --milestone "${5:-v1.0 hardening}" --label "$4"; }

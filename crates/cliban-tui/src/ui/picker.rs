@@ -21,10 +21,11 @@
 //! └─────────────────────────────────────┘
 //! ```
 
+use super::theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
 /// View-model handed to `draw`. All fields are borrowed so the caller owns
@@ -47,15 +48,7 @@ pub fn draw(frame: &mut Frame, area: Rect, view: PickerView) {
     let popup = centered_rect(60, 20, area);
     frame.render_widget(Clear, popup);
 
-    let block = Block::default()
-        .title(format!(" {} ", view.title))
-        .borders(Borders::ALL)
-        .border_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
-    frame.render_widget(block, popup);
+    frame.render_widget(theme::popup_block(view.title, theme::ACCENT), popup);
 
     // Inner rect (inside the border): 1-cell margin all around.
     let inner = Rect::new(
@@ -81,7 +74,7 @@ pub fn draw(frame: &mut Frame, area: Rect, view: PickerView) {
     // Query line — `> <typed>_` with the caret rendered as a visible
     // underscore so users see where the cursor is.
     let query_line = Line::from(vec![
-        Span::styled("> ", Style::default().fg(Color::Yellow)),
+        Span::styled("> ", Style::default().fg(theme::MARKER)),
         Span::raw(view.query),
         Span::styled("_", Style::default().add_modifier(Modifier::SLOW_BLINK)),
     ]);
@@ -105,7 +98,7 @@ pub fn draw(frame: &mut Frame, area: Rect, view: PickerView) {
     let lines: Vec<Line> = if total == 0 {
         vec![Line::styled(
             "  (no matches)",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::DIM),
         )]
     } else {
         view.items[start..end]
@@ -114,13 +107,7 @@ pub fn draw(frame: &mut Frame, area: Rect, view: PickerView) {
             .map(|(i, label)| {
                 let abs = start + i;
                 if abs == cursor {
-                    Line::from(vec![
-                        Span::styled("▸ ", Style::default().fg(Color::Yellow)),
-                        Span::styled(
-                            label.as_str(),
-                            Style::default().add_modifier(Modifier::REVERSED),
-                        ),
-                    ])
+                    theme::selected_row(label, list_rect.width as usize)
                 } else {
                     Line::from(vec![Span::raw("  "), Span::raw(label.as_str())])
                 }
@@ -129,14 +116,10 @@ pub fn draw(frame: &mut Frame, area: Rect, view: PickerView) {
     };
     frame.render_widget(Paragraph::new(lines), list_rect);
 
-    // Footer hints — match the convention used by `help.rs` / `confirm.rs`.
-    let footer = Line::from(vec![
-        Span::styled("Enter", Style::default().fg(Color::Green)),
-        Span::raw(" select  "),
-        Span::styled("Esc", Style::default().fg(Color::Red)),
-        Span::raw(" cancel"),
-    ]);
-    frame.render_widget(Paragraph::new(footer), chunks[2]);
+    frame.render_widget(
+        Paragraph::new(theme::hints(&[("Enter", "select"), ("Esc", "cancel")])),
+        chunks[2],
+    );
 }
 
 /// Case-insensitive substring fuzzy filter. Returns the indices into the

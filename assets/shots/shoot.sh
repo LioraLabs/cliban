@@ -5,14 +5,22 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"; tmux kill-session -t cliban-shot 2>/dev/null || true' EXIT
-bash "$HERE/seed-demo.sh" "$WORK/demo.db"
+# CLIBAN_BIN lets a checkout shoot its own build; an absolute path also
+# survives an already-running tmux server whose PATH predates this shell.
+BIN=$(command -v "${CLIBAN_BIN:-cliban}")
+CLIBAN_BIN="$BIN" bash "$HERE/seed-demo.sh" "$WORK/demo.db"
 
-run() { tmux new-session -d -s cliban-shot -x "$1" -y "$2" "env EDITOR=nvim cliban --db $WORK/demo.db tui"; sleep 2; }
+run() { tmux new-session -d -s cliban-shot -x "$1" -y "$2" "env EDITOR=nvim $BIN --db $WORK/demo.db tui"; sleep 2; }
 snap() { tmux capture-pane -e -p -t cliban-shot > "$1"; }
 kill_() { tmux kill-session -t cliban-shot 2>/dev/null || true; }
 
-# The board.
-run 132 25; tmux send-keys -t cliban-shot j; sleep 1
+# The board, scoped to the curated Pulse project so the filler tasks that
+# feed the milestone rollups stay out of frame.
+run 132 25
+tmux send-keys -t cliban-shot p; sleep 1
+tmux send-keys -t cliban-shot -l "pulse"; sleep 1
+tmux send-keys -t cliban-shot Enter; sleep 1
+tmux send-keys -t cliban-shot j; sleep 1
 snap "$WORK/board.ans"; kill_
 bash "$HERE/shoot-one.sh" "$WORK/board.ans" "$HERE/../board.png" "cliban — Pulse"
 

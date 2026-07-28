@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Flex, Layout};
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, Borders, List, ListState};
+use ratatui::widgets::{List, ListState};
 use ratatui::{Frame, Terminal};
 
 use crate::session::{Session, SessionEvent};
@@ -77,9 +77,16 @@ fn render(f: &mut Frame, title: &str, items: &[String], cursor: usize) {
         .flex(Flex::Center)
         .areas(area);
     let list = List::new(items.iter().map(String::as_str))
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-        .highlight_symbol("> ");
+        .block(crate::ui::theme::popup_block(
+            title,
+            crate::ui::theme::ACCENT,
+        ))
+        .highlight_style(
+            Style::default()
+                .bg(crate::ui::theme::SELECTION_BG)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▸ ");
     let mut state = ListState::default().with_selected(Some(cursor));
     f.render_stateful_widget(list, area, &mut state);
 }

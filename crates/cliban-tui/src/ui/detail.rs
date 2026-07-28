@@ -1,36 +1,55 @@
+use super::card::priority_letter;
+use super::theme;
 use crate::app::Card;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
 pub fn draw(frame: &mut Frame, area: Rect, card: &Card) {
     let popup = centered_rect(70, 20, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(format!(" {} ", card.key))
-        .borders(Borders::ALL);
+    let block = theme::popup_block(&card.key, theme::ACCENT);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
+
+    // A label column in dim gray, values in the same colors the board uses:
+    // status wears its column hue, priority its ramp, milestone its violet.
+    let dim = Style::default().fg(theme::DIM);
+    let field = |label: &str| Span::styled(format!("  {label:<11}"), dim);
     let mut lines = vec![
-        Line::from(card.title.clone()),
-        Line::styled(
-            format!("status: {}   priority: {}", card.status, card.priority),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Line::raw(""),
+        Line::from(Span::styled(
+            format!("  {}", card.title),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+        Line::from(vec![
+            field("status"),
+            Span::styled(
+                card.status.clone(),
+                Style::default().fg(theme::column_color(&card.status)),
+            ),
+        ]),
+        Line::from(vec![
+            field("priority"),
+            Span::styled(
+                format!("{} {}", card.priority, priority_letter(&card.priority)),
+                Style::default().fg(theme::priority_color(&card.priority)),
+            ),
+        ]),
     ];
     if let Some(m) = &card.milestone {
-        lines.push(Line::styled(
-            format!("milestone: {m}"),
-            Style::default().fg(Color::DarkGray),
-        ));
+        lines.push(Line::from(vec![
+            field("milestone"),
+            Span::styled(m.clone(), Style::default().fg(theme::MILESTONE)),
+        ]));
     }
     lines.push(Line::raw(""));
-    lines.push(Line::styled(
-        "q/esc back",
-        Style::default().fg(Color::DarkGray),
-    ));
+    let mut hints = theme::hints(&[("q/esc", "back")]);
+    hints.spans.insert(0, Span::raw("  "));
+    lines.push(hints);
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 fn centered_rect(width_pct: u16, height_max: u16, area: Rect) -> Rect {

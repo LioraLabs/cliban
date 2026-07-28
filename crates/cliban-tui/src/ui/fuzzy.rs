@@ -2,25 +2,18 @@
 //! matching visible card. Filtering happens in `app::update::fuzzy_search`;
 //! this only renders the supplied query + result list, resolving keys against
 //! `app.cards`.
+use super::theme;
 use crate::app::{App, FuzzyState};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &FuzzyState) {
     let popup = centered_rect(60, 20, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Fuzzy find ")
-        .borders(Borders::ALL)
-        .border_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
-    frame.render_widget(block, popup);
+    frame.render_widget(theme::popup_block("Fuzzy find", theme::ACCENT), popup);
     let inner = Rect::new(
         popup.x + 1,
         popup.y + 1,
@@ -39,7 +32,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &FuzzyState) {
         ])
         .split(inner);
     let query_line = Line::from(vec![
-        Span::styled("/ ", Style::default().fg(Color::Yellow)),
+        Span::styled("/ ", Style::default().fg(theme::MARKER)),
         Span::raw(state.query.as_str()),
         Span::styled("_", Style::default().add_modifier(Modifier::SLOW_BLINK)),
     ]);
@@ -61,7 +54,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &FuzzyState) {
     let lines: Vec<Line> = if total == 0 {
         vec![Line::styled(
             "  (no matches)",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::DIM),
         )]
     } else {
         labels[start..end]
@@ -70,13 +63,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &FuzzyState) {
             .map(|(i, label)| {
                 let abs = start + i;
                 if abs == cursor {
-                    Line::from(vec![
-                        Span::styled("▸ ", Style::default().fg(Color::Yellow)),
-                        Span::styled(
-                            label.as_str(),
-                            Style::default().add_modifier(Modifier::REVERSED),
-                        ),
-                    ])
+                    theme::selected_row(label, list_rect.width as usize)
                 } else {
                     Line::from(vec![Span::raw("  "), Span::raw(label.as_str())])
                 }
@@ -84,13 +71,10 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &FuzzyState) {
             .collect()
     };
     frame.render_widget(Paragraph::new(lines), list_rect);
-    let footer = Line::from(vec![
-        Span::styled("Enter", Style::default().fg(Color::Green)),
-        Span::raw(" jump  "),
-        Span::styled("Esc", Style::default().fg(Color::Red)),
-        Span::raw(" cancel"),
-    ]);
-    frame.render_widget(Paragraph::new(footer), chunks[2]);
+    frame.render_widget(
+        Paragraph::new(theme::hints(&[("Enter", "jump"), ("Esc", "cancel")])),
+        chunks[2],
+    );
 }
 
 fn centered_rect(width_pct: u16, height_max: u16, area: Rect) -> Rect {
