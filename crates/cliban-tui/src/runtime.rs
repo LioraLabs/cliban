@@ -35,6 +35,10 @@ pub fn dispatch_command(data: &Data, _app: &mut App, cmd: &Command) -> Result<bo
             data.archive(key)?;
             Ok(true)
         }
+        Command::Unarchive { key } => {
+            data.unarchive(key)?;
+            Ok(true)
+        }
         Command::TagMilestone { key, milestone } => {
             data.tag_milestone(key, milestone.clone())?;
             Ok(true)

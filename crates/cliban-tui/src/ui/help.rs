@@ -27,6 +27,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("Space b/i/k/r/d", "move to status"),
             ("t", "cycle milestone tag"),
             ("A", "archive (confirms)"),
+            ("u", "undo last move/archive"),
             ("n", "new issue"),
         ],
     ),

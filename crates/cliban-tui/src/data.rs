@@ -360,6 +360,26 @@ impl Data {
         Ok(())
     }
 
+    /// Undo's inverse of [`Self::archive`], with its own trail entry.
+    pub fn unarchive(&self, key: &str) -> Result<(), DataError> {
+        let key = key.to_string();
+        self.rt.block_on(self.store.call(move |conn| {
+            let i = issues::get_by_key(conn, &key)?.ok_or(cliban_core::Error::NotFound)?;
+            issues::update(
+                conn,
+                &i,
+                issues::UpdateIssue {
+                    archived: Some(false),
+                    ..Default::default()
+                },
+            )?;
+            audit::record(conn, &i, "archive", "unarchived");
+            Ok(())
+        }))?;
+        self.notify();
+        Ok(())
+    }
+
     pub fn tag_milestone(&self, key: &str, milestone: Option<String>) -> Result<(), DataError> {
         let key = key.to_string();
         self.rt.block_on(self.store.call(move |conn| {

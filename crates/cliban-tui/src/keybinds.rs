@@ -95,6 +95,7 @@ fn map_normal(key: KeyEvent, app: &mut App) -> Option<Action> {
         (KeyCode::Char('u'), KeyModifiers::CONTROL) | (KeyCode::PageUp, _) => {
             Some(Action::PageMove(Direction::Up))
         }
+        (KeyCode::Char('u'), KeyModifiers::NONE) => Some(Action::Undo),
         (KeyCode::Char('g'), KeyModifiers::NONE) => {
             if was_g {
                 app.pending_g = false;

@@ -253,6 +253,19 @@ pub struct ProjectRef {
     pub last_activity: DateTime<Utc>,
 }
 
+/// One reversible board mutation, recorded as its inverse. The stack is
+/// session-local: undo is for the slip you just made, not time travel —
+/// the activity log is the durable history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UndoOp {
+    /// The issue was moved; undoing moves it back to `from`.
+    Move { key: String, from: String },
+    /// A reorder swap is its own inverse.
+    Reorder { key: String, other: String },
+    /// The issue was archived; undoing unarchives it.
+    Archive { key: String },
+}
+
 /// One relation edge of the card open in the detail popup, joined with the
 /// other issue so the popup can say what it is and whether it's still open.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -483,7 +496,12 @@ pub struct App {
     pub seen_path: Option<std::path::PathBuf>,
     /// `$CLIBAN_ACTOR` at startup — own events don't count as unread mail.
     pub self_actor: Option<String>,
+    /// Reversible mutations this session, newest last (`u` pops).
+    pub undo_stack: Vec<UndoOp>,
 }
+
+/// Undo remembers this many mutations before forgetting the oldest.
+const UNDO_DEPTH: usize = 32;
 
 impl App {
     pub fn new() -> Self {
@@ -503,6 +521,14 @@ impl App {
             last_seen: None,
             seen_path: None,
             self_actor: cliban_core::audit::actor(),
+            undo_stack: Vec::new(),
+        }
+    }
+
+    fn push_undo(&mut self, op: UndoOp) {
+        self.undo_stack.push(op);
+        if self.undo_stack.len() > UNDO_DEPTH {
+            self.undo_stack.remove(0);
         }
     }
 
@@ -704,7 +730,12 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
         }
         Action::MoveTo(status) => {
             app.mode = Mode::Normal;
-            let key = app.focused_card()?.key.clone();
+            let card = app.focused_card()?;
+            let (key, from) = (card.key.clone(), card.status.clone());
+            app.push_undo(UndoOp::Move {
+                key: key.clone(),
+                from,
+            });
             Some(Command::MoveIssue { key, status })
         }
         Action::MoveIssueDir(d) => {
@@ -724,11 +755,16 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
                     };
                     let target = ColumnId::ALL[target_idx];
                     let status = target.status().to_string();
+                    let from = app.focus.column.status().to_string();
                     // core's move_issue appends to the end of the target column, so the
                     // cursor follows the card to its landing slot there.
                     let landing = app.column_cards(target).len();
                     app.focus.column = target;
                     app.focus.card_idx = landing;
+                    app.push_undo(UndoOp::Move {
+                        key: key.clone(),
+                        from,
+                    });
                     Some(Command::MoveIssue { key, status })
                 }
                 Direction::Down | Direction::Up => {
@@ -746,6 +782,10 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
                     };
                     let other = cards[other_idx].key.clone();
                     app.focus.card_idx = other_idx; // cursor follows the reordered card
+                    app.push_undo(UndoOp::Reorder {
+                        key: key.clone(),
+                        other: other.clone(),
+                    });
                     Some(Command::Reorder { key, other })
                 }
             }
@@ -763,7 +803,28 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
                 _ => app.focused_card()?.key.clone(),
             };
             app.mode = Mode::Normal;
+            app.push_undo(UndoOp::Archive { key: key.clone() });
             Some(Command::Archive { key })
+        }
+        Action::Undo => {
+            let Some(op) = app.undo_stack.pop() else {
+                app.status_msg = Some("nothing to undo".into());
+                return None;
+            };
+            match op {
+                UndoOp::Move { key, from } => {
+                    app.status_msg = Some(format!("undid: {key} back to {from}"));
+                    Some(Command::MoveIssue { key, status: from })
+                }
+                UndoOp::Reorder { key, other } => {
+                    app.status_msg = Some(format!("undid: reorder of {key}"));
+                    Some(Command::Reorder { key, other })
+                }
+                UndoOp::Archive { key } => {
+                    app.status_msg = Some(format!("undid: unarchived {key}"));
+                    Some(Command::Unarchive { key })
+                }
+            }
         }
         Action::EditCard => {
             let key = app.focused_card()?.key.clone();
@@ -2169,6 +2230,59 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(keys(&app, &s), ["TIDE-3"]);
+    }
+
+    #[test]
+    fn undo_reverses_moves_reorders_and_archives_in_lifo_order() {
+        let mut app = App::new();
+        app.cards = vec![
+            card("PULSE-1", "backlog", 1000.0),
+            card("PULSE-2", "backlog", 2000.0),
+        ];
+        // A Space-move records its inverse…
+        update(&mut app, Action::BeginMove);
+        assert!(matches!(
+            update(&mut app, Action::MoveTo("done".into())),
+            Some(Command::MoveIssue { .. })
+        ));
+        // …an archive records its own…
+        update(&mut app, Action::ArchiveRequest);
+        update(&mut app, Action::Archive);
+        // …and undo pops them newest-first.
+        match update(&mut app, Action::Undo) {
+            Some(Command::Unarchive { key }) => assert_eq!(key, "PULSE-1"),
+            c => panic!("expected unarchive, got {c:?}"),
+        }
+        match update(&mut app, Action::Undo) {
+            Some(Command::MoveIssue { key, status }) => {
+                assert_eq!(key, "PULSE-1");
+                assert_eq!(status, "backlog", "moves back to where it was");
+            }
+            c => panic!("expected move-back, got {c:?}"),
+        }
+        // Empty stack refuses politely.
+        assert!(update(&mut app, Action::Undo).is_none());
+        assert_eq!(app.status_msg.as_deref(), Some("nothing to undo"));
+    }
+
+    #[test]
+    fn undo_of_a_reorder_swaps_the_same_pair_again() {
+        let mut app = App::new();
+        app.cards = vec![
+            card("PULSE-1", "backlog", 1000.0),
+            card("PULSE-2", "backlog", 2000.0),
+        ];
+        assert!(matches!(
+            update(&mut app, Action::MoveIssueDir(Direction::Down)),
+            Some(Command::Reorder { .. })
+        ));
+        match update(&mut app, Action::Undo) {
+            Some(Command::Reorder { key, other }) => {
+                assert_eq!(key, "PULSE-1");
+                assert_eq!(other, "PULSE-2");
+            }
+            c => panic!("expected reorder, got {c:?}"),
+        }
     }
 
     #[test]

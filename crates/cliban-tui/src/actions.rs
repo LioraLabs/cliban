@@ -35,6 +35,8 @@ pub enum Action {
     ArchiveRequest,
     /// The confirmed archive (from the dialog).
     Archive,
+    /// `u`: reverse the last move, reorder, or archive of this session.
+    Undo,
     BeginMove,
     MoveTo(String),
     MoveIssueDir(Direction),
@@ -119,6 +121,10 @@ pub enum Command {
         other: String,
     },
     Archive {
+        key: String,
+    },
+    /// Undo's inverse of an archive.
+    Unarchive {
         key: String,
     },
     TagMilestone {
