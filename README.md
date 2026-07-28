@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/logo-dark.svg">
+    <img src="assets/readme/logo.svg" width="330" alt="cliban">
+  </picture>
+</p>
+
 <p align="center"><b>The board your agents can't forget.</b></p>
 
 <p align="center">

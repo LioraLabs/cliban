@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 330 96">
+<defs><path id="q" d="M 20,4 H 38 A 7 7 0 0 1 45,11 V 31 A 4 4 0 0 1 41,35 H 39
+A 4 4 0 0 0 35,39 V 41 A 4 4 0 0 1 31,45 H 11 A 7 7 0 0 1 4,38 V 20 A 16 16 0 0 1 20,4 Z"/></defs>
+<g fill="#1a1b26">
+<use href="#q"/>
+<use href="#q" transform="rotate(90 48 48)"/>
+<use href="#q" transform="rotate(180 48 48)"/>
+<use href="#q" transform="rotate(270 48 48)"/>
+</g>
+<text x="122" y="48" dominant-baseline="central" fill="#1a1b26"
+  font-family="ui-monospace,'JetBrains Mono','Cascadia Code',Menlo,Consolas,monospace"
+  font-size="44" font-weight="500" textLength="186"
+  lengthAdjust="spacingAndGlyphs">cliban</text></svg>
