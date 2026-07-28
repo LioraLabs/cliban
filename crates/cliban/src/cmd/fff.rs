@@ -89,8 +89,12 @@ pub async fn run(db: &Option<String>, a: FffArgs) -> CliResult<()> {
         let inputs = crate::cmd::issue::issue_json_inputs(&store, &m.issue).await?;
         println!(
             "{}",
-            serde_json::to_string(&crate::output::build_search_match_json(inputs, m.score, crate::output::Detail::Brief))
-                .unwrap()
+            serde_json::to_string(&crate::output::build_search_match_json(
+                inputs,
+                m.score,
+                crate::output::Detail::Brief
+            ))
+            .unwrap()
         );
     }
     Ok(())

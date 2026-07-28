@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerate assets/{board,milestones,projects,editor}.png from a seeded demo board.
+# Regenerate assets/{board,milestones,projects,activity,editor}.png from a seeded demo board.
 # Needs: tmux, chromium, imagemagick, python3; nvim for the editor shot.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -35,6 +35,11 @@ bash "$HERE/shoot-one.sh" "$WORK/milestones.ans" "$HERE/../milestones.png" "clib
 run 132 22; tmux send-keys -t cliban-shot p; sleep 1; tmux send-keys -t cliban-shot Down; sleep 1
 snap "$WORK/projects.ans"; kill_
 bash "$HERE/shoot-one.sh" "$WORK/projects.ans" "$HERE/../projects.png" "cliban — projects"
+
+# The activity page, cursor on the reopen so the detail pane shows a note.
+run 132 22; tmux send-keys -t cliban-shot A; sleep 1
+snap "$WORK/activity.ans"; kill_
+bash "$HERE/shoot-one.sh" "$WORK/activity.ans" "$HERE/../activity.png" "cliban — activity"
 
 # Editing an issue in $EDITOR (TUI 'e'), diagnostics silenced for the shot.
 if command -v nvim >/dev/null; then

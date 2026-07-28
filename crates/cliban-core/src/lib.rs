@@ -6,6 +6,7 @@
 //! sockets — the CLI and TUI link this crate and open the SQLite file in
 //! process.
 
+pub mod audit;
 pub mod contexts;
 pub mod error;
 pub mod migrations;

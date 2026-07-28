@@ -12,8 +12,8 @@ use std::collections::BTreeSet;
 use std::process::Command;
 
 fn skill_md() -> String {
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugin/skills/cliban/SKILL.md");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../plugin/skills/cliban/SKILL.md");
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 

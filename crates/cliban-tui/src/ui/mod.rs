@@ -1,5 +1,6 @@
 //! Ratatui rendering for the cliban TUI kanban board.
 
+pub mod activity_page;
 pub mod board;
 pub mod card;
 pub mod confirm_quit;
@@ -26,10 +27,9 @@ const STATUS_HELP: &[(&str, &str)] = &[
     ("enter", "detail"),
     ("e", "edit"),
     ("n", "new"),
-    ("N", "ms+"),
-    ("t", "tag"),
     ("Space", "mv"),
     ("a", "arch"),
+    ("A", "activity"),
     ("p", "project"),
     ("m", "milestones"),
     ("/", "find"),
@@ -56,6 +56,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
     if let Mode::ProjectPage(state) = &app.mode {
         project_page::draw(frame, frame.area(), app, state);
+        return;
+    }
+    if let Mode::ActivityPage(state) = &app.mode {
+        activity_page::draw(frame, frame.area(), app, state);
         return;
     }
     // The archive dialog layers over the page it interrupted.
@@ -133,7 +137,10 @@ pub fn render(frame: &mut Frame, app: &App) {
         }
         Mode::FuzzyFind(state) => fuzzy::draw(frame, frame.area(), app, state),
         // Handled above — they replace the board rather than layering over it.
-        Mode::MilestonePage(_) | Mode::ProjectPage(_) | Mode::ConfirmProjectArchive { .. } => {}
+        Mode::MilestonePage(_)
+        | Mode::ProjectPage(_)
+        | Mode::ActivityPage(_)
+        | Mode::ConfirmProjectArchive { .. } => {}
         // AwaitingMove keeps the board visible; its menu lives in the footer.
         Mode::Normal | Mode::AwaitingMove => {}
     }

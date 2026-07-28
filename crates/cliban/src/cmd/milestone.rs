@@ -361,7 +361,12 @@ async fn ls(
             let v = if stats {
                 milestone_stats_json(s, now)
             } else {
-                milestone_json(&s.milestone, &s.project_key, s.total, Detail::from_full_flag(full))
+                milestone_json(
+                    &s.milestone,
+                    &s.project_key,
+                    s.total,
+                    Detail::from_full_flag(full),
+                )
             };
             println!("{}", serde_json::to_string(&v).unwrap());
         }

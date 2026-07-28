@@ -1,10 +1,11 @@
 //! Synchronous bridge from the TUI to the async `cliban_core::Store`.
 use std::path::Path;
 
-use cliban_core::contexts::{issues, milestones, projects};
+use cliban_core::audit;
+use cliban_core::contexts::{activity_log, issues, milestones, projects};
 use cliban_core::Store;
 
-use crate::app::{Card, MilestoneRef, ProjectRef};
+use crate::app::{ActivityRef, Card, MilestoneRef, ProjectRef};
 use crate::buffers::{IssueBuffer, MilestoneBuffer, ProjectBuffer};
 
 pub struct Data {
@@ -200,6 +201,40 @@ impl Data {
         Ok(rows)
     }
 
+    /// The activity mailbox: newest audit entries first, joined with the
+    /// issue they belong to. `limit` bounds the join work — the page is a
+    /// recency view, not an export.
+    pub fn load_activity(&self, limit: usize) -> Result<Vec<ActivityRef>, DataError> {
+        let rows = self.rt.block_on(self.store.call(move |conn| {
+            let entries = activity_log::list_since(conn, chrono::DateTime::UNIX_EPOCH)?;
+            let mut out = Vec::with_capacity(limit.min(entries.len()));
+            for e in entries.into_iter().take(limit) {
+                let (key, title, project) = match issues::get_by_id(conn, e.issue_id)? {
+                    Some(i) => {
+                        let pk = projects::get_by_id(conn, i.project_id)?
+                            .map(|p| p.key)
+                            .unwrap_or_default();
+                        (i.key, i.title, pk)
+                    }
+                    // The issue row can be gone (hard-deleted project); the
+                    // event still happened, so it still shows.
+                    None => (format!("#{}", e.issue_id), String::new(), String::new()),
+                };
+                out.push(ActivityRef {
+                    issue_key: key,
+                    title,
+                    project,
+                    kind: e.kind,
+                    message: e.message,
+                    actor: audit::actor_of(&e.extra),
+                    ts: e.ts,
+                });
+            }
+            Ok(out)
+        }))?;
+        Ok(rows)
+    }
+
     /// Flip a project in or out of the archive (the page's `A` key).
     pub fn set_project_archived(&self, key: &str, archived: bool) -> Result<(), DataError> {
         let key = key.to_string();
@@ -243,7 +278,10 @@ impl Data {
         let (key, status) = (key.to_string(), status.to_string());
         self.rt.block_on(self.store.call(move |conn| {
             let i = issues::get_by_key(conn, &key)?.ok_or(cliban_core::Error::NotFound)?;
+            let from = i.status.clone();
             issues::move_issue(conn, &i, &status)?;
+            // Same audit trail the CLI writes — the activity page reads both.
+            audit::record_move(conn, &i, &from, &status, None);
             Ok(())
         }))?;
         self.notify();
@@ -291,6 +329,7 @@ impl Data {
                     ..Default::default()
                 },
             )?;
+            audit::record(conn, &i, "archive", "archived");
             Ok(())
         }))?;
         self.notify();
@@ -309,6 +348,12 @@ impl Data {
                     milestones::get(conn, &p.key, name)?.map(|m| m.id)
                 }
             };
+            let before = match i.milestone_id {
+                Some(m) => milestones::get_by_id(conn, m)?
+                    .map(|x| x.name)
+                    .unwrap_or_default(),
+                None => String::new(),
+            };
             issues::update(
                 conn,
                 &i,
@@ -317,6 +362,11 @@ impl Data {
                     ..Default::default()
                 },
             )?;
+            let mut s = audit::EditSummary::default();
+            s.field("milestone", &before, milestone.as_deref().unwrap_or(""));
+            if !s.is_empty() {
+                audit::record(conn, &i, "edit", &s.message());
+            }
             Ok(())
         }))?;
         self.notify();
@@ -356,6 +406,9 @@ impl Data {
             let cur = issues::get_by_key(conn, &key)?.ok_or(cliban_core::Error::NotFound)?;
             if !b.status.is_empty() && b.status != cur.status {
                 issues::move_issue(conn, &cur, &b.status)?;
+                // Status transitions always land as `status` entries, however
+                // they were made — the activity page's closed filter keys on it.
+                audit::record_move(conn, &cur, &cur.status, &b.status, None);
             }
             let project = projects::get_by_id(conn, cur.project_id)?
                 .ok_or(cliban_core::Error::ProjectNotFound)?;
@@ -363,6 +416,12 @@ impl Data {
                 None
             } else {
                 milestones::get(conn, &project.key, &b.milestone)?.map(|m| m.id)
+            };
+            let before_ms = match cur.milestone_id {
+                Some(m) => milestones::get_by_id(conn, m)?
+                    .map(|x| x.name)
+                    .unwrap_or_default(),
+                None => String::new(),
             };
             let cur = issues::get_by_key(conn, &key)?.ok_or(cliban_core::Error::NotFound)?;
             issues::update(
@@ -380,6 +439,16 @@ impl Data {
                     ..Default::default()
                 },
             )?;
+            let mut s = audit::EditSummary::default();
+            s.field("title", &cur.title, &b.title);
+            s.field("priority", &cur.priority, &b.priority);
+            s.field("milestone", &before_ms, &b.milestone);
+            if b.description != cur.description {
+                s.note("description updated");
+            }
+            if !s.is_empty() {
+                audit::record(conn, &cur, "edit", &s.message());
+            }
             Ok(())
         }))?;
         self.notify();
@@ -676,6 +745,23 @@ mod tests {
         d.seed_project_issue("CLI", "First");
         d.move_issue("CLI-1", "in-progress").unwrap();
         assert_eq!(d.load_cards().unwrap()[0].status, "in-progress");
+    }
+
+    #[test]
+    fn tui_mutations_write_the_same_audit_trail_the_cli_does() {
+        let d = Data::open_in_memory_for_test();
+        d.seed_project_issue("PULSE", "First");
+        d.move_issue("PULSE-1", "done").unwrap();
+        d.archive("PULSE-1").unwrap();
+        let log = d.load_activity(10).unwrap();
+        // Newest first: the archive, then the move.
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].kind, "archive");
+        assert_eq!(log[0].issue_key, "PULSE-1");
+        assert_eq!(log[1].kind, "status");
+        assert_eq!(log[1].message, "backlog → done");
+        assert_eq!(log[1].project, "PULSE");
+        assert_eq!(log[1].title, "First");
     }
 
     #[test]

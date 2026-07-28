@@ -253,6 +253,99 @@ pub struct ProjectRef {
     pub last_activity: DateTime<Utc>,
 }
 
+/// One row of the activity mailbox: an audit entry joined with its issue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityRef {
+    pub issue_key: String,
+    pub title: String,
+    pub project: String,
+    /// `status`, `edit`, `log`, `plan`, or `archive` — the CLI's audit kinds.
+    pub kind: String,
+    pub message: String,
+    pub actor: Option<String>,
+    pub ts: DateTime<Utc>,
+}
+
+impl ActivityRef {
+    /// A status move that landed in done — what "issues closed" means. The
+    /// message is `from → to` (optionally `: note`), so the last arrow's
+    /// target is the landing status.
+    pub fn closes(&self) -> bool {
+        self.kind == "status"
+            && self
+                .message
+                .rsplit('→')
+                .next()
+                .map(|t| t.trim_start().starts_with("done"))
+                .unwrap_or(false)
+    }
+}
+
+/// The activity page's view state. No sort: a mailbox is newest-first.
+#[derive(Debug, Clone, Default)]
+pub struct ActivityPageState {
+    pub cursor: usize,
+    pub query: String,
+    pub filter: ActFilter,
+}
+
+/// Which events the mailbox lists. `Closed` is a *virtual* kind — status
+/// entries whose move landed in done — because "what shipped recently" is
+/// the question this page exists to answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActFilter {
+    #[default]
+    All,
+    Closed,
+    Moves,
+    Edits,
+    Notes,
+    Plan,
+    Archive,
+}
+
+impl ActFilter {
+    pub const ALL: &'static [Self] = &[
+        Self::All,
+        Self::Closed,
+        Self::Moves,
+        Self::Edits,
+        Self::Notes,
+        Self::Plan,
+        Self::Archive,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Closed => "closed",
+            Self::Moves => "moves",
+            Self::Edits => "edits",
+            Self::Notes => "notes",
+            Self::Plan => "plan",
+            Self::Archive => "archive",
+        }
+    }
+    fn next(self) -> Self {
+        let i = Self::ALL.iter().position(|f| *f == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
+    fn prev(self) -> Self {
+        let i = Self::ALL.iter().position(|f| *f == self).unwrap_or(0);
+        Self::ALL[(i + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
+    fn accepts(self, e: &ActivityRef) -> bool {
+        match self {
+            Self::All => true,
+            Self::Closed => e.closes(),
+            Self::Moves => e.kind == "status",
+            Self::Edits => e.kind == "edit",
+            Self::Notes => e.kind == "log",
+            Self::Plan => e.kind == "plan",
+            Self::Archive => e.kind == "archive",
+        }
+    }
+}
+
 /// The project page's view state — the same shape as [`MilestonePageState`].
 #[derive(Debug, Clone, Default)]
 pub struct ProjectPageState {
@@ -346,6 +439,7 @@ pub enum Mode {
     FuzzyFind(FuzzyState),
     MilestonePage(MilestonePageState),
     ProjectPage(ProjectPageState),
+    ActivityPage(ActivityPageState),
 }
 
 #[derive(Debug, Clone)]
@@ -353,6 +447,7 @@ pub struct App {
     pub cards: Vec<Card>,
     pub milestones: Vec<MilestoneRef>, // for scope.project, name order
     pub projects: Vec<ProjectRef>,     // every project, activity order
+    pub activity: Vec<ActivityRef>,    // audit entries, newest first
     pub focus: Focus,
     pub mode: Mode,
     pub scope: Scope,
@@ -368,6 +463,7 @@ impl App {
             cards: Vec::new(),
             milestones: Vec::new(),
             projects: Vec::new(),
+            activity: Vec::new(),
             focus: Focus::default(),
             mode: Mode::Normal,
             scope: Scope::default(),
@@ -653,6 +749,10 @@ fn update_overlays(app: &mut App, action: Action) -> Option<Command> {
     match action {
         Action::OpenProjectPage => {
             app.mode = Mode::ProjectPage(ProjectPageState::default());
+            None
+        }
+        Action::OpenActivityPage => {
+            app.mode = Mode::ActivityPage(ActivityPageState::default());
             None
         }
         Action::OpenMilestonePicker => {
@@ -1059,7 +1159,9 @@ fn update_project_page(app: &mut App, action: Action) -> Option<Command> {
 
     let state = match &app.mode {
         Mode::ProjectPage(s) => s.clone(),
-        _ => return None,
+        // Not this page's mode — hand the action to the activity page, the
+        // last stop in the dispatch chain.
+        _ => return update_activity_page(app, action),
     };
     match action {
         Action::ProjPageInput(c) => {
@@ -1160,6 +1262,129 @@ fn update_project_page(app: &mut App, action: Action) -> Option<Command> {
             app.mode = Mode::Normal;
             app.auto_focus_if_empty();
             Some(Command::SetScope)
+        }
+        _ => update_activity_page(app, action),
+    }
+}
+
+/// The activity mailbox's visible rows, as indices into `app.activity`:
+/// event-kind bucket, then a case-insensitive substring match on issue key,
+/// title, message, or actor. Entries already arrive newest first.
+pub fn activity_rows(app: &App, state: &ActivityPageState) -> Vec<usize> {
+    let q = state.query.to_lowercase();
+    app.activity
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| state.filter.accepts(e))
+        .filter(|(_, e)| {
+            q.is_empty()
+                || e.issue_key.to_lowercase().contains(&q)
+                || e.title.to_lowercase().contains(&q)
+                || e.message.to_lowercase().contains(&q)
+                || e.actor.as_deref().unwrap_or("").to_lowercase().contains(&q)
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// The entry the mailbox cursor is on, if any.
+pub fn activity_focused<'a>(app: &'a App, state: &ActivityPageState) -> Option<&'a ActivityRef> {
+    let rows = activity_rows(app, state);
+    app.activity.get(*rows.get(state.cursor)?)
+}
+
+/// The activity page — the last stop in the page dispatch chain.
+fn update_activity_page(app: &mut App, action: Action) -> Option<Command> {
+    let state = match &app.mode {
+        Mode::ActivityPage(s) => s.clone(),
+        _ => return None,
+    };
+    match action {
+        Action::ActPageInput(c) => {
+            if let Mode::ActivityPage(s) = &mut app.mode {
+                s.query.push(c);
+                s.cursor = 0;
+            }
+            None
+        }
+        Action::ActPageBackspace => {
+            if let Mode::ActivityPage(s) = &mut app.mode {
+                s.query.pop();
+                s.cursor = 0;
+            }
+            None
+        }
+        Action::ActPageUp => {
+            if let Mode::ActivityPage(s) = &mut app.mode {
+                s.cursor = s.cursor.saturating_sub(1);
+            }
+            None
+        }
+        Action::ActPageDown => {
+            let last = activity_rows(app, &state).len().saturating_sub(1);
+            if let Mode::ActivityPage(s) = &mut app.mode {
+                if s.cursor < last {
+                    s.cursor += 1;
+                }
+            }
+            None
+        }
+        Action::ActPagePage(d) => {
+            let last = activity_rows(app, &state).len().saturating_sub(1);
+            if let Mode::ActivityPage(s) = &mut app.mode {
+                s.cursor = match d {
+                    Direction::Down => (s.cursor + MS_PAGE_STEP).min(last),
+                    _ => s.cursor.saturating_sub(MS_PAGE_STEP),
+                };
+            }
+            None
+        }
+        Action::ActPageTop => {
+            if let Mode::ActivityPage(s) = &mut app.mode {
+                s.cursor = 0;
+            }
+            None
+        }
+        Action::ActPageBottom => {
+            let last = activity_rows(app, &state).len().saturating_sub(1);
+            if let Mode::ActivityPage(s) = &mut app.mode {
+                s.cursor = last;
+            }
+            None
+        }
+        Action::ActPageCycleFilter => {
+            if let Mode::ActivityPage(s) = &mut app.mode {
+                s.filter = s.filter.next();
+                s.cursor = 0;
+            }
+            None
+        }
+        Action::ActPageCycleFilterBack => {
+            if let Mode::ActivityPage(s) = &mut app.mode {
+                s.filter = s.filter.prev();
+                s.cursor = 0;
+            }
+            None
+        }
+        Action::ActPageSelect => {
+            let e = activity_focused(app, &state)?;
+            let key = e.issue_key.clone();
+            // Jump the board cursor to the issue, if it's visible under the
+            // current scope. Archived or scoped-out issues stay browsable
+            // here but explain why Enter won't land.
+            match locate_focus_for_key(app, &key) {
+                Some(focus) => {
+                    app.focus = focus;
+                    app.mode = Mode::Normal;
+                    None
+                }
+                None => {
+                    app.status_msg = Some(format!(
+                        "{key} isn't on the board (archived or out of scope)"
+                    ));
+                    None
+                }
+            }
         }
         _ => None,
     }
@@ -1798,6 +2023,77 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(keys(&app, &s), ["OLD", "PULSE", "TIDE"], "name sort");
+    }
+
+    fn act(key: &str, kind: &str, message: &str) -> ActivityRef {
+        ActivityRef {
+            issue_key: key.into(),
+            title: "t".into(),
+            project: "CLI".into(),
+            kind: kind.into(),
+            message: message.into(),
+            actor: None,
+            ts: DateTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn closes_means_a_status_move_that_landed_in_done() {
+        assert!(act("K-1", "status", "backlog → done").closes());
+        assert!(act("K-1", "status", "in-review → done: shipped it").closes());
+        assert!(!act("K-1", "status", "done → backlog").closes());
+        assert!(!act("K-1", "status", "backlog → in-progress").closes());
+        assert!(!act("K-1", "archive", "archived").closes());
+        assert!(!act("K-1", "log", "note about done things").closes());
+    }
+
+    #[test]
+    fn activity_enter_jumps_to_the_issue_or_explains_why_not() {
+        let mut app = App::new();
+        app.cards = vec![card("PULSE-7", "in-progress", 1000.0)];
+        app.activity = vec![
+            act("PULSE-7", "status", "backlog → in-progress"),
+            act("PULSE-9", "archive", "archived"),
+        ];
+        update(&mut app, Action::OpenActivityPage);
+        // Enter on a visible issue lands the board cursor on it.
+        assert!(update(&mut app, Action::ActPageSelect).is_none());
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(app.focus.column, ColumnId::InProgress);
+        // Enter on an archived issue stays on the page and says why.
+        update(&mut app, Action::OpenActivityPage);
+        update(&mut app, Action::ActPageDown);
+        update(&mut app, Action::ActPageSelect);
+        assert!(matches!(app.mode, Mode::ActivityPage(_)));
+        assert!(app.status_msg.as_deref().unwrap_or("").contains("PULSE-9"));
+    }
+
+    #[test]
+    fn activity_rows_filter_by_kind_and_query() {
+        let mut app = App::new();
+        app.activity = vec![
+            act("PULSE-1", "status", "backlog → done"),
+            act("PULSE-2", "status", "backlog → in-progress"),
+            act("TIDE-3", "log", "root cause found"),
+        ];
+        let keys = |app: &App, s: &ActivityPageState| -> Vec<String> {
+            activity_rows(app, s)
+                .into_iter()
+                .map(|i| app.activity[i].issue_key.clone())
+                .collect()
+        };
+        let s = ActivityPageState::default();
+        assert_eq!(keys(&app, &s).len(), 3);
+        let s = ActivityPageState {
+            filter: ActFilter::Closed,
+            ..Default::default()
+        };
+        assert_eq!(keys(&app, &s), ["PULSE-1"]);
+        let s = ActivityPageState {
+            query: "root".into(),
+            ..Default::default()
+        };
+        assert_eq!(keys(&app, &s), ["TIDE-3"]);
     }
 
     #[test]

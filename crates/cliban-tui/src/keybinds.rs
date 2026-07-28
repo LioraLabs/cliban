@@ -48,6 +48,7 @@ pub fn map_key(key: KeyEvent, app: &mut App) -> Option<Action> {
         Mode::FuzzyFind(_) => map_fuzzy(key),
         Mode::MilestonePage(_) => map_milestone_page(key),
         Mode::ProjectPage(_) => map_project_page(key),
+        Mode::ActivityPage(_) => map_activity_page(key),
     }
 }
 
@@ -110,6 +111,7 @@ fn map_normal(key: KeyEvent, app: &mut App) -> Option<Action> {
         (KeyCode::Char('t'), KeyModifiers::NONE) => Some(Action::TagMilestone),
         (KeyCode::Char(' '), _) => Some(Action::BeginMove),
         (KeyCode::Char('a'), KeyModifiers::NONE) => Some(Action::ArchiveRequest),
+        (KeyCode::Char('A'), _) => Some(Action::OpenActivityPage),
         (KeyCode::Char('m'), KeyModifiers::NONE) => Some(Action::OpenMilestonePage),
         (KeyCode::Char('M'), _) => Some(Action::CycleMilestoneFilter),
         (KeyCode::Char('p'), KeyModifiers::NONE) => Some(Action::OpenProjectPage),
@@ -240,11 +242,67 @@ fn map_project_page(key: KeyEvent) -> Option<Action> {
     }
 }
 
+/// The mailbox: same filter-box grammar, no edit/new/sort — just move,
+/// filter by kind (Tab), and Enter to jump to the issue on the board.
+fn map_activity_page(key: KeyEvent) -> Option<Action> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Enter, _) => Some(Action::ActPageSelect),
+        (KeyCode::Esc, _) => Some(Action::Cancel),
+        (KeyCode::Backspace, _) => Some(Action::ActPageBackspace),
+        (KeyCode::Down, _) | (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
+            Some(Action::ActPageDown)
+        }
+        (KeyCode::Up, _) | (KeyCode::Char('p'), KeyModifiers::CONTROL) => Some(Action::ActPageUp),
+        (KeyCode::PageDown, _) => Some(Action::ActPagePage(Direction::Down)),
+        (KeyCode::PageUp, _) => Some(Action::ActPagePage(Direction::Up)),
+        (KeyCode::Home, _) => Some(Action::ActPageTop),
+        (KeyCode::Char('G'), _) | (KeyCode::End, _) => Some(Action::ActPageBottom),
+        (KeyCode::Tab, _) => Some(Action::ActPageCycleFilter),
+        (KeyCode::BackTab, _) => Some(Action::ActPageCycleFilterBack),
+        (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
+            Some(Action::ActPageInput(c))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     fn ke(c: KeyCode) -> KeyEvent {
         KeyEvent::new(c, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn capital_a_opens_the_activity_page_where_typing_filters_and_tab_cycles() {
+        use crate::app::{ActivityPageState, Mode};
+        let cap = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT);
+        let mut app = App::new();
+        assert!(matches!(
+            map_key(cap('A'), &mut app),
+            Some(Action::OpenActivityPage)
+        ));
+        app.mode = Mode::ActivityPage(ActivityPageState::default());
+        assert!(matches!(
+            map_key(ke(KeyCode::Char('j')), &mut app),
+            Some(Action::ActPageInput('j'))
+        ));
+        assert!(matches!(
+            map_key(ke(KeyCode::Tab), &mut app),
+            Some(Action::ActPageCycleFilter)
+        ));
+        assert!(matches!(
+            map_key(ke(KeyCode::BackTab), &mut app),
+            Some(Action::ActPageCycleFilterBack)
+        ));
+        assert!(matches!(
+            map_key(ke(KeyCode::Enter), &mut app),
+            Some(Action::ActPageSelect)
+        ));
+        assert!(matches!(
+            map_key(ke(KeyCode::Esc), &mut app),
+            Some(Action::Cancel)
+        ));
     }
 
     #[test]

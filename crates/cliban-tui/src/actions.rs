@@ -90,6 +90,19 @@ pub enum Action {
     ProjPageCycleFilter,
     ProjPageCycleFilterBack,
     ProjPageCycleSort,
+    // Activity page (`A`) — the mailbox.
+    OpenActivityPage,
+    ActPageUp,
+    ActPageDown,
+    ActPagePage(Direction),
+    ActPageTop,
+    ActPageBottom,
+    ActPageInput(char),
+    ActPageBackspace,
+    /// Enter: jump the board cursor to the focused entry's issue.
+    ActPageSelect,
+    ActPageCycleFilter,
+    ActPageCycleFilterBack,
 }
 
 #[derive(Debug, Clone)]

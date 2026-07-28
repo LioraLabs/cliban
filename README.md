@@ -302,6 +302,15 @@ projects; narrow with `--project`, `--label`, and friends.
 
 ## What changed recently
 
+The TUI's activity page (`A`) is a mailbox for the board: every recorded
+event newest-first, with chips to filter by kind — `closed` answers "what
+shipped recently" — type-to-filter across keys, titles, messages, and
+actors, and `Enter` to jump to the issue on the board:
+
+<p align="center"><img src="assets/activity.png" width="880" alt="the activity page"></p>
+
+From the CLI:
+
 ```bash
 cliban activity                                   # last 24h, every project
 cliban activity --since yesterday --json

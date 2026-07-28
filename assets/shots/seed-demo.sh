@@ -66,4 +66,12 @@ c milestone add --project FORGE --name "warm pools" --target 2026-08-30 --descri
 for i in 1 2 3 4 5 6 7 8; do st=done; [ $i -gt 6 ] && st=in-progress; c issue add --project TIDE --title "beta task $i" --status $st --milestone "public beta" --priority medium; done
 for i in 1 2 3; do c issue add --project TIDE --title "station task $i" --status backlog --milestone "v2 stations" --priority low; done
 for i in 1 2 3 4 5; do st=backlog; [ $i -le 2 ] && st=done; c issue add --project FORGE --title "pool task $i" --status $st --milestone "warm pools" --priority high; done
+# A little history so the activity page has a story to tell. Net board state
+# is unchanged: every move is later moved back.
+export CLIBAN_ACTOR=claude
+c issue mv TIDE-7 done --note "keys expire correctly now"
+c issue mv PULSE-9 in-progress
+export CLIBAN_ACTOR=alex
+c issue mv PULSE-9 backlog --note "parked until the WAL migration lands"
+c issue mv TIDE-7 in-progress --note "reopened: flaky on staging"
 echo "seeded $DB"

@@ -42,6 +42,14 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
+        "ACTIVITY (A)",
+        &[
+            ("type", "filter by key/text/actor"),
+            ("Tab / S-Tab", "all/closed/moves/edits/…"),
+            ("Enter", "jump to issue on board"),
+        ],
+    ),
+    (
         "PROJECT PAGE (p)",
         &[
             ("type", "filter by key/name"),

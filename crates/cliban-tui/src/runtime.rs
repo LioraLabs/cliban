@@ -60,9 +60,14 @@ pub fn reload(data: &Data, app: &mut App) -> Result<(), DynErr> {
     app.cards = data.load_cards()?;
     app.milestones = data.load_milestones(app.scope.project.as_deref())?;
     app.projects = data.load_projects()?;
+    app.activity = data.load_activity(ACTIVITY_LIMIT)?;
     app.auto_focus_if_empty();
     Ok(())
 }
+
+/// How much history the activity page keeps in memory. It's a recency
+/// mailbox, not an export — `cliban activity` is the full query surface.
+const ACTIVITY_LIMIT: usize = 500;
 
 fn temp_path(stem: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("cliban-{}-{}.md", stem, std::process::id()))

@@ -15,7 +15,9 @@ use rusqlite::OptionalExtension;
 use crate::descmd;
 use crate::descmd::find_section;
 use crate::errors::{CliError, CliResult};
-use crate::output::{build_issue_json, write_issue_table, Detail, IssueJsonInputs, IssueRow, RelationOut};
+use crate::output::{
+    build_issue_json, write_issue_table, Detail, IssueJsonInputs, IssueRow, RelationOut,
+};
 use crate::store_open;
 
 #[derive(clap::Args)]
@@ -350,7 +352,11 @@ pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
         IssueCmd::Archive { key } => set_archived(db, key, true).await,
         IssueCmd::Unarchive { key } => set_archived(db, key, false).await,
         IssueCmd::Current { json } => current(db, json).await,
-        IssueCmd::Blocked { project, json, full } => blocked(db, project, json, full).await,
+        IssueCmd::Blocked {
+            project,
+            json,
+            full,
+        } => blocked(db, project, json, full).await,
     }
 }
 
@@ -977,7 +983,8 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
             let inputs = issue_json_inputs(&store, i).await?;
             println!(
                 "{}",
-                serde_json::to_string(&build_issue_json(inputs, Detail::from_full_flag(a.full))).unwrap()
+                serde_json::to_string(&build_issue_json(inputs, Detail::from_full_flag(a.full)))
+                    .unwrap()
             );
         }
         return Ok(());
@@ -1013,8 +1020,12 @@ async fn run_search(db: &Option<String>, a: &LsArgs, query: String) -> CliResult
             let inputs = issue_json_inputs(&store, &m.issue).await?;
             println!(
                 "{}",
-                serde_json::to_string(&crate::output::build_search_match_json(inputs, m.score, Detail::from_full_flag(a.full)))
-                    .unwrap()
+                serde_json::to_string(&crate::output::build_search_match_json(
+                    inputs,
+                    m.score,
+                    Detail::from_full_flag(a.full)
+                ))
+                .unwrap()
             );
         }
         return Ok(());
@@ -2135,7 +2146,8 @@ async fn blocked(
             let inputs = issue_json_inputs(&store, i).await?;
             println!(
                 "{}",
-                serde_json::to_string(&build_issue_json(inputs, Detail::from_full_flag(full))).unwrap()
+                serde_json::to_string(&build_issue_json(inputs, Detail::from_full_flag(full)))
+                    .unwrap()
             );
         }
         return Ok(());
