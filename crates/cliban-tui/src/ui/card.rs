@@ -41,19 +41,25 @@ pub fn draw_card(frame: &mut Frame, area: Rect, card: &Card, is_focused: bool, n
     };
     // Key bold, priority letter in the priority color — the letter and the
     // border tell the same story even when the border is busy showing focus.
-    let lines = vec![
-        Line::from(vec![
-            Span::styled(
-                card.key.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" {}", priority_letter(&card.priority)),
-                Style::default().fg(prio).add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(format!("  {}", display)),
+    // Labels ride the key line as small hash-colored tags; two at most, the
+    // detail popup lists the rest.
+    let mut key_spans = vec![
+        Span::styled(
+            card.key.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {}", priority_letter(&card.priority)),
+            Style::default().fg(prio).add_modifier(Modifier::BOLD),
+        ),
     ];
+    for l in card.labels.iter().take(2) {
+        key_spans.push(Span::styled(
+            format!(" ·{l}"),
+            Style::default().fg(theme::project_color(l)),
+        ));
+    }
+    let lines = vec![Line::from(key_spans), Line::from(format!("  {}", display))];
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -109,6 +115,7 @@ mod tests {
             position: 1.0,
             milestone_id: None,
             milestone: None,
+            labels: Vec::new(),
         }
     }
 
@@ -117,6 +124,29 @@ mod tests {
         let (k, t) = card_lines(&card("CLI-8", "high"));
         assert_eq!(k, "CLI-8 (H)");
         assert_eq!(t, "  Hello");
+    }
+
+    #[test]
+    fn card_key_line_carries_up_to_two_label_tags() {
+        let mut c = card("PULSE-8", "high");
+        c.labels = vec!["bug".into(), "regression".into(), "backend".into()];
+        let mut t = Terminal::new(TestBackend::new(40, 4)).unwrap();
+        t.draw(|f| draw_card(f, Rect::new(0, 0, 40, 4), &c, false, 0))
+            .unwrap();
+        let buf = t.backend().buffer();
+        let mut s = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                s.push_str(buf[(x, y)].symbol());
+            }
+            s.push('\n');
+        }
+        assert!(s.contains("·bug"), "{s}");
+        assert!(s.contains("·regression"), "{s}");
+        assert!(
+            !s.contains("·backend"),
+            "third label stays in the popup:\n{s}"
+        );
     }
 
     #[test]

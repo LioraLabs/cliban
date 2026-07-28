@@ -113,6 +113,7 @@ mod tests {
             position: 1.0,
             milestone_id: None,
             milestone: None,
+            labels: Vec::new(),
         }
     }
 

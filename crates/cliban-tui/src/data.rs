@@ -74,13 +74,14 @@ impl Data {
                     Some(m) => milestones::get_by_id(conn, m)?.map(|x| x.name),
                     None => None,
                 };
-                out.push((i.clone(), project, milestone));
+                let labels = issues::label_names(conn, i.id)?;
+                out.push((i.clone(), project, milestone, labels));
             }
             Ok(out)
         }))?;
         Ok(rows
             .into_iter()
-            .map(|(i, project, milestone)| Card {
+            .map(|(i, project, milestone, labels)| Card {
                 id: i.id,
                 key: i.key,
                 project,
@@ -90,6 +91,7 @@ impl Data {
                 position: i.position,
                 milestone_id: i.milestone_id,
                 milestone,
+                labels,
             })
             .collect())
     }

@@ -46,6 +46,21 @@ pub fn draw(frame: &mut Frame, area: Rect, card: &Card, relations: &[RelationRef
             Span::styled(m.clone(), Style::default().fg(theme::MILESTONE)),
         ]));
     }
+    if !card.labels.is_empty() {
+        // Same stable string→color hash the project tags use, so `bug` is
+        // the same color on every card.
+        let mut spans = vec![field("labels")];
+        for (i, l) in card.labels.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw("  "));
+            }
+            spans.push(Span::styled(
+                l.clone(),
+                Style::default().fg(theme::project_color(l)),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
     // Relations, blockers first: an open blocker is the one thing this
     // popup should shout about — it wears the alarm red the blocked column
     // uses; a resolved blocker fades to the completion green.
@@ -117,6 +132,7 @@ mod tests {
             position: 1.0,
             milestone_id: None,
             milestone: None,
+            labels: Vec::new(),
         }
     }
 
@@ -143,6 +159,25 @@ mod tests {
         assert!(s.contains("Build TUI"));
         assert!(!s.contains("blocked by"), "no relation rows without edges");
         assert!(!s.contains("jump to blocker"), "no blocker hint either");
+    }
+
+    #[test]
+    fn detail_lists_labels_as_colored_chips() {
+        let mut c = card();
+        c.labels = vec!["bug".into(), "regression".into()];
+        let mut t = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        t.draw(|f| draw(f, Rect::new(0, 0, 80, 24), &c, &[]))
+            .unwrap();
+        let buf = t.backend().buffer();
+        let mut s = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                s.push_str(buf[(x, y)].symbol());
+            }
+            s.push('\n');
+        }
+        assert!(s.contains("labels"), "{s}");
+        assert!(s.contains("bug  regression"), "{s}");
     }
 
     #[test]

@@ -93,6 +93,7 @@ mod tests {
             position: 1.0,
             milestone_id: None,
             milestone: None,
+            labels: Vec::new(),
         }];
         let mut t = Terminal::new(TestBackend::new(100, 1)).unwrap();
         t.draw(|f| draw(f, Rect::new(0, 0, 100, 1), &app)).unwrap();

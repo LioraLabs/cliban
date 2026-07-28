@@ -19,6 +19,8 @@ pub struct Card {
     pub position: f64,
     pub milestone_id: Option<i64>,
     pub milestone: Option<String>,
+    /// Label names, name-ordered (as `issues::label_names` returns them).
+    pub labels: Vec<String>,
 }
 
 /// cliban's 5 kanban columns (NOT loom's agent states).
@@ -1633,6 +1635,7 @@ mod tests {
             position: pos,
             milestone_id: None,
             milestone: None,
+            labels: Vec::new(),
         }
     }
 
