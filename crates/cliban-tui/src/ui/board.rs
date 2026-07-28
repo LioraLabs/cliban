@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
-pub fn draw_board(frame: &mut Frame, area: Rect, app: &App) {
+pub fn draw_board(frame: &mut Frame, area: Rect, app: &App, hits: &mut super::HitMap) {
     let columns = app.visible_columns();
     let n = columns.len() as u32;
     let constraints: Vec<Constraint> = columns.iter().map(|_| Constraint::Ratio(1, n)).collect();
@@ -16,11 +16,18 @@ pub fn draw_board(frame: &mut Frame, area: Rect, app: &App) {
         .split(area);
     let now_ms = app.boot_at.elapsed().as_millis();
     for (i, col) in columns.iter().enumerate() {
-        draw_column(frame, col_areas[i], app, *col, now_ms);
+        draw_column(frame, col_areas[i], app, *col, now_ms, hits);
     }
 }
 
-fn draw_column(frame: &mut Frame, area: Rect, app: &App, col: ColumnId, now_ms: u128) {
+fn draw_column(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    col: ColumnId,
+    now_ms: u128,
+    hits: &mut super::HitMap,
+) {
     let cards = app.column_cards(col);
     let accent = theme::column_color(col.status());
     let focused = app.focus.column == col;
@@ -44,6 +51,8 @@ fn draw_column(frame: &mut Frame, area: Rect, app: &App, col: ColumnId, now_ms: 
         .border_style(Style::default().fg(border));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    // The whole column is a click target (base layer); cards stack on top.
+    hits.push(area, super::Hit::Column(col));
     if cards.is_empty() {
         if inner.height > 0 {
             frame.render_widget(
@@ -77,13 +86,9 @@ fn draw_column(frame: &mut Frame, area: Rect, app: &App, col: ColumnId, now_ms: 
             break;
         }
         let is_focused = app.focus.column == col && app.focus.card_idx == idx;
-        super::card::draw_card(
-            frame,
-            Rect::new(inner.x, y, inner.width, card_height),
-            card,
-            is_focused,
-            now_ms,
-        );
+        let rect = Rect::new(inner.x, y, inner.width, card_height);
+        hits.push(rect, super::Hit::Card { column: col, idx });
+        super::card::draw_card(frame, rect, card, is_focused, now_ms);
         y += card_height;
     }
 }
@@ -124,7 +129,8 @@ mod tests {
     fn board_renders_all_five_columns() {
         let mut t = Terminal::new(TestBackend::new(160, 24)).unwrap();
         let app = App::new();
-        t.draw(|f| super::draw_board(f, Rect::new(0, 0, 160, 24), &app))
+        let mut hits = super::super::HitMap::default();
+        t.draw(|f| super::draw_board(f, Rect::new(0, 0, 160, 24), &app, &mut hits))
             .unwrap();
         let d = dump(t.backend().buffer());
         for l in ["BACKLOG", "IN-PROGRESS", "BLOCKED", "IN-REVIEW", "DONE"] {
@@ -137,7 +143,8 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(160, 24)).unwrap();
         let mut app = App::new();
         app.cards = vec![card("CLI-1", "backlog"), card("CLI-2", "backlog")];
-        t.draw(|f| super::draw_board(f, Rect::new(0, 0, 160, 24), &app))
+        let mut hits = super::super::HitMap::default();
+        t.draw(|f| super::draw_board(f, Rect::new(0, 0, 160, 24), &app, &mut hits))
             .unwrap();
         assert!(dump(t.backend().buffer()).contains("BACKLOG (2)"));
     }

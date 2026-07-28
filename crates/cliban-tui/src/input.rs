@@ -9,7 +9,14 @@ use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::session::{Session, SessionEvent};
+use crate::session::{MouseInput, Session, SessionEvent};
+
+/// One decoded input: a key press or a mouse gesture (SGR encoding).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputEvent {
+    Key(KeyEvent),
+    Mouse(MouseInput),
+}
 
 /// Incremental parser: feed byte chunks, get key events. Incomplete escape
 /// sequences and split UTF-8 chars are buffered across feeds.
@@ -25,14 +32,18 @@ impl Parser {
 
     /// Consume `bytes`, returning all completed events. Incomplete trailing
     /// sequences stay buffered for the next feed.
-    pub fn feed(&mut self, bytes: &[u8]) -> Vec<KeyEvent> {
+    pub fn feed(&mut self, bytes: &[u8]) -> Vec<InputEvent> {
         self.pending.extend_from_slice(bytes);
         let mut out = Vec::new();
         loop {
             match parse_one(&self.pending) {
                 Parsed::Event(ev, used) => {
                     self.pending.drain(..used);
-                    out.push(ev);
+                    out.push(InputEvent::Key(ev));
+                }
+                Parsed::Mouse(m, used) => {
+                    self.pending.drain(..used);
+                    out.push(InputEvent::Mouse(m));
                 }
                 Parsed::Skip(used) => {
                     self.pending.drain(..used);
@@ -72,8 +83,11 @@ impl ByteSession {
 
     /// Feed raw terminal bytes (as read off an SSH channel or a test script).
     pub fn feed_bytes(&mut self, bytes: &[u8]) {
-        for k in self.parser.feed(bytes) {
-            self.queue.push_back(SessionEvent::Key(k));
+        for ev in self.parser.feed(bytes) {
+            self.queue.push_back(match ev {
+                InputEvent::Key(k) => SessionEvent::Key(k),
+                InputEvent::Mouse(m) => SessionEvent::Mouse(m),
+            });
         }
     }
 
@@ -111,6 +125,8 @@ const MAX_CSI_LEN: usize = 32;
 enum Parsed {
     /// A complete event, consuming `usize` bytes.
     Event(KeyEvent, usize),
+    /// A complete SGR mouse report, consuming `usize` bytes.
+    Mouse(MouseInput, usize),
     /// Unrecognized-but-complete input, consuming `usize` bytes.
     Skip(usize),
     /// Need more bytes.
@@ -170,6 +186,13 @@ fn parse_csi(buf: &[u8]) -> Parsed {
     for (i, &b) in buf.iter().enumerate().skip(2) {
         if (0x40..=0x7e).contains(&b) {
             let used = i + 1;
+            // SGR mouse: ESC [ < btn ; col ; row (M=press, m=release).
+            if buf.get(2) == Some(&b'<') && (b == b'M' || b == b'm') {
+                return match parse_sgr_mouse(&buf[3..i], b == b'M') {
+                    Some(m) => Parsed::Mouse(m, used),
+                    None => Parsed::Skip(used),
+                };
+            }
             let ev = match b {
                 b'A' => Some(key(KeyCode::Up)),
                 b'B' => Some(key(KeyCode::Down)),
@@ -202,6 +225,24 @@ fn parse_csi(buf: &[u8]) -> Parsed {
     Parsed::Incomplete
 }
 
+/// `btn;col;row` from an SGR report, already stripped of `<` and the final
+/// byte. Only left-press and the wheel become events: releases, drags
+/// (motion bit 32), and other buttons are deliberately dropped.
+fn parse_sgr_mouse(params: &[u8], press: bool) -> Option<MouseInput> {
+    let s = std::str::from_utf8(params).ok()?;
+    let mut it = s.split(';');
+    let btn: u16 = it.next()?.trim().parse().ok()?;
+    // SGR coordinates are 1-based; the app speaks 0-based cells.
+    let x: u16 = it.next()?.trim().parse::<u16>().ok()?.saturating_sub(1);
+    let y: u16 = it.next()?.trim().parse::<u16>().ok()?.saturating_sub(1);
+    match btn {
+        0 if press => Some(MouseInput::Down(x, y)),
+        64 => Some(MouseInput::ScrollUp(x, y)),
+        65 => Some(MouseInput::ScrollDown(x, y)),
+        _ => None,
+    }
+}
+
 fn parse_utf8(buf: &[u8]) -> Parsed {
     let len = match buf[0] {
         b if b < 0x80 => 1,
@@ -232,7 +273,53 @@ mod tests {
     use super::*;
 
     fn feed_one(bytes: &[u8]) -> Vec<KeyEvent> {
-        Parser::new().feed(bytes)
+        Parser::new()
+            .feed(bytes)
+            .into_iter()
+            .map(|e| match e {
+                InputEvent::Key(k) => k,
+                InputEvent::Mouse(m) => panic!("expected keys only, got {m:?}"),
+            })
+            .collect()
+    }
+
+    fn feed_mouse(bytes: &[u8]) -> Vec<MouseInput> {
+        Parser::new()
+            .feed(bytes)
+            .into_iter()
+            .filter_map(|e| match e {
+                InputEvent::Mouse(m) => Some(m),
+                InputEvent::Key(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sgr_mouse_reports_decode_to_click_and_wheel() {
+        // 1-based wire coordinates, 0-based cells out.
+        assert_eq!(feed_mouse(b"\x1b[<0;12;5M"), vec![MouseInput::Down(11, 4)]);
+        assert_eq!(
+            feed_mouse(b"\x1b[<64;3;3M"),
+            vec![MouseInput::ScrollUp(2, 2)]
+        );
+        assert_eq!(
+            feed_mouse(b"\x1b[<65;3;3M"),
+            vec![MouseInput::ScrollDown(2, 2)]
+        );
+        // Releases, drags, and right-clicks are dropped, and a report split
+        // across feeds still decodes.
+        assert!(feed_mouse(b"\x1b[<0;12;5m").is_empty(), "release dropped");
+        assert!(feed_mouse(b"\x1b[<32;4;4M").is_empty(), "drag dropped");
+        assert!(
+            feed_mouse(b"\x1b[<2;4;4M").is_empty(),
+            "right click dropped"
+        );
+        let mut p = Parser::new();
+        assert!(p.feed(b"\x1b[<0;7").is_empty());
+        assert_eq!(
+            p.feed(b";9M"),
+            vec![InputEvent::Mouse(MouseInput::Down(6, 8))]
+        );
     }
 
     #[test]
@@ -273,7 +360,10 @@ mod tests {
         let mut p = Parser::new();
         let bytes = "é".as_bytes();
         assert!(p.feed(&bytes[..1]).is_empty());
-        assert_eq!(p.feed(&bytes[1..]), vec![key(KeyCode::Char('é'))]);
+        assert_eq!(
+            p.feed(&bytes[1..]),
+            vec![InputEvent::Key(key(KeyCode::Char('é')))]
+        );
     }
 
     #[test]
@@ -328,14 +418,14 @@ mod tests {
         assert!(p.feed(&runaway).is_empty());
         // The parser must have dropped the buffered garbage rather than
         // waiting forever; a subsequent normal byte parses cleanly.
-        assert_eq!(p.feed(b"j"), vec![key(KeyCode::Char('j'))]);
+        assert_eq!(p.feed(b"j"), vec![InputEvent::Key(key(KeyCode::Char('j')))]);
     }
 
     #[test]
     fn split_csi_sequence_across_feeds() {
         let mut p = Parser::new();
         assert!(p.feed(b"\x1b[").is_empty());
-        assert_eq!(p.feed(b"C"), vec![key(KeyCode::Right)]);
+        assert_eq!(p.feed(b"C"), vec![InputEvent::Key(key(KeyCode::Right))]);
     }
 
     #[test]

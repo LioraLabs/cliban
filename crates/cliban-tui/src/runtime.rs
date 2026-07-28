@@ -8,7 +8,7 @@ use crate::buffers::{
 };
 use crate::data::Data;
 use crate::session::{LocalSession, Session, SessionEvent};
-use crossterm::event::KeyEvent;
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyEvent};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -225,9 +225,10 @@ pub fn run(path: &Path) -> Result<(), DynErr> {
     }
     reload(&data, &mut app)?;
     enable_raw_mode()?;
-    execute!(stdout(), EnterAlternateScreen)?;
+    execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let res = event_loop(&mut terminal, &mut LocalSession, &data, &mut app);
+    execute!(stdout(), DisableMouseCapture)?;
     disable_raw_mode()?;
     execute!(stdout(), LeaveAlternateScreen)?;
     res
@@ -241,8 +242,11 @@ pub fn event_loop<B: Backend>(
     data: &Data,
     app: &mut App,
 ) -> Result<(), DynErr> {
+    // Rebuilt every draw; consulted only for the mouse event that follows
+    // that draw, so it always describes what is actually on screen.
+    let mut hits = crate::ui::HitMap::default();
     loop {
-        terminal.draw(|f| crate::ui::render(f, app))?;
+        terminal.draw(|f| crate::ui::render(f, app, &mut hits))?;
         match session.next_event(Duration::from_millis(100))? {
             // Tick → redraw (marquee advances). Resize → redraw too: the
             // backend reports its new size on the next draw (crossterm
@@ -255,6 +259,13 @@ pub fn event_loop<B: Backend>(
             SessionEvent::Key(key) => {
                 if handle_key(terminal, session, data, app, key)? {
                     break;
+                }
+            }
+            SessionEvent::Mouse(m) => {
+                if let Some(action) = crate::keybinds::map_mouse(m, app, &hits) {
+                    if apply_action(terminal, session, data, app, action)? {
+                        break;
+                    }
                 }
             }
         }
@@ -273,6 +284,18 @@ fn handle_key<B: Backend>(
     let Some(action) = crate::keybinds::map_key(key, app) else {
         return Ok(false);
     };
+    apply_action(terminal, session, data, app, action)
+}
+
+/// Run one mapped action through update → commands → reload, however it was
+/// produced (key or mouse). Returns true when the app should quit.
+fn apply_action<B: Backend>(
+    terminal: &mut Terminal<B>,
+    session: &mut dyn Session,
+    data: &Data,
+    app: &mut App,
+    action: Action,
+) -> Result<bool, DynErr> {
     if matches!(action, Action::Quit) {
         return Ok(true);
     }
@@ -348,9 +371,21 @@ mod tests {
                         break;
                     }
                 }
+                // Mouse resolves against a freshly drawn frame, exactly as
+                // the real loop draws before every event.
+                SessionEvent::Mouse(m) => {
+                    let mut hits = crate::ui::HitMap::default();
+                    t.draw(|f| crate::ui::render(f, app, &mut hits)).unwrap();
+                    if let Some(a) = crate::keybinds::map_mouse(m, app, &hits) {
+                        if apply_action(t, s, data, app, a).unwrap() {
+                            break;
+                        }
+                    }
+                }
             }
         }
-        t.draw(|f| crate::ui::render(f, app)).unwrap();
+        let mut hits = crate::ui::HitMap::default();
+        t.draw(|f| crate::ui::render(f, app, &mut hits)).unwrap();
     }
 
     fn harness() -> (Data, App, Terminal<TestBackend>, ByteSession) {
@@ -360,6 +395,61 @@ mod tests {
         reload(&data, &mut app).unwrap();
         let terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
         (data, app, terminal, ByteSession::new())
+    }
+
+    #[test]
+    fn headless_sgr_click_focuses_then_opens_and_wheel_moves_focus() {
+        let (data, mut app, mut t, mut s) = harness();
+        data.create_issue(
+            "CLI",
+            &crate::buffers::IssueBuffer {
+                title: "Second".into(),
+                status: "backlog".into(),
+                priority: "low".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        reload(&data, &mut app).unwrap();
+        // The backlog column starts at x=0 (120/5 = 24 wide); the second
+        // card's rows are y=1+4..1+8. Click it: focus lands there.
+        s.feed_bytes(b"\x1b[<0;3;7M"); // 1-based wire coords → cell (2,6)
+        pump(&mut t, &mut s, &data, &mut app);
+        assert_eq!(app.focus.card_idx, 1, "click focuses the second card");
+        // Clicking the already-focused card opens its detail popup.
+        s.feed_bytes(b"\x1b[<0;3;7M");
+        pump(&mut t, &mut s, &data, &mut app);
+        assert!(matches!(app.mode, Mode::Detail(_)), "second click opens");
+        s.feed_bytes(b"\x1b"); // close the popup (lone ESC via flush path)
+        pump(&mut t, &mut s, &data, &mut app);
+        // Wheel up moves focus back to the first card.
+        s.feed_bytes(b"\x1b[<64;3;7M");
+        pump(&mut t, &mut s, &data, &mut app);
+        assert_eq!(app.focus.card_idx, 0, "wheel scrolls focus");
+    }
+
+    #[test]
+    fn headless_click_selects_a_milestone_page_row() {
+        let (data, mut app, mut t, mut s) = harness_with_milestone();
+        data.create_milestone(
+            "CLI",
+            &MilestoneBuffer {
+                name: "v0.4".into(),
+                status: "open".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        reload(&data, &mut app).unwrap();
+        s.feed_bytes(b"m"); // open the milestone page
+        pump(&mut t, &mut s, &data, &mut app);
+        // List rows start at y=3 (border, chips, query); click row 1.
+        s.feed_bytes(b"\x1b[<0;10;5M"); // wire (10,5) → cell (9,4) = row 1
+        pump(&mut t, &mut s, &data, &mut app);
+        match &app.mode {
+            Mode::MilestonePage(st) => assert_eq!(st.cursor, 1, "click lands on row 1"),
+            m => panic!("expected the page, got {m:?}"),
+        }
     }
 
     #[test]

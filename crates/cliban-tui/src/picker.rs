@@ -30,7 +30,10 @@ pub fn pick<B: Backend>(
     loop {
         terminal.draw(|f| render(f, title, items, cursor))?;
         let key = match session.next_event(Duration::from_millis(100))? {
-            SessionEvent::Tick | SessionEvent::Resize(..) | SessionEvent::Refresh => continue,
+            SessionEvent::Tick
+            | SessionEvent::Resize(..)
+            | SessionEvent::Refresh
+            | SessionEvent::Mouse(_) => continue,
             SessionEvent::Key(k) => k,
         };
         match action(key) {

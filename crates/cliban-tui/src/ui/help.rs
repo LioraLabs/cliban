@@ -82,6 +82,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("q", "quit"),
             ("Esc", "close popup"),
             ("Ctrl-c", "quit now, no confirm"),
+            ("mouse", "click focus/open, wheel"),
         ],
     ),
 ];

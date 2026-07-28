@@ -1,5 +1,5 @@
 //! UI actions (input to `app::update`) and Commands (side-effects). Pure data.
-use crate::app::Scope;
+use crate::app::{ColumnId, Scope};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Direction {
@@ -16,6 +16,10 @@ pub enum Action {
     FocusColumn(usize),
     /// Half-page the focus within the current column (Ctrl-d/u, PgDn/PgUp).
     PageMove(Direction),
+    /// Mouse: land the board cursor on a specific card (idx clamped).
+    FocusCard(ColumnId, usize),
+    /// Mouse: set the active page's cursor to an absolute row.
+    PageCursor(usize),
     JumpToTop,
     JumpToBottom,
     ToggleHelp,

@@ -13,12 +13,74 @@ pub mod project_page;
 pub mod theme;
 pub mod top_bar;
 
-use crate::app::{App, Mode};
-use ratatui::layout::{Constraint, Direction, Layout};
+use crate::app::{activity_rows, page_rows, project_rows, App, ColumnId, Mode};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
+
+/// What lives where on the last-drawn frame, for mouse hit-testing. The
+/// event loop hands the map to `render` each frame and looks clicks up in
+/// it afterwards; regions pushed later win (overlays over base).
+#[derive(Debug, Default)]
+pub struct HitMap {
+    regions: Vec<(Rect, Hit)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Hit {
+    /// A card on the board (or its column's empty space with `idx` clamped).
+    Card { column: ColumnId, idx: usize },
+    /// A column's background, below its last card.
+    Column(ColumnId),
+    /// Row `i` (absolute index into the active page's filtered rows).
+    PageRow(usize),
+}
+
+impl HitMap {
+    pub fn clear(&mut self) {
+        self.regions.clear();
+    }
+    pub fn push(&mut self, rect: Rect, hit: Hit) {
+        self.regions.push((rect, hit));
+    }
+    pub fn at(&self, x: u16, y: u16) -> Option<&Hit> {
+        self.regions
+            .iter()
+            .rev()
+            .find(|(r, _)| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
+            .map(|(_, h)| h)
+    }
+}
+
+/// Register the visible list rows of a full-screen page. All three pages
+/// share the exact band layout (border, chips, query, list, detail,
+/// footer), so one mirror of that math serves them all; the headless
+/// click tests in `runtime` keep it honest against drift.
+fn push_page_rows(hits: &mut HitMap, area: Rect, cursor: usize, total: usize) {
+    if area.width < 2 || area.height < 5 {
+        return;
+    }
+    let inner_h = area.height - 2;
+    let detail: u16 = if inner_h > 8 + 4 { 8 } else { 0 };
+    let list_h = inner_h.saturating_sub(3 + detail) as usize;
+    if list_h == 0 {
+        return;
+    }
+    let start = if cursor < list_h {
+        0
+    } else {
+        cursor + 1 - list_h
+    };
+    let top = area.y + 3; // border + chips + query
+    for (i, row) in (start..total.min(start + list_h)).enumerate() {
+        hits.push(
+            Rect::new(area.x + 1, top + i as u16, area.width - 2, 1),
+            Hit::PageRow(row),
+        );
+    }
+}
 
 // The footer favors the everyday keys and the two discovery anchors
 // (`p` scope, `?` help); the full map — E, M, gg/G, H/J/K/L — lives in help.
@@ -48,21 +110,44 @@ const MOVE_HELP: &[(&str, &str)] = &[
     ("d", "done"),
 ];
 
-pub fn render(frame: &mut Frame, app: &App) {
+pub fn render(frame: &mut Frame, app: &App, hits: &mut HitMap) {
+    hits.clear();
     // The milestone and project pages own the whole screen — pages, not popups.
     if let Mode::MilestonePage(state) = &app.mode {
         milestone_page::draw(frame, frame.area(), app, state);
+        let (cursor, total) = (state.cursor, page_rows(app, state).len());
+        push_page_rows(
+            hits,
+            frame.area(),
+            cursor.min(total.saturating_sub(1)),
+            total,
+        );
         return;
     }
     if let Mode::ProjectPage(state) = &app.mode {
         project_page::draw(frame, frame.area(), app, state);
+        let (cursor, total) = (state.cursor, project_rows(app, state).len());
+        push_page_rows(
+            hits,
+            frame.area(),
+            cursor.min(total.saturating_sub(1)),
+            total,
+        );
         return;
     }
     if let Mode::ActivityPage(state) = &app.mode {
         activity_page::draw(frame, frame.area(), app, state);
+        let (cursor, total) = (state.cursor, activity_rows(app, state).len());
+        push_page_rows(
+            hits,
+            frame.area(),
+            cursor.min(total.saturating_sub(1)),
+            total,
+        );
         return;
     }
-    // The archive dialog layers over the page it interrupted.
+    // The archive dialog layers over the page it interrupted; no hit
+    // regions — a stray click must not act through a confirm.
     if let Mode::ConfirmProjectArchive {
         key,
         archived,
@@ -82,7 +167,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         ])
         .split(frame.area());
     top_bar::draw(frame, chunks[0], app);
-    board::draw_board(frame, chunks[1], app);
+    board::draw_board(frame, chunks[1], app, hits);
     // Status messages are feedback — they get the marker color and push the
     // hints right; the hints alone otherwise fill the row quietly. While a
     // Space-move is pending the footer becomes that menu instead.
@@ -154,7 +239,8 @@ mod tests {
 
     fn dump(app: &App) -> String {
         let mut t = Terminal::new(TestBackend::new(160, 24)).unwrap();
-        t.draw(|f| render(f, app)).unwrap();
+        let mut hits = HitMap::default();
+        t.draw(|f| render(f, app, &mut hits)).unwrap();
         let buf = t.backend().buffer().clone();
         let mut s = String::new();
         for y in 0..buf.area.height {

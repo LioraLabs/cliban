@@ -13,10 +13,21 @@ use std::time::Duration;
 
 use crossterm::event::KeyEvent;
 
+/// A mouse gesture the TUI cares about, at 0-based cell coordinates.
+/// Deliberately tiny: left-click and the wheel — drags, releases, and
+/// other buttons are noise for a keyboard-first board.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseInput {
+    Down(u16, u16),
+    ScrollUp(u16, u16),
+    ScrollDown(u16, u16),
+}
+
 /// One app-level input event delivered to the event loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
     Key(KeyEvent),
+    Mouse(MouseInput),
     /// Terminal resized to (cols, rows). The loop just redraws; the backend
     /// is responsible for reporting its new size on the next draw.
     Resize(u16, u16),
@@ -55,6 +66,21 @@ impl Session for LocalSession {
         match event::read()? {
             Event::Key(k) if k.kind == KeyEventKind::Press => Ok(SessionEvent::Key(k)),
             Event::Resize(w, h) => Ok(SessionEvent::Resize(w, h)),
+            Event::Mouse(m) => {
+                use crossterm::event::{MouseButton, MouseEventKind};
+                Ok(match m.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        SessionEvent::Mouse(MouseInput::Down(m.column, m.row))
+                    }
+                    MouseEventKind::ScrollUp => {
+                        SessionEvent::Mouse(MouseInput::ScrollUp(m.column, m.row))
+                    }
+                    MouseEventKind::ScrollDown => {
+                        SessionEvent::Mouse(MouseInput::ScrollDown(m.column, m.row))
+                    }
+                    _ => SessionEvent::Tick,
+                })
+            }
             _ => Ok(SessionEvent::Tick),
         }
     }

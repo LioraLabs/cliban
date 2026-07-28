@@ -82,8 +82,11 @@ impl Session for ChannelSession {
             let remaining = deadline.saturating_duration_since(Instant::now());
             match self.rx.recv_timeout(remaining) {
                 Ok(RemoteInput::Bytes(b)) => {
-                    for k in self.parser.feed(&b) {
-                        self.queue.push_back(SessionEvent::Key(k));
+                    for ev in self.parser.feed(&b) {
+                        self.queue.push_back(match ev {
+                            crate::input::InputEvent::Key(k) => SessionEvent::Key(k),
+                            crate::input::InputEvent::Mouse(m) => SessionEvent::Mouse(m),
+                        });
                     }
                     // A partial escape sequence may queue nothing: loop.
                 }
@@ -448,13 +451,17 @@ mod tests {
         data.seed_project_issue("CLI", "First");
         let mut app = App::new();
         crate::runtime::reload(&data, &mut app).unwrap();
-        terminal.draw(|f| crate::ui::render(f, &app)).unwrap();
+        terminal
+            .draw(|f| crate::ui::render(f, &app, &mut crate::ui::HitMap::default()))
+            .unwrap();
         let s = String::from_utf8_lossy(&buf.contents()).into_owned();
         assert!(s.contains("BACKLOG"), "board frame over the channel: {s:?}");
 
         // Resize via the shared cell; the next draw picks it up (autoresize).
         *size.lock().unwrap() = (60, 12);
-        terminal.draw(|f| crate::ui::render(f, &app)).unwrap();
+        terminal
+            .draw(|f| crate::ui::render(f, &app, &mut crate::ui::HitMap::default()))
+            .unwrap();
         assert_eq!(terminal.size().unwrap().width, 60);
     }
 }

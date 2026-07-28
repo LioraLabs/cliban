@@ -664,6 +664,12 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
             }
             None
         }
+        Action::FocusCard(col, idx) => {
+            app.remember_cursor();
+            app.focus.column = col;
+            app.focus.card_idx = idx.min(app.column_cards(col).len().saturating_sub(1));
+            None
+        }
         Action::PageMove(d) => {
             let last = app.column_cards(app.focus.column).len().saturating_sub(1);
             app.focus.card_idx = match d {
@@ -1151,6 +1157,13 @@ fn update_milestone_page(app: &mut App, action: Action) -> Option<Command> {
             }
             None
         }
+        Action::PageCursor(i) => {
+            let last = page_rows(app, &state).len().saturating_sub(1);
+            if let Mode::MilestonePage(s) = &mut app.mode {
+                s.cursor = i.min(last);
+            }
+            None
+        }
         Action::MsPageUp => {
             if let Mode::MilestonePage(s) = &mut app.mode {
                 s.cursor = s.cursor.saturating_sub(1);
@@ -1319,6 +1332,13 @@ fn update_project_page(app: &mut App, action: Action) -> Option<Command> {
             }
             None
         }
+        Action::PageCursor(i) => {
+            let last = project_rows(app, &state).len().saturating_sub(1);
+            if let Mode::ProjectPage(s) = &mut app.mode {
+                s.cursor = i.min(last);
+            }
+            None
+        }
         Action::ProjPageUp => {
             if let Mode::ProjectPage(s) = &mut app.mode {
                 s.cursor = s.cursor.saturating_sub(1);
@@ -1452,6 +1472,13 @@ fn update_activity_page(app: &mut App, action: Action) -> Option<Command> {
             if let Mode::ActivityPage(s) = &mut app.mode {
                 s.query.pop();
                 s.cursor = 0;
+            }
+            None
+        }
+        Action::PageCursor(i) => {
+            let last = activity_rows(app, &state).len().saturating_sub(1);
+            if let Mode::ActivityPage(s) = &mut app.mode {
+                s.cursor = i.min(last);
             }
             None
         }

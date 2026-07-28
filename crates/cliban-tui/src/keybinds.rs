@@ -1,6 +1,7 @@
 //! crossterm KeyEvent → Action, dispatched on Mode. Pure.
 use crate::actions::{Action, Direction};
 use crate::app::{App, Mode};
+use crate::session::MouseInput;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn status_for_letter(c: char) -> Option<&'static str> {
@@ -126,6 +127,60 @@ fn map_normal(key: KeyEvent, app: &mut App) -> Option<Action> {
         // Esc means "back", and the board is already the top level — quitting
         // belongs to q/Ctrl-C, not to someone spamming Esc out of popups.
         _ => None,
+    }
+}
+
+/// Mouse gestures → actions, resolved against the last-drawn frame's hit
+/// map. Clicks only act where they're unambiguous: a card (click to focus,
+/// click the focused card to open it), a column's empty space, or a page
+/// row. Anything under a dialog is unreachable — dialogs register no
+/// regions. The wheel moves whatever cursor the mode owns.
+pub fn map_mouse(m: MouseInput, app: &App, hits: &crate::ui::HitMap) -> Option<Action> {
+    use crate::ui::Hit;
+    match m {
+        MouseInput::ScrollUp(..) | MouseInput::ScrollDown(..) => {
+            let down = matches!(m, MouseInput::ScrollDown(..));
+            match &app.mode {
+                Mode::Normal => Some(Action::FocusMove(if down {
+                    Direction::Down
+                } else {
+                    Direction::Up
+                })),
+                Mode::MilestonePage(_) => Some(if down {
+                    Action::MsPageDown
+                } else {
+                    Action::MsPageUp
+                }),
+                Mode::ProjectPage(_) => Some(if down {
+                    Action::ProjPageDown
+                } else {
+                    Action::ProjPageUp
+                }),
+                Mode::ActivityPage(_) => Some(if down {
+                    Action::ActPageDown
+                } else {
+                    Action::ActPageUp
+                }),
+                _ => None,
+            }
+        }
+        MouseInput::Down(x, y) => match hits.at(x, y)? {
+            Hit::Card { column, idx } => match &app.mode {
+                Mode::Normal => {
+                    if app.focus.column == *column && app.focus.card_idx == *idx {
+                        Some(Action::OpenDetail)
+                    } else {
+                        Some(Action::FocusCard(*column, *idx))
+                    }
+                }
+                _ => None,
+            },
+            Hit::Column(col) => match &app.mode {
+                Mode::Normal => Some(Action::FocusCard(*col, usize::MAX)),
+                _ => None,
+            },
+            Hit::PageRow(i) => Some(Action::PageCursor(*i)),
+        },
     }
 }
 
