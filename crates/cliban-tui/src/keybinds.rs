@@ -37,9 +37,17 @@ pub fn map_key(key: KeyEvent, app: &mut App) -> Option<Action> {
         },
         Mode::ConfirmQuit => map_confirm_quit(key),
         Mode::ConfirmArchive(_) => map_confirm_archive(key),
-        Mode::ProjectPicker(_) | Mode::MilestonePicker(_) => map_picker(key),
+        Mode::ConfirmProjectArchive { .. } => match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                Some(Action::ProjPageArchive)
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(Action::Cancel),
+            _ => None,
+        },
+        Mode::MilestonePicker(_) => map_picker(key),
         Mode::FuzzyFind(_) => map_fuzzy(key),
         Mode::MilestonePage(_) => map_milestone_page(key),
+        Mode::ProjectPage(_) => map_project_page(key),
     }
 }
 
@@ -104,7 +112,7 @@ fn map_normal(key: KeyEvent, app: &mut App) -> Option<Action> {
         (KeyCode::Char('a'), KeyModifiers::NONE) => Some(Action::ArchiveRequest),
         (KeyCode::Char('m'), KeyModifiers::NONE) => Some(Action::OpenMilestonePage),
         (KeyCode::Char('M'), _) => Some(Action::CycleMilestoneFilter),
-        (KeyCode::Char('p'), KeyModifiers::NONE) => Some(Action::OpenProjectPicker),
+        (KeyCode::Char('p'), KeyModifiers::NONE) => Some(Action::OpenProjectPage),
         (KeyCode::Char('/'), _) => Some(Action::OpenFuzzyFind),
         (KeyCode::Char('r'), KeyModifiers::NONE) => Some(Action::Refresh),
         (KeyCode::Char('?'), _) => Some(Action::ToggleHelp),
@@ -192,13 +200,42 @@ fn map_milestone_page(key: KeyEvent) -> Option<Action> {
         (KeyCode::PageUp, _) => Some(Action::MsPagePage(Direction::Up)),
         (KeyCode::Home, _) => Some(Action::MsPageTop),
         (KeyCode::Char('G'), _) | (KeyCode::End, _) => Some(Action::MsPageBottom),
-        (KeyCode::Tab, _) | (KeyCode::Char('A'), _) => Some(Action::MsPageCycleFilter),
+        (KeyCode::Tab, _) => Some(Action::MsPageCycleFilter),
         (KeyCode::BackTab, _) => Some(Action::MsPageCycleFilterBack),
         (KeyCode::Char('S'), _) => Some(Action::MsPageCycleSort),
         (KeyCode::Char('E'), _) => Some(Action::MsPageEdit),
         (KeyCode::Char('N'), _) => Some(Action::MsPageNew),
         (KeyCode::Char('C'), _) => Some(Action::MsPageCycleStatus),
         (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => Some(Action::MsPageInput(c)),
+        _ => None,
+    }
+}
+
+/// Same grammar as the milestone page: lowercase types into the filter,
+/// capitals are commands, Ctrl-n/p and named keys navigate. `A` here means
+/// archive (the page's headline feature), not the Tab alias.
+fn map_project_page(key: KeyEvent) -> Option<Action> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Enter, _) => Some(Action::ProjPageSelect),
+        (KeyCode::Esc, _) => Some(Action::Cancel),
+        (KeyCode::Backspace, _) => Some(Action::ProjPageBackspace),
+        (KeyCode::Down, _) | (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
+            Some(Action::ProjPageDown)
+        }
+        (KeyCode::Up, _) | (KeyCode::Char('p'), KeyModifiers::CONTROL) => Some(Action::ProjPageUp),
+        (KeyCode::PageDown, _) => Some(Action::ProjPagePage(Direction::Down)),
+        (KeyCode::PageUp, _) => Some(Action::ProjPagePage(Direction::Up)),
+        (KeyCode::Home, _) => Some(Action::ProjPageTop),
+        (KeyCode::Char('G'), _) | (KeyCode::End, _) => Some(Action::ProjPageBottom),
+        (KeyCode::Tab, _) => Some(Action::ProjPageCycleFilter),
+        (KeyCode::BackTab, _) => Some(Action::ProjPageCycleFilterBack),
+        (KeyCode::Char('S'), _) => Some(Action::ProjPageCycleSort),
+        (KeyCode::Char('E'), _) => Some(Action::ProjPageEdit),
+        (KeyCode::Char('N'), _) => Some(Action::ProjPageNew),
+        (KeyCode::Char('A'), _) => Some(Action::ProjPageArchiveRequest),
+        (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
+            Some(Action::ProjPageInput(c))
+        }
         _ => None,
     }
 }
@@ -224,7 +261,7 @@ mod tests {
         use crate::app::{FuzzyState, Mode, PickerState};
         let ctrl = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
         let mut app = App::new();
-        app.mode = Mode::ProjectPicker(PickerState {
+        app.mode = Mode::MilestonePicker(PickerState {
             query: String::new(),
             items: vec![],
             cursor: 0,
@@ -300,7 +337,7 @@ mod tests {
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         let mut app = App::new();
         assert!(matches!(map_key(ctrl_c, &mut app), Some(Action::Quit)));
-        app.mode = Mode::ProjectPicker(PickerState {
+        app.mode = Mode::MilestonePicker(PickerState {
             query: String::new(),
             items: vec![],
             cursor: 0,
@@ -410,7 +447,8 @@ mod tests {
             map_key(ke(KeyCode::PageDown), &mut app),
             Some(Action::MsPagePage(Direction::Down))
         ));
-        // Capitals are the page's commands.
+        // Capitals are the page's commands. (`A` is reserved across both
+        // pages for the project page's archive — no Tab alias here.)
         assert!(matches!(
             map_key(cap('E'), &mut app),
             Some(Action::MsPageEdit)
@@ -427,14 +465,15 @@ mod tests {
             map_key(cap('C'), &mut app),
             Some(Action::MsPageCycleStatus)
         ));
-        // Tab and A both cycle the status bucket.
-        assert!(matches!(
-            map_key(cap('A'), &mut app),
-            Some(Action::MsPageCycleFilter)
-        ));
+        // Tab cycles the status bucket; `A` types (it is the project page's
+        // archive key, kept out of this page's command set on purpose).
         assert!(matches!(
             map_key(ke(KeyCode::Tab), &mut app),
             Some(Action::MsPageCycleFilter)
+        ));
+        assert!(matches!(
+            map_key(cap('A'), &mut app),
+            Some(Action::MsPageInput('A'))
         ));
         assert!(matches!(
             map_key(ke(KeyCode::Backspace), &mut app),
@@ -487,7 +526,7 @@ mod tests {
         ));
         assert!(matches!(
             map_key(ke(KeyCode::Char('p')), &mut app),
-            Some(Action::OpenProjectPicker)
+            Some(Action::OpenProjectPage)
         ));
         assert!(matches!(
             map_key(ke(KeyCode::Char('/')), &mut app),

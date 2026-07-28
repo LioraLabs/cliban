@@ -356,6 +356,24 @@ nothing appears twice.
 accepts a duration (`45s`, `90m`, `4h`, `3d`, `2w`), `today`, `yesterday`, a
 bare date (`2026-07-25`), or a full RFC3339 timestamp. All UTC.
 
+## Projects
+
+The TUI's project page (`p`) is where projects live: every project with
+issue and milestone rollups, ordered by recent activity. Type to filter,
+`Enter` scopes the board, `N` creates (including your very first project on
+an empty database), `E` edits in `$EDITOR`, and `A` archives — `Tab` flips
+to the archived bucket, where `A` unarchives:
+
+<p align="center"><img src="assets/projects.png" width="880" alt="the project page"></p>
+
+From the CLI:
+
+```bash
+cliban project ls                    # key, name
+cliban project show PROJ             # + description
+cliban project archive PROJ          # recoverable: unarchive brings it back
+```
+
 ## Milestones
 
 The TUI's milestone page (`m`) shows every milestone across projects,

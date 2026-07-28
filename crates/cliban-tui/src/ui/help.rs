@@ -33,12 +33,23 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
     (
         "SCOPE / MILESTONES",
         &[
-            ("p", "project picker"),
+            ("p", "project page"),
             ("m", "milestone page"),
             ("M", "cycle milestone filter"),
             ("N", "new milestone"),
             ("E", "edit milestone/project ($EDITOR)"),
             ("/", "fuzzy find"),
+        ],
+    ),
+    (
+        "PROJECT PAGE (p)",
+        &[
+            ("type", "filter by key/name"),
+            ("Enter", "scope board to project"),
+            ("Tab / S-Tab", "active/archived/all"),
+            ("A", "archive / unarchive"),
+            ("S", "sort: activity/name"),
+            ("E / N", "edit / new project"),
         ],
     ),
     (

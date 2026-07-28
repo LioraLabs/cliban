@@ -3,7 +3,9 @@
 //! loop runs on the local tty (crossterm) or headless/SSH.
 use crate::actions::{Action, Command};
 use crate::app::{App, Mode, PickerChip, PickerState};
-use crate::buffers::{parse_issue, parse_milestone, parse_project, IssueBuffer, MilestoneBuffer};
+use crate::buffers::{
+    parse_issue, parse_milestone, parse_project, IssueBuffer, MilestoneBuffer, ProjectBuffer,
+};
 use crate::data::Data;
 use crate::session::{LocalSession, Session, SessionEvent};
 use crossterm::event::KeyEvent;
@@ -45,6 +47,10 @@ pub fn dispatch_command(data: &Data, _app: &mut App, cmd: &Command) -> Result<bo
             data.set_milestone_status(project, name, status)?;
             Ok(true)
         }
+        Command::SetProjectArchived { key, archived } => {
+            data.set_project_archived(key, *archived)?;
+            Ok(true)
+        }
         Command::SetScope | Command::Reload => Ok(true),
         _ => Ok(false), // editor commands handled in the loop
     }
@@ -53,6 +59,7 @@ pub fn dispatch_command(data: &Data, _app: &mut App, cmd: &Command) -> Result<bo
 pub fn reload(data: &Data, app: &mut App) -> Result<(), DynErr> {
     app.cards = data.load_cards()?;
     app.milestones = data.load_milestones(app.scope.project.as_deref())?;
+    app.projects = data.load_projects()?;
     app.auto_focus_if_empty();
     Ok(())
 }
@@ -140,41 +147,39 @@ fn handle_editor<B: Backend>(
             }
             None => app.status_msg = Some("scope a project (p) before adding a milestone".into()),
         },
-        Command::EditProject => {
-            if let Some(project) = app.scope.project.clone() {
-                let path = temp_path("project");
-                std::fs::write(&path, data.project_buffer(&project)?.serialize())?;
-                if run_editor(terminal, session, &path)? {
-                    if let Ok(p) = parse_project(&std::fs::read_to_string(&path)?) {
-                        data.apply_project_edit(&project, &p)?;
+        Command::EditProject { key } => {
+            let path = temp_path("project");
+            std::fs::write(&path, data.project_buffer(key)?.serialize())?;
+            if run_editor(terminal, session, &path)? {
+                if let Ok(p) = parse_project(&std::fs::read_to_string(&path)?) {
+                    data.apply_project_edit(key, &p)?;
+                }
+            }
+            let _ = std::fs::remove_file(&path);
+        }
+        Command::NewProject => {
+            let buf = ProjectBuffer {
+                header: "# New project — key: 2-10 uppercase letters/digits, e.g. PULSE.".into(),
+                ..Default::default()
+            };
+            let path = temp_path("new-project");
+            std::fs::write(&path, buf.serialize())?;
+            if run_editor(terminal, session, &path)? {
+                if let Ok(p) = parse_project(&std::fs::read_to_string(&path)?) {
+                    // Core validates the key; a rejection becomes status text
+                    // rather than tearing the whole session down.
+                    if let Err(e) = data.create_project(&p) {
+                        app.status_msg = Some(format!("project not created: {e}"));
                     }
                 }
-                let _ = std::fs::remove_file(&path);
             }
+            let _ = std::fs::remove_file(&path);
         }
         _ => {}
     }
     Ok(())
 }
 
-fn seed_project_picker(data: &Data, app: &mut App) -> Result<(), DynErr> {
-    if let Mode::ProjectPicker(_) = &app.mode {
-        let items = data
-            .list_projects()?
-            .into_iter()
-            .map(|(k, n)| PickerChip {
-                label: format!("{k}  {n}"),
-                value: k,
-            })
-            .collect();
-        app.mode = Mode::ProjectPicker(PickerState {
-            query: String::new(),
-            items,
-            cursor: 0,
-        });
-    }
-    Ok(())
-}
 fn seed_milestone_picker(app: &mut App) {
     if let Mode::MilestonePicker(_) = &app.mode {
         let items = app
@@ -249,12 +254,8 @@ fn handle_key<B: Backend>(
     if matches!(action, Action::Quit) {
         return Ok(true);
     }
-    let open_pp = matches!(action, Action::OpenProjectPicker);
     let open_mp = matches!(action, Action::OpenMilestonePicker);
     let cmd = crate::app::update(app, action);
-    if open_pp {
-        seed_project_picker(data, app)?;
-    }
     if open_mp {
         seed_milestone_picker(app);
     }
@@ -264,7 +265,8 @@ fn handle_key<B: Backend>(
             | Command::NewIssue { .. }
             | Command::EditMilestone { .. }
             | Command::NewMilestone { .. }
-            | Command::EditProject => {
+            | Command::EditProject { .. }
+            | Command::NewProject => {
                 handle_editor(data, app, terminal, session, &cmd)?;
                 reload(data, app)?;
             }

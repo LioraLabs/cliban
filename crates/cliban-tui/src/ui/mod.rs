@@ -8,6 +8,7 @@ pub mod fuzzy;
 pub mod help;
 pub mod milestone_page;
 pub mod picker;
+pub mod project_page;
 pub mod theme;
 pub mod top_bar;
 
@@ -48,9 +49,24 @@ const MOVE_HELP: &[(&str, &str)] = &[
 ];
 
 pub fn render(frame: &mut Frame, app: &App) {
-    // The milestone page owns the whole screen — it's a page, not a popup.
+    // The milestone and project pages own the whole screen — pages, not popups.
     if let Mode::MilestonePage(state) = &app.mode {
         milestone_page::draw(frame, frame.area(), app, state);
+        return;
+    }
+    if let Mode::ProjectPage(state) = &app.mode {
+        project_page::draw(frame, frame.area(), app, state);
+        return;
+    }
+    // The archive dialog layers over the page it interrupted.
+    if let Mode::ConfirmProjectArchive {
+        key,
+        archived,
+        page,
+    } = &app.mode
+    {
+        project_page::draw(frame, frame.area(), app, page);
+        confirm_quit::draw_confirm_project(frame, frame.area(), key, *archived);
         return;
     }
     let chunks = Layout::default()
@@ -100,20 +116,15 @@ pub fn render(frame: &mut Frame, app: &App) {
                 detail::draw(frame, frame.area(), c);
             }
         }
-        Mode::ProjectPicker(p) | Mode::MilestonePicker(p) => {
+        Mode::MilestonePicker(p) => {
             let labels: Vec<String> = p.items.iter().map(|c| c.label.clone()).collect();
             let idx = picker::fuzzy_indices(&labels, &p.query);
             let filtered: Vec<String> = idx.iter().map(|&i| labels[i].clone()).collect();
-            let title = if matches!(app.mode, Mode::ProjectPicker(_)) {
-                "Pick project"
-            } else {
-                "Pick milestone"
-            };
             picker::draw(
                 frame,
                 frame.area(),
                 picker::PickerView {
-                    title,
+                    title: "Pick milestone",
                     query: &p.query,
                     items: &filtered,
                     cursor: p.cursor,
@@ -121,8 +132,8 @@ pub fn render(frame: &mut Frame, app: &App) {
             );
         }
         Mode::FuzzyFind(state) => fuzzy::draw(frame, frame.area(), app, state),
-        // Handled above — it replaces the board rather than layering over it.
-        Mode::MilestonePage(_) => {}
+        // Handled above — they replace the board rather than layering over it.
+        Mode::MilestonePage(_) | Mode::ProjectPage(_) | Mode::ConfirmProjectArchive { .. } => {}
         // AwaitingMove keeps the board visible; its menu lives in the footer.
         Mode::Normal | Mode::AwaitingMove => {}
     }

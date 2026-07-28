@@ -36,7 +36,6 @@ pub enum Action {
     BeginMove,
     MoveTo(String),
     MoveIssueDir(Direction),
-    OpenProjectPicker,
     OpenMilestonePicker,
     CycleMilestoneFilter,
     OpenMilestonePage,
@@ -71,6 +70,26 @@ pub enum Action {
     MsPageCycleFilter,
     MsPageCycleFilterBack,
     MsPageCycleSort,
+    // Project page (`p`) — the same grammar as the milestone page.
+    OpenProjectPage,
+    ProjPageUp,
+    ProjPageDown,
+    ProjPagePage(Direction),
+    ProjPageTop,
+    ProjPageBottom,
+    ProjPageInput(char),
+    ProjPageBackspace,
+    /// Enter: scope the board to the focused project and close the page.
+    ProjPageSelect,
+    ProjPageEdit,
+    ProjPageNew,
+    /// `A`: ask before flipping the focused project's archived flag.
+    ProjPageArchiveRequest,
+    /// The confirmed archive/unarchive (from the dialog).
+    ProjPageArchive,
+    ProjPageCycleFilter,
+    ProjPageCycleFilterBack,
+    ProjPageCycleSort,
 }
 
 #[derive(Debug, Clone)]
@@ -112,5 +131,13 @@ pub enum Command {
         name: String,
         status: String,
     },
-    EditProject,
+    EditProject {
+        key: String,
+    },
+    /// Open an editor buffer for a brand-new project (key + name + body).
+    NewProject,
+    SetProjectArchived {
+        key: String,
+        archived: bool,
+    },
 }

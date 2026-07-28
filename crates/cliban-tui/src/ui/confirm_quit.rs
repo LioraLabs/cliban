@@ -13,6 +13,12 @@ pub fn draw_confirm_archive(frame: &mut Frame, area: Rect, key: &str) {
     draw_confirm(frame, area, "Archive", &format!("Archive {key}?"));
 }
 
+/// Project archive/unarchive confirm — the verb tracks the direction.
+pub fn draw_confirm_project(frame: &mut Frame, area: Rect, key: &str, archived: bool) {
+    let verb = if archived { "Archive" } else { "Unarchive" };
+    draw_confirm(frame, area, verb, &format!("{verb} project {key}?"));
+}
+
 /// A small yes/no dialog; `y`/Enter confirm, `n`/Esc decline.
 fn draw_confirm(frame: &mut Frame, area: Rect, title: &str, question: &str) {
     let width = (question.chars().count() as u16 + 18).max(40);

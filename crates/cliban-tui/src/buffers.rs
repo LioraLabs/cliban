@@ -148,6 +148,9 @@ pub fn parse_milestone(src: &str) -> Result<MilestoneBuffer, String> {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ProjectBuffer {
     pub header: String,
+    /// Shown on every buffer; only *read back* when creating (the key is
+    /// immutable on an existing project, so edits to it are ignored).
+    pub key: String,
     pub name: String,
     pub description: String,
 }
@@ -161,7 +164,10 @@ impl ProjectBuffer {
                 s.push('\n');
             }
         }
-        s.push_str(&format!("---\nname: {}\n---\n", self.name));
+        s.push_str(&format!(
+            "---\nkey: {}\nname: {}\n---\n",
+            self.key, self.name
+        ));
         s.push_str(&self.description);
         if !self.description.ends_with('\n') {
             s.push('\n');
@@ -181,8 +187,10 @@ pub fn parse_project(src: &str) -> Result<ProjectBuffer, String> {
     }
     for line in front.lines() {
         if let Some((k, v)) = line.split_once(':') {
-            if k.trim() == "name" {
-                b.name = v.trim().to_string();
+            match k.trim() {
+                "key" => b.key = v.trim().to_string(),
+                "name" => b.name = v.trim().to_string(),
+                _ => {}
             }
         }
     }
@@ -239,11 +247,21 @@ mod tests {
     fn project_buffer_round_trips() {
         let b = ProjectBuffer {
             header: "".into(),
+            key: "CB".into(),
             name: "Cliban".into(),
             description: "Desc\n".into(),
         };
         let p = parse_project(&b.serialize()).unwrap();
+        assert_eq!(p.key, "CB");
         assert_eq!(p.name, "Cliban");
         assert_eq!(p.description, "Desc\n");
+    }
+
+    #[test]
+    fn project_buffer_without_a_key_line_still_parses() {
+        // Old-style edit buffers (and hand-written ones) have no key line.
+        let p = parse_project("---\nname: Cliban\n---\nBody\n").unwrap();
+        assert_eq!(p.key, "");
+        assert_eq!(p.name, "Cliban");
     }
 }

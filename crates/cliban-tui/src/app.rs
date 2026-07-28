@@ -239,24 +239,120 @@ impl MilestoneRef {
     }
 }
 
+/// Display projection of a project, with the rollups the project page shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRef {
+    pub key: String,
+    pub name: String,
+    pub description: String,
+    pub archived: bool,
+    /// Active (board-visible) issues.
+    pub total: i64,
+    pub done: i64,
+    pub milestones: i64,
+    pub last_activity: DateTime<Utc>,
+}
+
+/// The project page's view state — the same shape as [`MilestonePageState`].
+#[derive(Debug, Clone, Default)]
+pub struct ProjectPageState {
+    pub cursor: usize,
+    pub query: String,
+    pub filter: ProjFilter,
+    pub sort: ProjSort,
+}
+
+/// Which projects the page lists. Active is the working set; archived
+/// projects are one Tab away rather than gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProjFilter {
+    #[default]
+    Active,
+    Archived,
+    All,
+}
+
+impl ProjFilter {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Archived => "archived",
+            Self::All => "all",
+        }
+    }
+    fn next(self) -> Self {
+        match self {
+            Self::Active => Self::Archived,
+            Self::Archived => Self::All,
+            Self::All => Self::Active,
+        }
+    }
+    fn prev(self) -> Self {
+        match self {
+            Self::Active => Self::All,
+            Self::Archived => Self::Active,
+            Self::All => Self::Archived,
+        }
+    }
+    fn accepts(self, archived: bool) -> bool {
+        match self {
+            Self::All => true,
+            Self::Active => !archived,
+            Self::Archived => archived,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProjSort {
+    /// Most recently worked on first.
+    #[default]
+    Activity,
+    Name,
+}
+
+impl ProjSort {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Activity => "activity",
+            Self::Name => "name",
+        }
+    }
+    fn next(self) -> Self {
+        match self {
+            Self::Activity => Self::Name,
+            Self::Name => Self::Activity,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Mode {
     Normal,
     Help,
     ConfirmQuit,
     ConfirmArchive(String), // `a` pressed; the key waiting to be archived
-    AwaitingMove,           // Space pressed; waiting for column letter
-    Detail(String),         // focused card key
-    ProjectPicker(PickerState),
+    /// `A` on the project page. Carries the page state so both answers land
+    /// back on the page exactly as the user left it.
+    ConfirmProjectArchive {
+        key: String,
+        /// The *new* archived state to apply on confirm.
+        archived: bool,
+        page: ProjectPageState,
+    },
+    AwaitingMove,   // Space pressed; waiting for column letter
+    Detail(String), // focused card key
     MilestonePicker(PickerState),
     FuzzyFind(FuzzyState),
     MilestonePage(MilestonePageState),
+    ProjectPage(ProjectPageState),
 }
 
 #[derive(Debug, Clone)]
 pub struct App {
     pub cards: Vec<Card>,
     pub milestones: Vec<MilestoneRef>, // for scope.project, name order
+    pub projects: Vec<ProjectRef>,     // every project, activity order
     pub focus: Focus,
     pub mode: Mode,
     pub scope: Scope,
@@ -271,6 +367,7 @@ impl App {
         Self {
             cards: Vec::new(),
             milestones: Vec::new(),
+            projects: Vec::new(),
             focus: Focus::default(),
             mode: Mode::Normal,
             scope: Scope::default(),
@@ -415,7 +512,12 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
         }
         Action::Quit => None,
         Action::Cancel => {
-            app.mode = Mode::Normal;
+            // Declining the project-archive dialog returns to the page it
+            // came from; every other cancel unwinds to the board.
+            app.mode = match &app.mode {
+                Mode::ConfirmProjectArchive { page, .. } => Mode::ProjectPage(page.clone()),
+                _ => Mode::Normal,
+            };
             None
         }
         Action::Refresh => Some(Command::Reload),
@@ -501,7 +603,7 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
                 project: p.clone(),
                 name: m.clone(),
             }),
-            (Some(_), None) => Some(Command::EditProject),
+            (Some(p), None) => Some(Command::EditProject { key: p.clone() }),
             (None, _) => {
                 app.status_msg = Some("scope a project first (p) to edit it".into());
                 None
@@ -549,12 +651,8 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
 
 fn update_overlays(app: &mut App, action: Action) -> Option<Command> {
     match action {
-        Action::OpenProjectPicker => {
-            app.mode = Mode::ProjectPicker(PickerState {
-                query: String::new(),
-                items: vec![],
-                cursor: 0,
-            });
+        Action::OpenProjectPage => {
+            app.mode = Mode::ProjectPage(ProjectPageState::default());
             None
         }
         Action::OpenMilestonePicker => {
@@ -639,9 +737,8 @@ fn update_overlays(app: &mut App, action: Action) -> Option<Command> {
 }
 
 fn with_picker(app: &mut App, f: impl FnOnce(&mut PickerState)) {
-    match &mut app.mode {
-        Mode::ProjectPicker(p) | Mode::MilestonePicker(p) => f(p),
-        _ => {}
+    if let Mode::MilestonePicker(p) = &mut app.mode {
+        f(p)
     }
 }
 
@@ -699,23 +796,15 @@ pub fn page_focused<'a>(app: &'a App, state: &MilestonePageState) -> Option<&'a 
 }
 
 fn picker_confirm(app: &mut App) -> Option<Command> {
-    let (is_project, chip) = match &app.mode {
-        Mode::ProjectPicker(p) => {
-            let i = *filtered_picker(p).get(p.cursor)?;
-            (true, p.items[i].clone())
-        }
+    let chip = match &app.mode {
         Mode::MilestonePicker(p) => {
             let i = *filtered_picker(p).get(p.cursor)?;
-            (false, p.items[i].clone())
+            p.items[i].clone()
         }
         _ => return None,
     };
     app.mode = Mode::Normal;
-    if is_project {
-        app.scope.set_project(Some(chip.value));
-    } else {
-        app.scope.milestone = Some(chip.value);
-    }
+    app.scope.milestone = Some(chip.value);
     app.auto_focus_if_empty();
     Some(Command::SetScope)
 }
@@ -802,7 +891,9 @@ fn update_milestone_page(app: &mut App, action: Action) -> Option<Command> {
     // Read-only arms first: they need `&App` while the state lives in `app.mode`.
     let state = match &app.mode {
         Mode::MilestonePage(s) => s.clone(),
-        _ => return None,
+        // Not this page's mode — hand the action to the project page, the
+        // last stop in the dispatch chain.
+        _ => return update_project_page(app, action),
     };
     match action {
         Action::MsPageInput(c) => {
@@ -907,6 +998,165 @@ fn update_milestone_page(app: &mut App, action: Action) -> Option<Command> {
             // to that project too, keeping the Scope invariant honest.
             app.scope.set_project(Some(project));
             app.scope.milestone = Some(name);
+            app.mode = Mode::Normal;
+            app.auto_focus_if_empty();
+            Some(Command::SetScope)
+        }
+        _ => update_project_page(app, action),
+    }
+}
+
+/// The project page's visible rows, as indices into `app.projects`: archive
+/// bucket, then a case-insensitive substring match on key or name, then the
+/// chosen ordering. `app.projects` already arrives sorted by activity.
+pub fn project_rows(app: &App, state: &ProjectPageState) -> Vec<usize> {
+    let q = state.query.to_lowercase();
+    let mut idx: Vec<usize> = app
+        .projects
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| state.filter.accepts(p.archived))
+        .filter(|(_, p)| {
+            q.is_empty() || p.key.to_lowercase().contains(&q) || p.name.to_lowercase().contains(&q)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if state.sort == ProjSort::Name {
+        idx.sort_by(|&a, &b| app.projects[a].key.cmp(&app.projects[b].key));
+    }
+    idx
+}
+
+/// The project the page cursor is on, if any.
+pub fn project_focused<'a>(app: &'a App, state: &ProjectPageState) -> Option<&'a ProjectRef> {
+    let rows = project_rows(app, state);
+    app.projects.get(*rows.get(state.cursor)?)
+}
+
+/// The project page. Same contract as the milestone page: every arm
+/// re-derives its target from `app.projects` through [`project_rows`].
+fn update_project_page(app: &mut App, action: Action) -> Option<Command> {
+    // The archive dialog carries its own target and page state, so it is
+    // handled before the page-state guard below.
+    if let Action::ProjPageArchive = action {
+        let Mode::ConfirmProjectArchive {
+            key,
+            archived,
+            page,
+        } = app.mode.clone()
+        else {
+            return None;
+        };
+        // Archiving the project the board is scoped to would leave the board
+        // pointed at something the page's active bucket no longer offers —
+        // unscope it.
+        if archived && app.scope.project.as_deref() == Some(key.as_str()) {
+            app.scope.set_project(None);
+        }
+        app.mode = Mode::ProjectPage(page);
+        return Some(Command::SetProjectArchived { key, archived });
+    }
+
+    let state = match &app.mode {
+        Mode::ProjectPage(s) => s.clone(),
+        _ => return None,
+    };
+    match action {
+        Action::ProjPageInput(c) => {
+            if let Mode::ProjectPage(s) = &mut app.mode {
+                s.query.push(c);
+                s.cursor = 0;
+            }
+            None
+        }
+        Action::ProjPageBackspace => {
+            if let Mode::ProjectPage(s) = &mut app.mode {
+                s.query.pop();
+                s.cursor = 0;
+            }
+            None
+        }
+        Action::ProjPageUp => {
+            if let Mode::ProjectPage(s) = &mut app.mode {
+                s.cursor = s.cursor.saturating_sub(1);
+            }
+            None
+        }
+        Action::ProjPageDown => {
+            let last = project_rows(app, &state).len().saturating_sub(1);
+            if let Mode::ProjectPage(s) = &mut app.mode {
+                if s.cursor < last {
+                    s.cursor += 1;
+                }
+            }
+            None
+        }
+        Action::ProjPagePage(d) => {
+            let last = project_rows(app, &state).len().saturating_sub(1);
+            if let Mode::ProjectPage(s) = &mut app.mode {
+                s.cursor = match d {
+                    Direction::Down => (s.cursor + MS_PAGE_STEP).min(last),
+                    _ => s.cursor.saturating_sub(MS_PAGE_STEP),
+                };
+            }
+            None
+        }
+        Action::ProjPageTop => {
+            if let Mode::ProjectPage(s) = &mut app.mode {
+                s.cursor = 0;
+            }
+            None
+        }
+        Action::ProjPageBottom => {
+            let last = project_rows(app, &state).len().saturating_sub(1);
+            if let Mode::ProjectPage(s) = &mut app.mode {
+                s.cursor = last;
+            }
+            None
+        }
+        Action::ProjPageCycleFilter => {
+            if let Mode::ProjectPage(s) = &mut app.mode {
+                s.filter = s.filter.next();
+                s.cursor = 0;
+            }
+            None
+        }
+        Action::ProjPageCycleFilterBack => {
+            if let Mode::ProjectPage(s) = &mut app.mode {
+                s.filter = s.filter.prev();
+                s.cursor = 0;
+            }
+            None
+        }
+        Action::ProjPageCycleSort => {
+            if let Mode::ProjectPage(s) = &mut app.mode {
+                s.sort = s.sort.next();
+                s.cursor = 0;
+            }
+            None
+        }
+        Action::ProjPageEdit => {
+            let p = project_focused(app, &state)?;
+            Some(Command::EditProject { key: p.key.clone() })
+        }
+        Action::ProjPageNew => Some(Command::NewProject),
+        Action::ProjPageArchiveRequest => {
+            let p = project_focused(app, &state)?;
+            app.mode = Mode::ConfirmProjectArchive {
+                key: p.key.clone(),
+                archived: !p.archived,
+                page: state.clone(),
+            };
+            None
+        }
+        Action::ProjPageSelect => {
+            let p = project_focused(app, &state)?;
+            if p.archived {
+                app.status_msg = Some("unarchive it (A) before scoping the board to it".into());
+                return None;
+            }
+            let key = p.key.clone();
+            app.scope.set_project(Some(key));
             app.mode = Mode::Normal;
             app.auto_focus_if_empty();
             Some(Command::SetScope)
@@ -1459,6 +1709,95 @@ mod tests {
             Mode::MilestonePage(s) => assert_eq!(s.filter, StatusFilter::All),
             _ => panic!("not on the page"),
         }
+    }
+
+    fn project(key: &str, archived: bool) -> ProjectRef {
+        ProjectRef {
+            key: key.into(),
+            name: key.to_lowercase(),
+            description: String::new(),
+            archived,
+            total: 0,
+            done: 0,
+            milestones: 0,
+            last_activity: DateTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn project_archive_confirms_returns_to_the_page_and_unscopes_the_board() {
+        let mut app = App::new();
+        app.projects = vec![project("PULSE", false)];
+        app.scope.set_project(Some("PULSE".into()));
+        update(&mut app, Action::OpenProjectPage);
+        assert!(update(&mut app, Action::ProjPageArchiveRequest).is_none());
+        assert!(matches!(
+            &app.mode,
+            Mode::ConfirmProjectArchive { key, archived: true, .. } if key == "PULSE"
+        ));
+        // Declining lands back on the page, not the board.
+        update(&mut app, Action::Cancel);
+        assert!(matches!(app.mode, Mode::ProjectPage(_)));
+        // Confirming emits the command and clears the now-stale board scope.
+        update(&mut app, Action::ProjPageArchiveRequest);
+        match update(&mut app, Action::ProjPageArchive) {
+            Some(Command::SetProjectArchived { key, archived }) => {
+                assert_eq!(key, "PULSE");
+                assert!(archived);
+            }
+            c => panic!("{c:?}"),
+        }
+        assert_eq!(app.scope.project, None, "archived scope must clear");
+        assert!(matches!(app.mode, Mode::ProjectPage(_)));
+    }
+
+    #[test]
+    fn selecting_a_project_scopes_the_board_but_archived_ones_refuse() {
+        let mut app = App::new();
+        app.projects = vec![project("PULSE", false), project("OLD", true)];
+        update(&mut app, Action::OpenProjectPage);
+        assert!(matches!(
+            update(&mut app, Action::ProjPageSelect),
+            Some(Command::SetScope)
+        ));
+        assert_eq!(app.scope.project.as_deref(), Some("PULSE"));
+        assert!(matches!(app.mode, Mode::Normal));
+
+        // The archived bucket can browse but not scope.
+        update(&mut app, Action::OpenProjectPage);
+        update(&mut app, Action::ProjPageCycleFilter); // active → archived
+        assert!(update(&mut app, Action::ProjPageSelect).is_none());
+        assert!(app.status_msg.is_some(), "refusal must explain itself");
+        assert!(matches!(app.mode, Mode::ProjectPage(_)));
+    }
+
+    #[test]
+    fn project_rows_filter_query_and_sort() {
+        let mut app = App::new();
+        app.projects = vec![
+            project("TIDE", false),
+            project("PULSE", false),
+            project("OLD", true),
+        ];
+        let s = ProjectPageState::default();
+        let keys = |app: &App, s: &ProjectPageState| -> Vec<String> {
+            project_rows(app, s)
+                .into_iter()
+                .map(|i| app.projects[i].key.clone())
+                .collect()
+        };
+        assert_eq!(keys(&app, &s), ["TIDE", "PULSE"], "active bucket");
+        let s = ProjectPageState {
+            query: "pul".into(),
+            ..Default::default()
+        };
+        assert_eq!(keys(&app, &s), ["PULSE"], "query matches key");
+        let s = ProjectPageState {
+            filter: ProjFilter::All,
+            sort: ProjSort::Name,
+            ..Default::default()
+        };
+        assert_eq!(keys(&app, &s), ["OLD", "PULSE", "TIDE"], "name sort");
     }
 
     #[test]

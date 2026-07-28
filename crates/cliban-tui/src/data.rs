@@ -4,7 +4,7 @@ use std::path::Path;
 use cliban_core::contexts::{issues, milestones, projects};
 use cliban_core::Store;
 
-use crate::app::{Card, MilestoneRef};
+use crate::app::{Card, MilestoneRef, ProjectRef};
 use crate::buffers::{IssueBuffer, MilestoneBuffer, ProjectBuffer};
 
 pub struct Data {
@@ -151,9 +151,92 @@ impl Data {
         Ok(())
     }
 
-    pub fn list_projects(&self) -> Result<Vec<(String, String)>, DataError> {
-        let ps = self.rt.block_on(self.store.call(projects::list))?;
-        Ok(ps.into_iter().map(|p| (p.key, p.name)).collect())
+    /// Every project with the rollups the project page shows: active-issue
+    /// done/total, milestone count, and the latest touch across the project
+    /// row, its issues, and its milestones.
+    pub fn load_projects(&self) -> Result<Vec<ProjectRef>, DataError> {
+        let rows = self.rt.block_on(self.store.call(|conn| {
+            let ps = projects::list(conn)?;
+            let issues = issues::list(conn, issues::ListOpts::default())?;
+            let ms = milestones::summaries(
+                conn,
+                milestones::SummaryOpts {
+                    project: None,
+                    status: None,
+                    sort: milestones::Sort::Activity,
+                },
+            )?;
+            Ok(ps
+                .into_iter()
+                .map(|p| {
+                    let mine = issues.iter().filter(|i| i.project_id == p.id);
+                    let (mut total, mut done) = (0, 0);
+                    let mut last = p.updated_at;
+                    for i in mine {
+                        total += 1;
+                        if i.status == "done" {
+                            done += 1;
+                        }
+                        last = last.max(i.updated_at);
+                    }
+                    let mut milestone_count = 0;
+                    for s in ms.iter().filter(|s| s.project_key == p.key) {
+                        milestone_count += 1;
+                        last = last.max(s.last_activity);
+                    }
+                    ProjectRef {
+                        key: p.key,
+                        name: p.name,
+                        description: p.description,
+                        archived: p.archived,
+                        total,
+                        done,
+                        milestones: milestone_count,
+                        last_activity: last,
+                    }
+                })
+                .collect())
+        }))?;
+        Ok(rows)
+    }
+
+    /// Flip a project in or out of the archive (the page's `A` key).
+    pub fn set_project_archived(&self, key: &str, archived: bool) -> Result<(), DataError> {
+        let key = key.to_string();
+        self.rt.block_on(self.store.call(move |conn| {
+            let p = projects::get_by_key(conn, &key)?.ok_or(cliban_core::Error::ProjectNotFound)?;
+            projects::update(
+                conn,
+                &p,
+                projects::UpdateProject {
+                    archived: Some(archived),
+                    ..Default::default()
+                },
+            )?;
+            Ok(())
+        }))?;
+        self.notify();
+        Ok(())
+    }
+
+    /// Create a project from a filled-in buffer (the page's `N` key). Core
+    /// validates the key shape and uniqueness; errors surface as status text.
+    pub fn create_project(&self, b: &ProjectBuffer) -> Result<(), DataError> {
+        let b = b.clone();
+        self.rt.block_on(self.store.call(move |conn| {
+            projects::create(
+                conn,
+                projects::CreateProject {
+                    key: b.key.clone(),
+                    name: b.name.clone(),
+                    description: Some(b.description.clone()),
+                    auto_archive_done_after_days: None,
+                },
+            )?;
+            Ok(())
+        }))?;
+        self.notify();
+        Ok(())
     }
 
     pub fn move_issue(&self, key: &str, status: &str) -> Result<(), DataError> {
@@ -445,6 +528,7 @@ impl Data {
                 "# Editing project {} — the key is immutable; rename via 'name'.",
                 p.key
             ),
+            key: p.key,
             name: p.name,
             description: p.description,
         })
@@ -544,6 +628,46 @@ mod tests {
         assert_eq!(cards[0].key, "CLI-1");
         assert_eq!(cards[0].project, "CLI");
         assert_eq!(cards[0].status, "backlog");
+    }
+
+    #[test]
+    fn load_projects_rolls_up_counts_and_archive_round_trips() {
+        let d = Data::open_in_memory_for_test();
+        d.seed_project_issue("PULSE", "First");
+        let ps = d.load_projects().unwrap();
+        assert_eq!(ps.len(), 1);
+        assert_eq!(ps[0].key, "PULSE");
+        assert_eq!((ps[0].total, ps[0].done), (1, 0));
+        assert!(!ps[0].archived);
+        d.move_issue("PULSE-1", "done").unwrap();
+        assert_eq!(d.load_projects().unwrap()[0].done, 1);
+        d.set_project_archived("PULSE", true).unwrap();
+        assert!(d.load_projects().unwrap()[0].archived);
+        d.set_project_archived("PULSE", false).unwrap();
+        assert!(!d.load_projects().unwrap()[0].archived);
+    }
+
+    #[test]
+    fn create_project_from_buffer_validates_the_key() {
+        let d = Data::open_in_memory_for_test();
+        let ok = ProjectBuffer {
+            key: "tide".into(), // core upcases
+            name: "Tide".into(),
+            description: "Marine forecast API\n".into(),
+            ..Default::default()
+        };
+        d.create_project(&ok).unwrap();
+        let ps = d.load_projects().unwrap();
+        assert_eq!(ps[0].key, "TIDE");
+        assert_eq!(ps[0].name, "Tide");
+        // A one-character key violates the 2-10 rule and must not create.
+        let bad = ProjectBuffer {
+            key: "X".into(),
+            name: "Nope".into(),
+            ..Default::default()
+        };
+        assert!(d.create_project(&bad).is_err());
+        assert_eq!(d.load_projects().unwrap().len(), 1);
     }
 
     #[test]
