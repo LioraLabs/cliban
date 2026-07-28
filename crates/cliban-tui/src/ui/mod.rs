@@ -18,21 +18,33 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
+// The footer favors the everyday keys and the two discovery anchors
+// (`p` scope, `?` help); the full map — E, M, gg/G, H/J/K/L — lives in help.
 const STATUS_HELP: &[(&str, &str)] = &[
     ("hjkl", "move"),
     ("enter", "detail"),
     ("e", "edit"),
-    ("E", "proj/ms"),
     ("n", "new"),
     ("N", "ms+"),
     ("t", "tag"),
     ("Space", "mv"),
     ("a", "arch"),
+    ("p", "project"),
     ("m", "milestones"),
-    ("M", "filter"),
     ("/", "find"),
     ("r", "refresh"),
+    ("?", "help"),
     ("q", "quit"),
+];
+
+/// The `Space` move menu, shown in the footer while the app waits for a
+/// status letter — otherwise the pending mode is invisible.
+const MOVE_HELP: &[(&str, &str)] = &[
+    ("b", "backlog"),
+    ("i", "in-progress"),
+    ("k", "blocked"),
+    ("r", "in-review"),
+    ("d", "done"),
 ];
 
 pub fn render(frame: &mut Frame, app: &App) {
@@ -52,8 +64,23 @@ pub fn render(frame: &mut Frame, app: &App) {
     top_bar::draw(frame, chunks[0], app);
     board::draw_board(frame, chunks[1], app);
     // Status messages are feedback — they get the marker color and push the
-    // hints right; the hints alone otherwise fill the row quietly.
-    let mut status = theme::hints(STATUS_HELP);
+    // hints right; the hints alone otherwise fill the row quietly. While a
+    // Space-move is pending the footer becomes that menu instead.
+    let mut status = if matches!(app.mode, Mode::AwaitingMove) {
+        let mut line = theme::hints(MOVE_HELP);
+        let mut spans = vec![Span::styled(
+            "move to:  ",
+            Style::default().fg(theme::MARKER),
+        )];
+        spans.append(&mut line.spans);
+        spans.push(Span::styled(
+            "   any other key cancels",
+            Style::default().fg(theme::DIM),
+        ));
+        ratatui::text::Line::from(spans)
+    } else {
+        theme::hints(STATUS_HELP)
+    };
     if let Some(m) = &app.status_msg {
         let mut spans = vec![
             Span::styled(m.clone(), Style::default().fg(theme::MARKER)),
@@ -95,6 +122,49 @@ pub fn render(frame: &mut Frame, app: &App) {
         Mode::FuzzyFind(state) => fuzzy::draw(frame, frame.area(), app, state),
         // Handled above — it replaces the board rather than layering over it.
         Mode::MilestonePage(_) => {}
+        // AwaitingMove keeps the board visible; its menu lives in the footer.
         Mode::Normal | Mode::AwaitingMove => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn dump(app: &App) -> String {
+        let mut t = Terminal::new(TestBackend::new(160, 24)).unwrap();
+        t.draw(|f| render(f, app)).unwrap();
+        let buf = t.backend().buffer().clone();
+        let mut s = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                s.push_str(buf[(x, y)].symbol());
+            }
+            s.push('\n');
+        }
+        s
+    }
+
+    #[test]
+    fn footer_shows_discovery_anchors() {
+        let d = dump(&App::new());
+        for needle in ["p project", "? help", "q quit"] {
+            assert!(d.contains(needle), "footer missing `{needle}`:\n{d}");
+        }
+    }
+
+    #[test]
+    fn awaiting_move_turns_the_footer_into_the_status_menu() {
+        let mut app = App::new();
+        app.mode = Mode::AwaitingMove;
+        let d = dump(&app);
+        assert!(d.contains("move to:"), "pending move must be visible:\n{d}");
+        for needle in ["b backlog", "i in-progress", "d done", "cancels"] {
+            assert!(d.contains(needle), "move menu missing `{needle}`:\n{d}");
+        }
+        // The regular hints are replaced, not appended.
+        assert!(!d.contains("m milestones"), "{d}");
     }
 }

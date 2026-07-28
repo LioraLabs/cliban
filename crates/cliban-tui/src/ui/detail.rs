@@ -47,7 +47,7 @@ pub fn draw(frame: &mut Frame, area: Rect, card: &Card) {
         ]));
     }
     lines.push(Line::raw(""));
-    let mut hints = theme::hints(&[("q/esc", "back")]);
+    let mut hints = theme::hints(&[("e", "edit"), ("q/esc", "back")]);
     hints.spans.insert(0, Span::raw("  "));
     lines.push(hints);
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);

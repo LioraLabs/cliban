@@ -350,6 +350,11 @@ impl Default for App {
 }
 
 pub fn update(app: &mut App, action: Action) -> Option<Command> {
+    // A status message answers the *previous* action; the next keypress
+    // dismisses it. Arms that refuse below re-set it after this clear, and
+    // the runtime posts its own messages after update returns, so anything
+    // the user still sees is always about the last thing they did.
+    app.status_msg = None;
     match action {
         Action::FocusMove(d) => {
             move_focus(app, d);
@@ -1318,5 +1323,20 @@ mod tests {
             .into_iter()
             .map(|i| app.milestones[i].name.as_str())
             .collect()
+    }
+
+    #[test]
+    fn the_next_action_dismisses_a_stale_status_message() {
+        let mut app = App::new();
+        // A refused action leaves its explanation…
+        update(&mut app, Action::EditScope);
+        assert!(app.status_msg.is_some());
+        // …and the very next action clears it instead of letting it haunt
+        // the footer for the rest of the session.
+        update(&mut app, Action::FocusMove(Direction::Down));
+        assert!(app.status_msg.is_none());
+        // An action that refuses re-sets its own message after the clear.
+        update(&mut app, Action::EditScope);
+        assert!(app.status_msg.is_some());
     }
 }

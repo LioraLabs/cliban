@@ -15,12 +15,24 @@ fn status_for_letter(c: char) -> Option<&'static str> {
 }
 
 pub fn map_key(key: KeyEvent, app: &mut App) -> Option<Action> {
+    // Ctrl-C is the universal "get me out" chord: it quits from any mode,
+    // no confirm — the dialog is for accidental q, not for deliberate SIGINT
+    // muscle memory.
+    if matches!(
+        (key.code, key.modifiers),
+        (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL)
+    ) {
+        return Some(Action::Quit);
+    }
     match &app.mode {
         Mode::Normal => map_normal(key, app),
         Mode::AwaitingMove => map_awaiting_move(key),
         Mode::Help => Some(Action::Cancel),
         Mode::Detail(_) => match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => Some(Action::Cancel),
+            // Edit straight from the detail view; the popup stays open and
+            // re-renders the updated card when the editor returns.
+            KeyCode::Char('e') => Some(Action::EditCard),
             _ => None,
         },
         Mode::ConfirmQuit => map_confirm_quit(key),
@@ -101,7 +113,11 @@ fn map_awaiting_move(key: KeyEvent) -> Option<Action> {
 
 fn map_confirm_quit(key: KeyEvent) -> Option<Action> {
     match key.code {
-        KeyCode::Char('y') | KeyCode::Char('Y') => Some(Action::Quit),
+        // Enter confirms (the dialog's default answer), and `q` again means
+        // a quick `q q` quits without reaching for `y`.
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Char('q') | KeyCode::Enter => {
+            Some(Action::Quit)
+        }
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(Action::Cancel),
         _ => None,
     }
@@ -163,6 +179,61 @@ mod tests {
     use super::*;
     fn ke(c: KeyCode) -> KeyEvent {
         KeyEvent::new(c, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn ctrl_c_quits_immediately_from_any_mode() {
+        use crate::app::{MilestonePageState, Mode, PickerState};
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        let mut app = App::new();
+        assert!(matches!(map_key(ctrl_c, &mut app), Some(Action::Quit)));
+        app.mode = Mode::ProjectPicker(PickerState {
+            query: String::new(),
+            items: vec![],
+            cursor: 0,
+        });
+        assert!(matches!(map_key(ctrl_c, &mut app), Some(Action::Quit)));
+        app.mode = Mode::MilestonePage(MilestonePageState::default());
+        assert!(matches!(map_key(ctrl_c, &mut app), Some(Action::Quit)));
+        // A plain `c` still types into the picker/page query.
+        assert!(matches!(
+            map_key(ke(KeyCode::Char('c')), &mut app),
+            Some(Action::MsPageInput('c'))
+        ));
+    }
+
+    #[test]
+    fn confirm_quit_accepts_enter_and_a_second_q() {
+        use crate::app::Mode;
+        let mut app = App::new();
+        app.mode = Mode::ConfirmQuit;
+        for code in [KeyCode::Enter, KeyCode::Char('q'), KeyCode::Char('y')] {
+            assert!(
+                matches!(map_key(ke(code), &mut app), Some(Action::Quit)),
+                "{code:?} should confirm"
+            );
+        }
+        assert!(matches!(
+            map_key(ke(KeyCode::Char('n')), &mut app),
+            Some(Action::Cancel)
+        ));
+    }
+
+    #[test]
+    fn detail_view_edits_in_place_and_closes_on_the_usual_keys() {
+        use crate::app::Mode;
+        let mut app = App::new();
+        app.mode = Mode::Detail("PULSE-1".into());
+        assert!(matches!(
+            map_key(ke(KeyCode::Char('e')), &mut app),
+            Some(Action::EditCard)
+        ));
+        for code in [KeyCode::Esc, KeyCode::Char('q'), KeyCode::Enter] {
+            assert!(
+                matches!(map_key(ke(code), &mut app), Some(Action::Cancel)),
+                "{code:?} should close the detail view"
+            );
+        }
     }
 
     #[test]
