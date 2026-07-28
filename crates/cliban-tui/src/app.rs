@@ -253,6 +253,24 @@ pub struct ProjectRef {
     pub last_activity: DateTime<Utc>,
 }
 
+/// One relation edge of the card open in the detail popup, joined with the
+/// other issue so the popup can say what it is and whether it's still open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelationRef {
+    /// `blocks` / `related_to` / `blocked_by` (read-side reverse).
+    pub kind: String,
+    pub key: String,
+    pub title: String,
+    pub status: String,
+}
+
+impl RelationRef {
+    /// A blocker that still bites: not yet done.
+    pub fn open_blocker(&self) -> bool {
+        self.kind == "blocked_by" && self.status != "done"
+    }
+}
+
 /// One row of the activity mailbox: an audit entry joined with its issue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivityRef {
@@ -448,6 +466,9 @@ pub struct App {
     pub milestones: Vec<MilestoneRef>, // for scope.project, name order
     pub projects: Vec<ProjectRef>,     // every project, activity order
     pub activity: Vec<ActivityRef>,    // audit entries, newest first
+    /// Relations of the card open in `Mode::Detail`, loaded by the runtime
+    /// when the popup opens; stale outside that mode and never rendered then.
+    pub detail_relations: Vec<RelationRef>,
     pub focus: Focus,
     pub mode: Mode,
     pub scope: Scope,
@@ -471,6 +492,7 @@ impl App {
             milestones: Vec::new(),
             projects: Vec::new(),
             activity: Vec::new(),
+            detail_relations: Vec::new(),
             focus: Focus::default(),
             mode: Mode::Normal,
             scope: Scope::default(),
@@ -652,6 +674,27 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
         Action::OpenDetail => {
             if let Some(c) = app.focused_card() {
                 app.mode = Mode::Detail(c.key.clone());
+            }
+            None
+        }
+        Action::JumpToBlocker => {
+            // From the detail popup: land the board cursor on the first
+            // still-open blocker; explain when it isn't reachable.
+            let target = app
+                .detail_relations
+                .iter()
+                .find(|r| r.open_blocker())
+                .map(|r| r.key.clone())?;
+            match locate_focus_for_key(app, &target) {
+                Some(focus) => {
+                    app.focus = focus;
+                    app.mode = Mode::Normal;
+                }
+                None => {
+                    app.status_msg = Some(format!(
+                        "{target} isn't on the board (archived or out of scope)"
+                    ));
+                }
             }
             None
         }

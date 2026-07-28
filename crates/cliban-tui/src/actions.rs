@@ -24,6 +24,8 @@ pub enum Action {
     Cancel,
     Refresh,
     OpenDetail,
+    /// `b` in the detail popup: jump to the first still-open blocker.
+    JumpToBlocker,
     EditCard,
     EditScope,
     NewIssue,

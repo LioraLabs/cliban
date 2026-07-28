@@ -117,7 +117,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         Mode::ConfirmArchive(key) => confirm_quit::draw_confirm_archive(frame, frame.area(), key),
         Mode::Detail(key) => {
             if let Some(c) = app.cards.iter().find(|c| &c.key == key) {
-                detail::draw(frame, frame.area(), c);
+                detail::draw(frame, frame.area(), c, &app.detail_relations);
             }
         }
         Mode::MilestonePicker(p) => {

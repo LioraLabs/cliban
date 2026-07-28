@@ -33,6 +33,8 @@ pub fn map_key(key: KeyEvent, app: &mut App) -> Option<Action> {
             // Edit straight from the detail view; the popup stays open and
             // re-renders the updated card when the editor returns.
             KeyCode::Char('e') => Some(Action::EditCard),
+            // Chase the dependency chain: land on the first open blocker.
+            KeyCode::Char('b') => Some(Action::JumpToBlocker),
             _ => None,
         },
         Mode::ConfirmQuit => map_confirm_quit(key),

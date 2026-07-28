@@ -61,6 +61,10 @@ pub fn reload(data: &Data, app: &mut App) -> Result<(), DynErr> {
     app.milestones = data.load_milestones(app.scope.project.as_deref())?;
     app.projects = data.load_projects()?;
     app.activity = data.load_activity(ACTIVITY_LIMIT)?;
+    // Keep an open detail popup's relations fresh across refreshes too.
+    if let Mode::Detail(key) = &app.mode {
+        app.detail_relations = data.load_relations(&key.clone()).unwrap_or_default();
+    }
     app.auto_focus_if_empty();
     Ok(())
 }
@@ -272,9 +276,15 @@ fn handle_key<B: Backend>(
     // the page is open are on screen, so closing counts as having seen them.
     let touches_mailbox = matches!(action, Action::OpenActivityPage)
         || (matches!(app.mode, Mode::ActivityPage(_)) && matches!(action, Action::Cancel));
+    let opened_detail = matches!(action, Action::OpenDetail);
     let cmd = crate::app::update(app, action);
     if touches_mailbox {
         app.mark_seen();
+    }
+    if opened_detail {
+        if let Mode::Detail(key) = &app.mode {
+            app.detail_relations = data.load_relations(&key.clone()).unwrap_or_default();
+        }
     }
     if open_mp {
         seed_milestone_picker(app);

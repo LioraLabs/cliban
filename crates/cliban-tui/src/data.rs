@@ -2,10 +2,10 @@
 use std::path::Path;
 
 use cliban_core::audit;
-use cliban_core::contexts::{activity_log, issues, milestones, projects};
+use cliban_core::contexts::{activity_log, issues, milestones, projects, relations};
 use cliban_core::Store;
 
-use crate::app::{ActivityRef, Card, MilestoneRef, ProjectRef};
+use crate::app::{ActivityRef, Card, MilestoneRef, ProjectRef, RelationRef};
 use crate::buffers::{IssueBuffer, MilestoneBuffer, ProjectBuffer};
 
 pub struct Data {
@@ -197,6 +197,30 @@ impl Data {
                     }
                 })
                 .collect())
+        }))?;
+        Ok(rows)
+    }
+
+    /// The relations of one issue, joined with each counterpart's title and
+    /// status so the detail popup can say whether a blocker still bites.
+    pub fn load_relations(&self, key: &str) -> Result<Vec<RelationRef>, DataError> {
+        let key = key.to_string();
+        let rows = self.rt.block_on(self.store.call(move |conn| {
+            let i = issues::get_by_key(conn, &key)?.ok_or(cliban_core::Error::NotFound)?;
+            let mut out = Vec::new();
+            for r in relations::for_issue(conn, i.id)? {
+                let (title, status) = match issues::get_by_key(conn, &r.target_key)? {
+                    Some(t) => (t.title, t.status),
+                    None => (String::new(), String::new()),
+                };
+                out.push(RelationRef {
+                    kind: r.kind,
+                    key: r.target_key,
+                    title,
+                    status,
+                });
+            }
+            Ok(out)
         }))?;
         Ok(rows)
     }
@@ -745,6 +769,37 @@ mod tests {
         d.seed_project_issue("CLI", "First");
         d.move_issue("CLI-1", "in-progress").unwrap();
         assert_eq!(d.load_cards().unwrap()[0].status, "in-progress");
+    }
+
+    #[test]
+    fn load_relations_joins_titles_and_flags_open_blockers() {
+        let d = Data::open_in_memory_for_test();
+        d.seed_project_issue("PULSE", "First");
+        d.create_issue(
+            "PULSE",
+            &IssueBuffer {
+                title: "Second".into(),
+                status: "in-progress".into(),
+                priority: "low".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        d.rt.block_on(d.store.call(|conn| {
+            relations::add(conn, "PULSE-2", "PULSE-1", "blocks")?;
+            Ok(())
+        }))
+        .unwrap();
+        let rels = d.load_relations("PULSE-1").unwrap();
+        assert_eq!(rels.len(), 1);
+        assert_eq!(rels[0].kind, "blocked_by");
+        assert_eq!(rels[0].key, "PULSE-2");
+        assert_eq!(rels[0].title, "Second");
+        assert!(rels[0].open_blocker(), "in-progress blocker still bites");
+        // And from the blocker's side it reads as `blocks`.
+        let rels = d.load_relations("PULSE-2").unwrap();
+        assert_eq!(rels[0].kind, "blocks");
+        assert!(!rels[0].open_blocker());
     }
 
     #[test]
