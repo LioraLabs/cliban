@@ -362,9 +362,19 @@ mod tests {
     }
 
     #[test]
-    fn headless_esc_byte_opens_confirm_quit() {
+    fn headless_esc_byte_is_quiet_on_the_board() {
         let (data, mut app, mut t, mut s) = harness();
         s.feed_bytes(b"\x1b"); // lone ESC: delivered via the idle flush path
+        pump(&mut t, &mut s, &data, &mut app);
+        // Esc means "back"; the board is the top level, so nothing happens —
+        // quitting belongs to q (confirmed) and Ctrl-C (immediate).
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn headless_q_byte_opens_confirm_quit_and_ctrl_c_quits() {
+        let (data, mut app, mut t, mut s) = harness();
+        s.feed_bytes(b"q");
         pump(&mut t, &mut s, &data, &mut app);
         assert!(matches!(app.mode, Mode::ConfirmQuit));
     }

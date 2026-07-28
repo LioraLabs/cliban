@@ -36,6 +36,7 @@ pub fn map_key(key: KeyEvent, app: &mut App) -> Option<Action> {
             _ => None,
         },
         Mode::ConfirmQuit => map_confirm_quit(key),
+        Mode::ConfirmArchive(_) => map_confirm_archive(key),
         Mode::ProjectPicker(_) | Mode::MilestonePicker(_) => map_picker(key),
         Mode::FuzzyFind(_) => map_fuzzy(key),
         Mode::MilestonePage(_) => map_milestone_page(key),
@@ -73,6 +74,16 @@ fn map_normal(key: KeyEvent, app: &mut App) -> Option<Action> {
         }
         (KeyCode::Tab, _) => Some(Action::FocusMove(Direction::Right)),
         (KeyCode::BackTab, _) => Some(Action::FocusMove(Direction::Left)),
+        // Direct column jumps, lazydocker-style.
+        (KeyCode::Char(c @ '1'..='5'), KeyModifiers::NONE) => {
+            Some(Action::FocusColumn(c as usize - '1' as usize))
+        }
+        (KeyCode::Char('d'), KeyModifiers::CONTROL) | (KeyCode::PageDown, _) => {
+            Some(Action::PageMove(Direction::Down))
+        }
+        (KeyCode::Char('u'), KeyModifiers::CONTROL) | (KeyCode::PageUp, _) => {
+            Some(Action::PageMove(Direction::Up))
+        }
         (KeyCode::Char('g'), KeyModifiers::NONE) => {
             if was_g {
                 app.pending_g = false;
@@ -90,14 +101,15 @@ fn map_normal(key: KeyEvent, app: &mut App) -> Option<Action> {
         (KeyCode::Char('N'), _) => Some(Action::NewMilestone),
         (KeyCode::Char('t'), KeyModifiers::NONE) => Some(Action::TagMilestone),
         (KeyCode::Char(' '), _) => Some(Action::BeginMove),
-        (KeyCode::Char('a'), KeyModifiers::NONE) => Some(Action::Archive),
+        (KeyCode::Char('a'), KeyModifiers::NONE) => Some(Action::ArchiveRequest),
         (KeyCode::Char('m'), KeyModifiers::NONE) => Some(Action::OpenMilestonePage),
         (KeyCode::Char('M'), _) => Some(Action::CycleMilestoneFilter),
         (KeyCode::Char('p'), KeyModifiers::NONE) => Some(Action::OpenProjectPicker),
         (KeyCode::Char('/'), _) => Some(Action::OpenFuzzyFind),
         (KeyCode::Char('r'), KeyModifiers::NONE) => Some(Action::Refresh),
         (KeyCode::Char('?'), _) => Some(Action::ToggleHelp),
-        (KeyCode::Esc, _) => Some(Action::QuitRequest),
+        // Esc means "back", and the board is already the top level — quitting
+        // belongs to q/Ctrl-C, not to someone spamming Esc out of popups.
         _ => None,
     }
 }
@@ -123,15 +135,28 @@ fn map_confirm_quit(key: KeyEvent) -> Option<Action> {
     }
 }
 
+fn map_confirm_archive(key: KeyEvent) -> Option<Action> {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(Action::Archive),
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(Action::Cancel),
+        _ => None,
+    }
+}
+
+// Filter boxes follow the fzf/readline convention: every printable character
+// types into the query — including j/k, so a project named "jira" is
+// reachable — and navigation is arrows or Ctrl-n/p. (Ctrl-j is off the
+// table: it arrives as a bare LF byte, indistinguishable from Enter.)
+
 fn map_picker(key: KeyEvent) -> Option<Action> {
     match (key.code, key.modifiers) {
         (KeyCode::Enter, _) => Some(Action::PickerConfirm),
         (KeyCode::Esc, _) => Some(Action::Cancel),
         (KeyCode::Backspace, _) => Some(Action::PickerBackspace),
-        (KeyCode::Up, _) => Some(Action::PickerUp),
-        (KeyCode::Down, _) => Some(Action::PickerDown),
-        (KeyCode::Char('j'), KeyModifiers::NONE) => Some(Action::PickerDown),
-        (KeyCode::Char('k'), KeyModifiers::NONE) => Some(Action::PickerUp),
+        (KeyCode::Up, _) | (KeyCode::Char('p'), KeyModifiers::CONTROL) => Some(Action::PickerUp),
+        (KeyCode::Down, _) | (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
+            Some(Action::PickerDown)
+        }
         (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => Some(Action::PickerInput(c)),
         _ => None,
     }
@@ -142,29 +167,33 @@ fn map_fuzzy(key: KeyEvent) -> Option<Action> {
         (KeyCode::Enter, _) => Some(Action::FuzzyConfirm),
         (KeyCode::Esc, _) => Some(Action::Cancel),
         (KeyCode::Backspace, _) => Some(Action::FuzzyBackspace),
-        (KeyCode::Up, _) => Some(Action::FuzzyUp),
-        (KeyCode::Down, _) => Some(Action::FuzzyDown),
-        (KeyCode::Char('j'), KeyModifiers::NONE) => Some(Action::FuzzyDown),
-        (KeyCode::Char('k'), KeyModifiers::NONE) => Some(Action::FuzzyUp),
+        (KeyCode::Up, _) | (KeyCode::Char('p'), KeyModifiers::CONTROL) => Some(Action::FuzzyUp),
+        (KeyCode::Down, _) | (KeyCode::Char('n'), KeyModifiers::CONTROL) => Some(Action::FuzzyDown),
         (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => Some(Action::FuzzyInput(c)),
         _ => None,
     }
 }
 
 fn map_milestone_page(key: KeyEvent) -> Option<Action> {
-    // Typing filters, as on the project picker — so every page *command* is a
-    // capital letter or a named key, leaving the whole lowercase alphabet free
-    // for the query. The filter is case-insensitive, so `e`, `n`, `s` and `c`
-    // still match names containing those letters.
+    // Typing filters, as on the project picker — the whole lowercase alphabet
+    // (j/k included) goes to the query, and every page *command* is a capital
+    // letter or a named key. Navigation is arrows or Ctrl-n/p, plus
+    // G/Home/End jumps and PgUp/PgDn half-pages for long lists. The filter is
+    // case-insensitive, so lowercase typing matches capitalized names.
     match (key.code, key.modifiers) {
         (KeyCode::Enter, _) => Some(Action::MsPageSelect),
         (KeyCode::Esc, _) => Some(Action::Cancel),
         (KeyCode::Backspace, _) => Some(Action::MsPageBackspace),
-        (KeyCode::Down, _) => Some(Action::MsPageDown),
-        (KeyCode::Up, _) => Some(Action::MsPageUp),
-        (KeyCode::Char('j'), KeyModifiers::NONE) => Some(Action::MsPageDown),
-        (KeyCode::Char('k'), KeyModifiers::NONE) => Some(Action::MsPageUp),
+        (KeyCode::Down, _) | (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
+            Some(Action::MsPageDown)
+        }
+        (KeyCode::Up, _) | (KeyCode::Char('p'), KeyModifiers::CONTROL) => Some(Action::MsPageUp),
+        (KeyCode::PageDown, _) => Some(Action::MsPagePage(Direction::Down)),
+        (KeyCode::PageUp, _) => Some(Action::MsPagePage(Direction::Up)),
+        (KeyCode::Home, _) => Some(Action::MsPageTop),
+        (KeyCode::Char('G'), _) | (KeyCode::End, _) => Some(Action::MsPageBottom),
         (KeyCode::Tab, _) | (KeyCode::Char('A'), _) => Some(Action::MsPageCycleFilter),
+        (KeyCode::BackTab, _) => Some(Action::MsPageCycleFilterBack),
         (KeyCode::Char('S'), _) => Some(Action::MsPageCycleSort),
         (KeyCode::Char('E'), _) => Some(Action::MsPageEdit),
         (KeyCode::Char('N'), _) => Some(Action::MsPageNew),
@@ -179,6 +208,90 @@ mod tests {
     use super::*;
     fn ke(c: KeyCode) -> KeyEvent {
         KeyEvent::new(c, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn esc_is_not_a_quit_key_on_the_board() {
+        let mut app = App::new();
+        assert!(
+            map_key(ke(KeyCode::Esc), &mut app).is_none(),
+            "Esc means back, and the board is already the top level"
+        );
+    }
+
+    #[test]
+    fn filter_boxes_accept_j_and_k_as_text_and_navigate_with_ctrl_n_p() {
+        use crate::app::{FuzzyState, Mode, PickerState};
+        let ctrl = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+        let mut app = App::new();
+        app.mode = Mode::ProjectPicker(PickerState {
+            query: String::new(),
+            items: vec![],
+            cursor: 0,
+        });
+        assert!(matches!(
+            map_key(ke(KeyCode::Char('j')), &mut app),
+            Some(Action::PickerInput('j'))
+        ));
+        assert!(matches!(
+            map_key(ctrl('n'), &mut app),
+            Some(Action::PickerDown)
+        ));
+        assert!(matches!(
+            map_key(ctrl('p'), &mut app),
+            Some(Action::PickerUp)
+        ));
+
+        app.mode = Mode::FuzzyFind(FuzzyState {
+            query: String::new(),
+            results: vec![],
+            cursor: 0,
+        });
+        assert!(matches!(
+            map_key(ke(KeyCode::Char('k')), &mut app),
+            Some(Action::FuzzyInput('k'))
+        ));
+        assert!(matches!(
+            map_key(ctrl('n'), &mut app),
+            Some(Action::FuzzyDown)
+        ));
+    }
+
+    #[test]
+    fn number_keys_and_half_pages_navigate_the_board() {
+        let mut app = App::new();
+        assert!(matches!(
+            map_key(ke(KeyCode::Char('3')), &mut app),
+            Some(Action::FocusColumn(2))
+        ));
+        let ctrl = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+        assert!(matches!(
+            map_key(ctrl('d'), &mut app),
+            Some(Action::PageMove(Direction::Down))
+        ));
+        assert!(matches!(
+            map_key(ke(KeyCode::PageUp), &mut app),
+            Some(Action::PageMove(Direction::Up))
+        ));
+    }
+
+    #[test]
+    fn archive_asks_first_and_the_dialog_answers_like_quit() {
+        use crate::app::Mode;
+        let mut app = App::new();
+        app.mode = Mode::ConfirmArchive("PULSE-9".into());
+        for code in [KeyCode::Char('y'), KeyCode::Enter] {
+            assert!(
+                matches!(map_key(ke(code), &mut app), Some(Action::Archive)),
+                "{code:?} should confirm the archive"
+            );
+        }
+        for code in [KeyCode::Char('n'), KeyCode::Esc] {
+            assert!(
+                matches!(map_key(ke(code), &mut app), Some(Action::Cancel)),
+                "{code:?} should decline the archive"
+            );
+        }
     }
 
     #[test]
@@ -266,14 +379,36 @@ mod tests {
             map_key(ke(KeyCode::Char('s')), &mut app),
             Some(Action::MsPageInput('s'))
         ));
-        // ...except j/k, which navigate like everywhere else.
+        // ...including j and k, so names containing them stay searchable.
+        // Navigation is Ctrl-n/p (or arrows), fzf-style.
         assert!(matches!(
             map_key(ke(KeyCode::Char('j')), &mut app),
-            Some(Action::MsPageDown)
+            Some(Action::MsPageInput('j'))
         ));
         assert!(matches!(
             map_key(ke(KeyCode::Char('k')), &mut app),
+            Some(Action::MsPageInput('k'))
+        ));
+        let ctrl = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+        assert!(matches!(
+            map_key(ctrl('n'), &mut app),
+            Some(Action::MsPageDown)
+        ));
+        assert!(matches!(
+            map_key(ctrl('p'), &mut app),
             Some(Action::MsPageUp)
+        ));
+        assert!(matches!(
+            map_key(cap('G'), &mut app),
+            Some(Action::MsPageBottom)
+        ));
+        assert!(matches!(
+            map_key(ke(KeyCode::BackTab), &mut app),
+            Some(Action::MsPageCycleFilterBack)
+        ));
+        assert!(matches!(
+            map_key(ke(KeyCode::PageDown), &mut app),
+            Some(Action::MsPagePage(Direction::Down))
         ));
         // Capitals are the page's commands.
         assert!(matches!(
@@ -332,7 +467,7 @@ mod tests {
         ));
         assert!(matches!(
             map_key(ke(KeyCode::Char('a')), &mut app),
-            Some(Action::Archive)
+            Some(Action::ArchiveRequest)
         ));
         assert!(matches!(
             map_key(ke(KeyCode::Char('m')), &mut app),

@@ -12,6 +12,10 @@ pub enum Direction {
 #[derive(Debug, Clone)]
 pub enum Action {
     FocusMove(Direction),
+    /// Jump straight to the Nth visible column (the `1`-`5` keys).
+    FocusColumn(usize),
+    /// Half-page the focus within the current column (Ctrl-d/u, PgDn/PgUp).
+    PageMove(Direction),
     JumpToTop,
     JumpToBottom,
     ToggleHelp,
@@ -25,6 +29,9 @@ pub enum Action {
     NewIssue,
     NewMilestone,
     TagMilestone,
+    /// `a`: ask before archiving (opens the confirm dialog).
+    ArchiveRequest,
+    /// The confirmed archive (from the dialog).
     Archive,
     BeginMove,
     MoveTo(String),
@@ -48,6 +55,10 @@ pub enum Action {
     // Milestone page (`m`).
     MsPageUp,
     MsPageDown,
+    /// Half-page the cursor (PgDn/PgUp).
+    MsPagePage(Direction),
+    MsPageTop,
+    MsPageBottom,
     MsPageInput(char),
     MsPageBackspace,
     /// Enter: scope the board to the focused milestone and close the page.
@@ -56,8 +67,9 @@ pub enum Action {
     MsPageNew,
     /// Cycle the focused milestone's own status (open → completed → cancelled).
     MsPageCycleStatus,
-    /// Cycle which status bucket the page lists.
+    /// Cycle which status bucket the page lists (Tab; Shift-Tab reverses).
     MsPageCycleFilter,
+    MsPageCycleFilterBack,
     MsPageCycleSort,
 }
 

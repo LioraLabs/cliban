@@ -160,6 +160,14 @@ impl StatusFilter {
             Self::All => Self::Open,
         }
     }
+    fn prev(self) -> Self {
+        match self {
+            Self::Open => Self::All,
+            Self::Completed => Self::Open,
+            Self::Cancelled => Self::Completed,
+            Self::All => Self::Cancelled,
+        }
+    }
     fn accepts(self, status: &str) -> bool {
         match self {
             Self::All => true,
@@ -236,8 +244,9 @@ pub enum Mode {
     Normal,
     Help,
     ConfirmQuit,
-    AwaitingMove,   // Space pressed; waiting for column letter
-    Detail(String), // focused card key
+    ConfirmArchive(String), // `a` pressed; the key waiting to be archived
+    AwaitingMove,           // Space pressed; waiting for column letter
+    Detail(String),         // focused card key
     ProjectPicker(PickerState),
     MilestonePicker(PickerState),
     FuzzyFind(FuzzyState),
@@ -349,6 +358,12 @@ impl Default for App {
     }
 }
 
+/// Half-page step on the board: cards are four rows tall, so this is about
+/// one screenful of a column.
+const PAGE_STEP: usize = 5;
+/// Half-page step on the milestone page, whose rows are single lines.
+const MS_PAGE_STEP: usize = 10;
+
 pub fn update(app: &mut App, action: Action) -> Option<Command> {
     // A status message answers the *previous* action; the next keypress
     // dismisses it. Arms that refuse below re-set it after this clear, and
@@ -358,6 +373,25 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
     match action {
         Action::FocusMove(d) => {
             move_focus(app, d);
+            None
+        }
+        Action::FocusColumn(i) => {
+            // Direct jump lands even on an empty column (unlike h/l, which
+            // skip them) — `n` there creates into that status.
+            let columns = app.visible_columns();
+            if let Some(&col) = columns.get(i) {
+                app.remember_cursor();
+                app.focus.column = col;
+                app.focus.card_idx = app.restore_cursor_for(col);
+            }
+            None
+        }
+        Action::PageMove(d) => {
+            let last = app.column_cards(app.focus.column).len().saturating_sub(1);
+            app.focus.card_idx = match d {
+                Direction::Down => (app.focus.card_idx + PAGE_STEP).min(last),
+                _ => app.focus.card_idx.saturating_sub(PAGE_STEP),
+            };
             None
         }
         Action::JumpToTop => {
@@ -443,8 +477,19 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
                 }
             }
         }
-        Action::Archive => {
+        Action::ArchiveRequest => {
+            // Archive is the one board action with no undo from the TUI, so
+            // it gets a confirm — everything else stays one keypress.
             let key = app.focused_card()?.key.clone();
+            app.mode = Mode::ConfirmArchive(key);
+            None
+        }
+        Action::Archive => {
+            let key = match &app.mode {
+                Mode::ConfirmArchive(k) => k.clone(),
+                _ => app.focused_card()?.key.clone(),
+            };
+            app.mode = Mode::Normal;
             Some(Command::Archive { key })
         }
         Action::EditCard => {
@@ -789,9 +834,39 @@ fn update_milestone_page(app: &mut App, action: Action) -> Option<Command> {
             }
             None
         }
+        Action::MsPagePage(d) => {
+            let last = page_rows(app, &state).len().saturating_sub(1);
+            if let Mode::MilestonePage(s) = &mut app.mode {
+                s.cursor = match d {
+                    Direction::Down => (s.cursor + MS_PAGE_STEP).min(last),
+                    _ => s.cursor.saturating_sub(MS_PAGE_STEP),
+                };
+            }
+            None
+        }
+        Action::MsPageTop => {
+            if let Mode::MilestonePage(s) = &mut app.mode {
+                s.cursor = 0;
+            }
+            None
+        }
+        Action::MsPageBottom => {
+            let last = page_rows(app, &state).len().saturating_sub(1);
+            if let Mode::MilestonePage(s) = &mut app.mode {
+                s.cursor = last;
+            }
+            None
+        }
         Action::MsPageCycleFilter => {
             if let Mode::MilestonePage(s) = &mut app.mode {
                 s.filter = s.filter.next();
+                s.cursor = 0;
+            }
+            None
+        }
+        Action::MsPageCycleFilterBack => {
+            if let Mode::MilestonePage(s) = &mut app.mode {
+                s.filter = s.filter.prev();
                 s.cursor = 0;
             }
             None
@@ -1323,6 +1398,67 @@ mod tests {
             .into_iter()
             .map(|i| app.milestones[i].name.as_str())
             .collect()
+    }
+
+    #[test]
+    fn archive_asks_first_then_archives_the_captured_key() {
+        let mut app = App::new();
+        app.cards = vec![card("PULSE-9", "backlog", 1000.0)];
+        assert!(update(&mut app, Action::ArchiveRequest).is_none());
+        assert!(matches!(&app.mode, Mode::ConfirmArchive(k) if k == "PULSE-9"));
+        match update(&mut app, Action::Archive) {
+            Some(Command::Archive { key }) => assert_eq!(key, "PULSE-9"),
+            c => panic!("{c:?}"),
+        }
+        assert!(matches!(app.mode, Mode::Normal));
+        // Declining leaves the card alone and returns to the board.
+        update(&mut app, Action::ArchiveRequest);
+        assert!(update(&mut app, Action::Cancel).is_none());
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn number_jump_lands_even_on_empty_columns_and_half_pages_clamp() {
+        let mut app = App::new();
+        app.cards = (0..8)
+            .map(|i| card(&format!("PULSE-{i}"), "backlog", 1000.0 + i as f64))
+            .collect();
+        // 3 = the (empty) blocked column, where `n` would create.
+        update(&mut app, Action::FocusColumn(2));
+        assert_eq!(app.focus.column, ColumnId::Blocked);
+        update(&mut app, Action::FocusColumn(0));
+        assert_eq!(app.focus.column, ColumnId::Backlog);
+        update(&mut app, Action::PageMove(Direction::Down));
+        assert_eq!(app.focus.card_idx, 5);
+        update(&mut app, Action::PageMove(Direction::Down));
+        assert_eq!(app.focus.card_idx, 7, "clamps to the last card");
+        update(&mut app, Action::PageMove(Direction::Up));
+        assert_eq!(app.focus.card_idx, 2);
+    }
+
+    #[test]
+    fn milestone_page_jumps_pages_and_cycles_the_filter_both_ways() {
+        let mut app = App::new();
+        app.milestones = (0..15)
+            .map(|i| milestone(&format!("M{i}"), "open"))
+            .collect();
+        update(&mut app, Action::OpenMilestonePage);
+        update(&mut app, Action::MsPagePage(Direction::Down));
+        let cursor = |app: &App| match &app.mode {
+            Mode::MilestonePage(s) => s.cursor,
+            _ => panic!("not on the page"),
+        };
+        assert_eq!(cursor(&app), 10);
+        update(&mut app, Action::MsPageBottom);
+        assert_eq!(cursor(&app), 14);
+        update(&mut app, Action::MsPageTop);
+        assert_eq!(cursor(&app), 0);
+        // Shift-Tab walks the buckets backwards: open → all.
+        update(&mut app, Action::MsPageCycleFilterBack);
+        match &app.mode {
+            Mode::MilestonePage(s) => assert_eq!(s.filter, StatusFilter::All),
+            _ => panic!("not on the page"),
+        }
     }
 
     #[test]

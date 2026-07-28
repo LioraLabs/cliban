@@ -78,7 +78,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &MilestonePageState
     // The page hides the board's status line, so surface `status_msg` here —
     // otherwise a refused action (N with no project scoped) looks like a no-op.
     const HINTS: &[(&str, &str)] = &[
-        ("j/k", "move"),
+        ("↑/↓", "move"),
         ("enter", "scope board"),
         ("Tab", "status"),
         ("S", "sort"),
@@ -484,7 +484,7 @@ mod tests {
         assert!(d.contains("scope a project (p) first"), "{d}");
         // Hints follow the message (and are clipped by the terminal width,
         // exactly like the board's status line).
-        assert!(d.contains("|  j/k move"), "hints follow the message:\n{d}");
+        assert!(d.contains("|  ↑/↓ move"), "hints follow the message:\n{d}");
         assert!(
             render(&App::new(), &MilestonePageState::default()).contains("esc close"),
             "full hints show when there is no message"

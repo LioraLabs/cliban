@@ -94,6 +94,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     match &app.mode {
         Mode::Help => help::draw_help(frame, frame.area()),
         Mode::ConfirmQuit => confirm_quit::draw_confirm_quit(frame, frame.area()),
+        Mode::ConfirmArchive(key) => confirm_quit::draw_confirm_archive(frame, frame.area(), key),
         Mode::Detail(key) => {
             if let Some(c) = app.cards.iter().find(|c| &c.key == key) {
                 detail::draw(frame, frame.area(), c);

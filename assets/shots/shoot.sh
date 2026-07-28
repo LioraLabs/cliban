@@ -25,8 +25,9 @@ snap "$WORK/board.ans"; kill_
 bash "$HERE/shoot-one.sh" "$WORK/board.ans" "$HERE/../board.png" "cliban — Pulse"
 
 # The milestone page, all statuses, focused on a mid-flight milestone.
+# Arrows, not j/k: on the page every letter types into the filter.
 run 132 22; tmux send-keys -t cliban-shot m; sleep 1
-tmux send-keys -t cliban-shot Tab Tab Tab; sleep 1; tmux send-keys -t cliban-shot j j; sleep 1
+tmux send-keys -t cliban-shot Tab Tab Tab; sleep 1; tmux send-keys -t cliban-shot Down Down; sleep 1
 snap "$WORK/milestones.ans"; kill_
 bash "$HERE/shoot-one.sh" "$WORK/milestones.ans" "$HERE/../milestones.png" "cliban — milestones"
 
