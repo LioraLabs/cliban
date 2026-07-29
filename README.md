@@ -50,16 +50,18 @@ curl -fsSL https://raw.githubusercontent.com/LioraLabs/cliban/main/install.sh | 
 ```
 
 That fetches the prebuilt binaries for your platform, verifies them against the
-release checksums, and installs `cliban` and `cliband` into `~/.local/bin`.
-Building from source instead:
+release checksums, and installs `cliban` and `cliband` into `~/.local/bin`. Or
+pick your own poison:
 
 ```sh
-cargo install --git https://github.com/LioraLabs/cliban cliban
+brew install lioralabs/tap/cliban                          # macOS and Linux
+cargo install --git https://github.com/LioraLabs/cliban cliban   # from source
 ```
 
 Prebuilt archives (static musl for Linux x86_64/aarch64, macOS Intel and Apple
 Silicon, each carrying both binaries) and their `SHA256SUMS` are on the
-[releases page](https://github.com/LioraLabs/cliban/releases).
+[releases page](https://github.com/LioraLabs/cliban/releases). An AUR
+`PKGBUILD` lives in [`packaging/aur`](packaging/aur).
 
 ## Why not ___?
 
