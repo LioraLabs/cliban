@@ -348,7 +348,7 @@ pub async fn search(store: &Store, opts: Options) -> CliResult<Vec<Match>> {
             .map(|issue| Match { issue, score: 0 })
             .collect();
         // stable sort by updated_at desc
-        matches.sort_by(|a, b| b.issue.updated_at.cmp(&a.issue.updated_at));
+        matches.sort_by_key(|m| std::cmp::Reverse(m.issue.updated_at));
     } else {
         // Resolve labels per issue (one lookup each — matches the bulk Go path
         // result, just N round-trips on our writer thread).
