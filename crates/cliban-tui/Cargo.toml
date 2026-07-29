@@ -1,12 +1,17 @@
 [package]
 name = "cliban-tui"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "cliban TUI: loom-style ratatui kanban board over in-process cliban-core"
+keywords = ["kanban", "tui", "ratatui", "terminal"]
+categories = ["command-line-interface", "development-tools"]
+readme = "../../README.md"
 
 [dependencies]
-cliban-core = { path = "../cliban-core" }
+cliban-core.workspace = true
 ratatui = { workspace = true, features = ["unstable-backend-writer"] }
 crossterm = "0.28"
 tokio = { workspace = true }

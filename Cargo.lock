@@ -387,7 +387,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cliban"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "clap",
@@ -402,7 +402,7 @@ dependencies = [
 
 [[package]]
 name = "cliban-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "rusqlite",
@@ -414,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "cliban-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "clap",
@@ -432,7 +432,7 @@ dependencies = [
 
 [[package]]
 name = "cliban-tenancy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "cliban-core",
@@ -443,7 +443,7 @@ dependencies = [
 
 [[package]]
 name = "cliban-tui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "cliban-core",

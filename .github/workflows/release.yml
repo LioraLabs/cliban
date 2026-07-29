@@ -11,7 +11,29 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Tag must match the crate version
+        run: |
+          MANIFEST=$(cargo metadata --format-version 1 --no-deps \
+            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="cliban"))')
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$MANIFEST" != "$TAG" ]; then
+            echo "::error::tag $GITHUB_REF_NAME implies version $TAG but crates/cliban/Cargo.toml says $MANIFEST"
+            exit 1
+          fi
+          echo "version $MANIFEST matches tag $GITHUB_REF_NAME"
+      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
   build:
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
@@ -55,6 +77,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+      - name: Checksums
+        run: sha256sum *.tar.gz | tee SHA256SUMS
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -63,4 +87,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "cliban $GITHUB_REF_NAME" \
             --generate-notes \
-            *.tar.gz
+            *.tar.gz SHA256SUMS

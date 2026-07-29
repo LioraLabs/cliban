@@ -1,9 +1,14 @@
 [package]
 name = "cliban-server"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "cliban SSH daemon (cliband): russh listener, host key, TOML config"
+keywords = ["kanban", "ssh", "daemon", "tui"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "../../README.md"
 
 [lib]
 name = "cliban_server"
@@ -21,9 +26,9 @@ serde.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["signal", "net"] }
 clap = { version = "4", features = ["derive"] }
-cliban-tenancy = { path = "../cliban-tenancy" }
-cliban-core = { path = "../cliban-core" }
-cliban-tui = { path = "../cliban-tui" }
+cliban-tenancy.workspace = true
+cliban-core.workspace = true
+cliban-tui.workspace = true
 ratatui.workspace = true
 chrono.workspace = true
 

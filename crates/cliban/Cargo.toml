@@ -1,9 +1,19 @@
 [package]
 name = "cliban"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "cliban CLI — kanban for the terminal, Rust reimplementation"
+repository.workspace = true
+homepage.workspace = true
+description = "Self-hosted, agent-first kanban for the terminal: flat CLI, ratatui board, SQLite storage"
+keywords = ["kanban", "cli", "tui", "issue-tracker", "agents"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "../../README.md"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/cliban-v{ version }-{ target }.tar.gz"
+pkg-fmt = "tgz"
+bin-dir = "cliban-v{ version }-{ target }/{ bin }{ binary-ext }"
 
 [lib]
 name = "cliban"
@@ -14,8 +24,8 @@ name = "cliban"
 path = "src/main.rs"
 
 [dependencies]
-cliban-core = { path = "../cliban-core" }
-cliban-tui = { path = "../cliban-tui" }
+cliban-core.workspace = true
+cliban-tui.workspace = true
 clap = { version = "4", features = ["derive"] }
 tokio.workspace = true
 serde.workspace = true

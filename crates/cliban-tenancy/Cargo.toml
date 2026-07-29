@@ -1,12 +1,17 @@
 [package]
 name = "cliban-tenancy"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Multi-tenant storage for hosted cliban: cross-tenant registry + per-tenant DB routing"
+keywords = ["kanban", "multi-tenant", "sqlite", "ssh"]
+categories = ["database", "development-tools"]
+readme = "../../README.md"
 
 [dependencies]
-cliban-core = { path = "../cliban-core" }
+cliban-core.workspace = true
 rusqlite.workspace = true
 tokio.workspace = true
 thiserror.workspace = true

@@ -46,11 +46,19 @@ One board, three front doors:
 Heard enough?
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/LioraLabs/cliban/main/install.sh | sh
+```
+
+That fetches the prebuilt binaries for your platform, verifies them against the
+release checksums, and installs `cliban` and `cliband` into `~/.local/bin`.
+Building from source instead:
+
+```sh
 cargo install --git https://github.com/LioraLabs/cliban cliban
 ```
 
-Prebuilt binaries (static musl for Linux x86_64/aarch64, macOS Intel and
-Apple Silicon, each archive carrying both `cliban` and `cliband`) are on the
+Prebuilt archives (static musl for Linux x86_64/aarch64, macOS Intel and Apple
+Silicon, each carrying both binaries) and their `SHA256SUMS` are on the
 [releases page](https://github.com/LioraLabs/cliban/releases).
 
 ## Why not ___?
