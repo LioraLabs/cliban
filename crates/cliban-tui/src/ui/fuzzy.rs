@@ -48,7 +48,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, state: &FuzzyState) {
     let list_rect = chunks[1];
     let rows = list_rect.height as usize;
     let total = labels.len();
-    let cursor = state.cursor.min(total.saturating_sub(1).max(0));
+    let cursor = state.cursor.min(total.saturating_sub(1));
     let start = if cursor < rows { 0 } else { cursor + 1 - rows };
     let end = (start + rows).min(total);
     let lines: Vec<Line> = if total == 0 {

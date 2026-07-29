@@ -87,7 +87,7 @@ pub fn draw(frame: &mut Frame, area: Rect, view: PickerView) {
     let list_rect = chunks[1];
     let rows = list_rect.height as usize;
     let total = view.items.len();
-    let cursor = view.cursor.min(total.saturating_sub(1).max(0));
+    let cursor = view.cursor.min(total.saturating_sub(1));
     // Window start: anchor to 0 while the cursor still fits inside the
     // visible rows (covers both "shorter than viewport" and "scrolled to
     // the top" cases — the two arms collapse intentionally). Otherwise
