@@ -18,30 +18,40 @@ version=$(cargo metadata --format-version 1 --no-deps |
 
 command -v cargo >/dev/null || fail "cargo not on PATH"
 
-# Fail early and legibly rather than after the first upload attempt.
-if ! curl -fsS -o /dev/null -H "Authorization: $(python3 -c '
-import os, tomllib
-p = os.path.expanduser("~/.cargo/credentials.toml")
-try:
-    print(tomllib.load(open(p, "rb"))["registry"]["token"])
-except Exception:
-    print("")
-')" https://crates.io/api/v1/me 2>/dev/null; then
-	fail "crates.io rejected the stored token.
+# crates.io 403s any request without a real User-Agent, including anonymous
+# reads. curl's default counts as unreal, so every probe below must set one.
+UA="cliban-release/$version"
+
+# Only assert a token EXISTS. Do not try to validate it: crates.io tokens are
+# endpoint-scoped, and one scoped to publish-new/publish-update is legitimately
+# 403'd by /api/v1/me — which made an earlier version of this check call a
+# perfectly good token dead. cargo reports real auth failures well enough.
+[ -n "${CARGO_REGISTRY_TOKEN:-}" ] ||
+	[ -f "$HOME/.cargo/credentials.toml" ] ||
+	[ -f "$HOME/.cargo/credentials" ] ||
+	fail "no crates.io token found.
 Mint one at https://crates.io/settings/tokens (scopes: publish-new, publish-update)
 then run: cargo login"
-fi
 
 printf 'publishing cliban %s to crates.io\n\n' "$version"
 
 for crate in $ORDER; do
-	if curl -fsS -o /dev/null "https://crates.io/api/v1/crates/$crate/$version" 2>/dev/null; then
-		printf '  =  %s %s already published\n' "$crate" "$version"
-		continue
-	fi
+	# 200 = this exact version is up, 404 = it is not. Anything else is a
+	# question we cannot answer, and guessing "not published" would mean an
+	# upload attempt that fails halfway through the chain.
+	code=$(curl -s -o /dev/null -w '%{http_code}' -A "$UA" \
+		"https://crates.io/api/v1/crates/$crate/$version")
+	case "$code" in
+		200)
+			printf '  =  %s %s already published\n' "$crate" "$version"
+			continue
+			;;
+		404) ;;
+		*) fail "crates.io returned $code for $crate/$version; refusing to guess" ;;
+	esac
 	printf '  →  %s %s\n' "$crate" "$version"
 	cargo publish -p "$crate"
 done
 
-printf '\nall five crates are on crates.io. `cargo install cliban` and\n'
-printf '`cargo binstall cliban` now work.\n'
+printf '\nall five crates are on crates.io.\n'
+printf 'cargo install cliban and cargo binstall cliban now work.\n'

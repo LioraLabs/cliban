@@ -10,6 +10,7 @@
 <p align="center">
   <a href="https://github.com/LioraLabs/cliban/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/LioraLabs/cliban/ci.yml?branch=main&style=flat-square&label=ci" alt="ci status"></a>
   <a href="https://github.com/LioraLabs/cliban/releases/latest"><img src="https://img.shields.io/github/v/release/LioraLabs/cliban?style=flat-square&label=release" alt="latest release"></a>
+  <a href="https://crates.io/crates/cliban"><img src="https://img.shields.io/crates/v/cliban?style=flat-square&label=crates.io" alt="crates.io"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square" alt="MIT license"></a>
 </p>
 
@@ -54,9 +55,13 @@ release checksums, and installs `cliban` and `cliband` into `~/.local/bin`. Or
 pick your own poison:
 
 ```sh
-brew install lioralabs/tap/cliban                          # macOS and Linux
-cargo install --git https://github.com/LioraLabs/cliban cliban   # from source
+brew install lioralabs/tap/cliban   # macOS and Linux, both binaries
+cargo binstall cliban               # prebuilt, no compile
+cargo install cliban                # from source
 ```
+
+The cargo lines install the `cliban` CLI alone; the daemon is a second crate,
+`cargo install cliban-server`. Every other route ships both.
 
 Prebuilt archives (static musl for Linux x86_64/aarch64, macOS Intel and Apple
 Silicon, each carrying both binaries) and their `SHA256SUMS` are on the
