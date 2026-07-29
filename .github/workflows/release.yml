@@ -19,13 +19,15 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Every version claim agrees
+        run: python3 scripts/check-version-sync.py
       - name: Tag must match the crate version
         run: |
           MANIFEST=$(cargo metadata --format-version 1 --no-deps \
             | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="cliban"))')
           TAG="${GITHUB_REF_NAME#v}"
           if [ "$MANIFEST" != "$TAG" ]; then
-            echo "::error::tag $GITHUB_REF_NAME implies version $TAG but crates/cliban/Cargo.toml says $MANIFEST"
+            echo "::error::tag $GITHUB_REF_NAME implies version $TAG but Cargo.toml says $MANIFEST"
             exit 1
           fi
           echo "version $MANIFEST matches tag $GITHUB_REF_NAME"

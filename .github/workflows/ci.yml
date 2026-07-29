@@ -17,6 +17,8 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # Same check `cook version-sync` runs locally, so drift cannot reach a tag.
+      - run: python3 scripts/check-version-sync.py
       - run: cargo build --workspace
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings

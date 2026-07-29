@@ -14,8 +14,8 @@ options=('!strip')
 _base="$url/releases/download/v$pkgver"
 source_x86_64=("cliban-$pkgver-x86_64.tar.gz::$_base/cliban-v$pkgver-x86_64-unknown-linux-musl.tar.gz")
 source_aarch64=("cliban-$pkgver-aarch64.tar.gz::$_base/cliban-v$pkgver-aarch64-unknown-linux-musl.tar.gz")
-sha256sums_x86_64=('SKIP')
-sha256sums_aarch64=('SKIP')
+sha256sums_x86_64=('95810d7197a97d0a69c71030804f159fcd3093210c448c4a389834b86338fd34')
+sha256sums_aarch64=('a5d0305c2b72249a3e8d29bc3824ffac433d232cf76135ddd68c1b76b728c040')
 
 _srcdir() {
 	case "$CARCH" in

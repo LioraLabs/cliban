@@ -1,0 +1,89 @@
+# Cookfile for cliban — release and packaging orchestration.
+#
+# The build itself is cargo's job. What lives here is everything around it that
+# used to be manual and drifted: the version claimed in five places, the order
+# the crates publish in, the checksums two downstream packages pin.
+#
+#   cook bump 0.3.0     rewrite every version claim, refresh Cargo.lock
+#   cook check          the gate: version sync, installer lint, tests, clippy
+#   cook release 0.3.0  tag and push (gated on check)
+#   cook publish        push all five crates to crates.io, bottom-up
+#   cook tap 0.3.0      regenerate the Homebrew formula, push the tap
+#   cook aur 0.3.0      refresh the AUR checksums from the release
+#   cook smoke-install  install from the live release into a sandbox
+#
+# A full release is: cook bump X → commit → cook release X → cook tap X,
+# cook aur X, cook publish.
+
+# Every file that claims a version. `bump` rewrites these, `version-sync` guards
+# them, and sealing the set is what makes the guard re-run exactly when one moves.
+probe version:sites
+    files { "Cargo.toml" "Cargo.lock" "crates/*/Cargo.toml" "packaging/aur/PKGBUILD" }
+
+# What the cargo suite actually depends on besides the sources. PKGBUILD is
+# deliberately absent — an AUR edit should not invalidate the test suite.
+probe rust:manifests
+    files { "Cargo.toml" "Cargo.lock" "crates/*/Cargo.toml" }
+
+probe rust:toolchain
+    tools { cargo }
+
+probe shell:linter
+    tools { shellcheck }
+
+# ---------------------------------------------------------------- gates
+
+# The drift guard. v0.1.0 shipped a binary reporting the wrong version because
+# nothing checked; this is that check.
+recipe version-sync
+    ingredients "scripts/check-version-sync.py"
+    seal version:sites
+    test { python3 $<in> }
+
+# install.sh is piped into `sh` by strangers, so it gets parsed and linted.
+recipe lint-install
+    ingredients "install.sh"
+    seal shell:linter
+    test { sh -n $<in> }
+    test { shellcheck -s sh $<in> }
+
+# No $<in> in the body, so this is one unit over the whole source set rather
+# than one cargo run per file.
+recipe test-workspace
+    ingredients "crates/**/*.rs"
+    seal rust:manifests rust:toolchain
+    test { cargo test --workspace }
+
+recipe clippy
+    ingredients "crates/**/*.rs"
+    seal rust:manifests rust:toolchain
+    test { cargo clippy --workspace --all-targets -- -D warnings }
+
+# The whole gate, and what `release` and `publish` hang off. Red here means
+# `skipped (upstream-failed)` there, with the body never running.
+chore check: version-sync lint-install test-workspace clippy
+
+# ---------------------------------------------------------------- mutating
+
+# Not gated: bump is how you *fix* a red version-sync.
+chore bump version
+    scripts/bump-version.py $<version>
+
+chore release version: check
+    scripts/release.sh $<version>
+
+chore publish: check
+    scripts/publish-crates.sh
+
+# Downstream packages pin checksums, so these run after the release workflow has
+# published the tarballs — not before.
+chore tap version
+    scripts/update-tap.sh $<version>
+
+chore aur version
+    scripts/update-aur.py $<version>
+
+# Hits the network and the live release, so it is a chore rather than a test:
+# it must not turn `cook test` red because GitHub had a bad minute.
+chore smoke-install
+    scripts/smoke-install.sh
