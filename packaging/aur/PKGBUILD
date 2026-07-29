@@ -1,0 +1,33 @@
+# Maintainer: Alex Gilbert <code@lioralabs.dev>
+
+pkgname=cliban-bin
+pkgver=0.2.1
+pkgrel=1
+pkgdesc="Self-hosted, agent-first kanban for the terminal: flat CLI, ratatui board, SQLite storage"
+arch=('x86_64' 'aarch64')
+url="https://github.com/LioraLabs/cliban"
+license=('MIT')
+provides=('cliban' 'cliband')
+conflicts=('cliban' 'cliband')
+options=('!strip')
+
+_base="$url/releases/download/v$pkgver"
+source_x86_64=("cliban-$pkgver-x86_64.tar.gz::$_base/cliban-v$pkgver-x86_64-unknown-linux-musl.tar.gz")
+source_aarch64=("cliban-$pkgver-aarch64.tar.gz::$_base/cliban-v$pkgver-aarch64-unknown-linux-musl.tar.gz")
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+_srcdir() {
+	case "$CARCH" in
+		x86_64)  printf 'cliban-v%s-x86_64-unknown-linux-musl' "$pkgver" ;;
+		aarch64) printf 'cliban-v%s-aarch64-unknown-linux-musl' "$pkgver" ;;
+	esac
+}
+
+package() {
+	cd "$srcdir/$(_srcdir)"
+	install -Dm755 cliban "$pkgdir/usr/bin/cliban"
+	install -Dm755 cliband "$pkgdir/usr/bin/cliband"
+	install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+	install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

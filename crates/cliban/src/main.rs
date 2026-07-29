@@ -24,6 +24,7 @@ struct MigrateLegacyArgs {
 #[derive(Parser)]
 #[command(
     name = "cliban",
+    version,
     about = "AI-agent-first kanban board for the terminal"
 )]
 struct Cli {
