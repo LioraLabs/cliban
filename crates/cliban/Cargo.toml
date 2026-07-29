@@ -23,9 +23,17 @@ path = "src/lib.rs"
 name = "cliban"
 path = "src/main.rs"
 
+[features]
+default = ["linear"]
+# The Linear bridge (`cliban import linear`, `cliban push linear`). On by
+# default so every install route has the commands; `--no-default-features`
+# drops the HTTP/TLS dependency tree for a lean build.
+linear = ["dep:cliban-sync"]
+
 [dependencies]
 cliban-core.workspace = true
 cliban-tui.workspace = true
+cliban-sync = { workspace = true, optional = true }
 clap = { version = "4", features = ["derive"] }
 tokio.workspace = true
 serde.workspace = true

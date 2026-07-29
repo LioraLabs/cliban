@@ -1,4 +1,4 @@
-//! XDG-aware paths for the cliban SQLite DB.
+//! XDG-aware paths for the cliban SQLite DB and config.
 
 use std::path::PathBuf;
 
@@ -7,6 +7,18 @@ pub fn data_dir() -> PathBuf {
     match std::env::var("XDG_DATA_HOME") {
         Ok(val) if !val.is_empty() => PathBuf::from(val).join("cliban"),
         _ => home_dir().join(".local").join("share").join("cliban"),
+    }
+}
+
+/// `$XDG_CONFIG_HOME/cliban`, falling back to `~/.config/cliban`.
+///
+/// Separate from [`data_dir`] on purpose: the database is state a user would
+/// back up, config is something they would put in a dotfiles repo. Nothing in
+/// here is required — every consumer has working defaults.
+pub fn config_dir() -> PathBuf {
+    match std::env::var("XDG_CONFIG_HOME") {
+        Ok(val) if !val.is_empty() => PathBuf::from(val).join("cliban"),
+        _ => home_dir().join(".config").join("cliban"),
     }
 }
 

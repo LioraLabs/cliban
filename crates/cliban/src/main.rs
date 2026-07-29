@@ -51,6 +51,12 @@ enum Command {
     Milestone(cmd::milestone::MilestoneArgs),
     /// Fuzzy-find issues; print selected key to stdout
     Fff(cmd::fff::FffArgs),
+    /// Import an issue from an external tracker
+    #[cfg(feature = "linear")]
+    Import(cmd::sync::ImportArgs),
+    /// Push a cliban issue back to an external tracker
+    #[cfg(feature = "linear")]
+    Push(cmd::sync::PushArgs),
     /// Migrate a legacy Go cliban db into a fresh cliban-core db
     MigrateLegacy(MigrateLegacyArgs),
 }
@@ -88,6 +94,10 @@ async fn run(cli: Cli) -> errors::CliResult<()> {
         Some(Command::Activity(args)) => cmd::activity::run(&cli.db, args).await,
         Some(Command::Milestone(args)) => cmd::milestone::run(&cli.db, args).await,
         Some(Command::Fff(args)) => cmd::fff::run(&cli.db, args).await,
+        #[cfg(feature = "linear")]
+        Some(Command::Import(args)) => cmd::sync::run_import(&cli.db, args).await,
+        #[cfg(feature = "linear")]
+        Some(Command::Push(args)) => cmd::sync::run_push(&cli.db, args).await,
         Some(Command::MigrateLegacy(args)) => {
             let report = migrate::migrate(
                 std::path::Path::new(&args.from),

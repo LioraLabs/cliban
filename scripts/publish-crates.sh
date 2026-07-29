@@ -9,7 +9,7 @@
 # (network drop halfway) is safe to re-run.
 set -eu
 
-ORDER="cliban-core cliban-tui cliban-tenancy cliban cliban-server"
+ORDER="cliban-core cliban-tui cliban-tenancy cliban-sync cliban cliban-server"
 
 fail() { printf 'publish: %s\n' "$*" >&2; exit 1; }
 
@@ -53,5 +53,5 @@ for crate in $ORDER; do
 	cargo publish -p "$crate"
 done
 
-printf '\nall five crates are on crates.io.\n'
+printf '\nall %s crates are on crates.io.\n' "$(echo "$ORDER" | wc -w | tr -d ' ')"
 printf 'cargo install cliban and cargo binstall cliban now work.\n'

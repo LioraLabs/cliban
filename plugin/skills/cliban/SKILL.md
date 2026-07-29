@@ -107,6 +107,8 @@ read and most writes.
 | `milestone add\|ls\|show\|edit` | milestones |
 | `label add\|ls\|rm` | labels |
 | `fff` | fuzzy-find, prints the selected key |
+| `import linear` | pull a Linear issue onto the board (see below) |
+| `push linear` | send state + progress back to Linear (see below) |
 | `tui` | the interactive board (needs a TTY — not for agents) |
 
 ## Vocabulary
@@ -463,6 +465,47 @@ cliban project edit PROJ --description-file - < updated-project.md
 body, returns only matching subsections, ranked, capped by `--limit` (default
 20). Emits NDJSON of `{project, heading, content, score}`. Do not load the
 whole notes section unless the task genuinely needs it.
+
+## Linear bridge
+
+Two explicit verbs. Nothing syncs in the background, so nothing crosses the
+boundary unless you ask.
+
+```bash
+cliban import linear ENG-412 --project PROJ            # pull it onto the board
+cliban import linear ENG-412 --project PROJ --dry-run  # see it first
+cliban push linear PROJ-42                             # state + progress comment
+cliban push linear PROJ-42 --description               # also mirror into the description
+cliban push linear PROJ-42 --create --team ENG         # no counterpart yet? make one
+```
+
+Needs `$LINEAR_API_KEY`. Optional `~/.config/cliban/linear.toml` sets the
+default team and any state-name overrides; never put the token in it.
+
+**Who owns what.** This is the rule that makes the bridge safe to re-run:
+
+| Field | Owner |
+|---|---|
+| title, priority, labels, due date, workflow state, `## Spec` | Linear — a re-import overwrites your local edits |
+| `## Plan`, `## Activity Log`, `## Notes` | cliban — a re-import never touches them |
+| Linear description outside cliban's fenced block, Linear comments | humans — never modified |
+
+So: re-import as often as you like, your ticked plan survives. But don't edit
+the title or spec locally and expect it to stick — change it in Linear.
+
+**Statuses.** `backlog` / `in-progress` / `done` round-trip cleanly.
+`blocked` and `in-review` only survive if the Linear team has a column named for
+them (Linear types both as "started"), otherwise they collapse into
+in-progress. A cancelled Linear issue arrives as `done` **and archived**.
+
+**Gotchas.**
+
+- `push` on an unlinked issue exits 1. Either `--create`, or adopt an existing
+  pairing with `import linear ENG-412 --project PROJ --link-to PROJ-42`.
+- `push` exits 2 if Linear changed since your last sync. Re-import first, or
+  `--force` if you know you are the authority.
+- One local issue per Linear issue. A second import refreshes rather than
+  duplicating.
 
 ## Exit codes
 

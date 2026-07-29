@@ -7,7 +7,7 @@
 #   cook bump 0.3.0     rewrite every version claim, refresh Cargo.lock
 #   cook check          the gate: version sync, installer lint, tests, clippy
 #   cook release 0.3.0  tag and push (gated on check)
-#   cook publish        push all five crates to crates.io, bottom-up
+#   cook publish        push every workspace crate to crates.io, bottom-up
 #   cook tap 0.3.0      regenerate the Homebrew formula, push the tap
 #   cook aur 0.3.0      refresh the AUR checksums from the release
 #   cook smoke-install  install from the live release into a sandbox

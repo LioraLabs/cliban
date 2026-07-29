@@ -1,0 +1,36 @@
+[package]
+name = "cliban-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "cliban issue-tracker bridges: import from and push to Linear"
+keywords = ["kanban", "linear", "sync", "issue-tracker", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "../../README.md"
+
+[lib]
+name = "cliban_sync"
+path = "src/lib.rs"
+
+[dependencies]
+cliban-core.workspace = true
+chrono.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+# `time` only — the rate-limit backoff in linear::client is the sole use.
+tokio = { workspace = true, features = ["time"] }
+sha2 = "0.10"
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "charset",
+    "http2",
+] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

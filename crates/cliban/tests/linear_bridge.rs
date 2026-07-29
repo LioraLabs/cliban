@@ -1,0 +1,719 @@
+//! End-to-end tests for `cliban import linear` and `cliban push linear`.
+//!
+//! The bridge is driven against a local GraphQL stub rather than api.linear.app,
+//! so the suite is hermetic: no token, no network, no rate limit. The stub is a
+//! bare `TcpListener` speaking just enough HTTP/1.1 to satisfy reqwest, which is
+//! cheaper than adding an HTTP server dependency for six tests.
+//!
+//! What is worth testing here rather than in `cliban-sync`'s unit tests is the
+//! part that spans the seam: that an import writes a real issue through the real
+//! contexts, and — the guarantee the whole design rests on — that re-importing
+//! does not eat a plan an agent has been ticking.
+
+#![cfg(feature = "linear")]
+
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+// ---------------------------------------------------------------- the stub
+
+/// Replies keyed by GraphQL operation name, served for as long as the stub runs.
+type Replies = HashMap<String, String>;
+
+struct Stub {
+    endpoint: String,
+    /// Operation names the stub was actually asked for, in order.
+    seen: Arc<Mutex<Vec<String>>>,
+}
+
+impl Stub {
+    fn start(replies: Replies) -> Stub {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub");
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_thread = Arc::clone(&seen);
+
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let body = match read_request_body(&mut stream) {
+                    Some(b) => b,
+                    None => continue,
+                };
+                let op = operation_name(&body).unwrap_or_default();
+                seen_thread.lock().unwrap().push(op.clone());
+                let reply = replies
+                    .get(&op)
+                    .cloned()
+                    // An unexpected operation must fail loudly as a GraphQL
+                    // error, not hang or return something plausible.
+                    .unwrap_or_else(|| {
+                        format!(r#"{{"errors":[{{"message":"stub has no reply for {op:?}"}}]}}"#)
+                    });
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    reply.len(),
+                    reply
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+
+        Stub {
+            endpoint: format!("http://127.0.0.1:{port}"),
+            seen,
+        }
+    }
+
+    fn operations(&self) -> Vec<String> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+/// Read headers, honour `Content-Length`, return the body.
+fn read_request_body(stream: &mut TcpStream) -> Option<String> {
+    let mut buf = Vec::new();
+    let mut byte = [0u8; 1];
+    // Headers, one byte at a time — slow and completely adequate here.
+    while !buf.ends_with(b"\r\n\r\n") {
+        match stream.read(&mut byte) {
+            Ok(0) | Err(_) => return None,
+            Ok(_) => buf.push(byte[0]),
+        }
+    }
+    let headers = String::from_utf8_lossy(&buf).to_lowercase();
+    let len: usize = headers
+        .lines()
+        .find_map(|l| l.strip_prefix("content-length:"))
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0);
+    let mut body = vec![0u8; len];
+    stream.read_exact(&mut body).ok()?;
+    Some(String::from_utf8_lossy(&body).to_string())
+}
+
+/// `{"query":"query IssueByKey($team..."}` → `IssueByKey`.
+fn operation_name(body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let query = v.get("query")?.as_str()?;
+    for keyword in ["query ", "mutation "] {
+        if let Some(rest) = query.trim_start().strip_prefix(keyword) {
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------- fixtures
+
+fn issue_reply(title: &str, state: (&str, &str), updated_at: &str) -> String {
+    serde_json::json!({
+        "data": { "issues": { "nodes": [ linear_issue(title, state, updated_at) ] } }
+    })
+    .to_string()
+}
+
+fn issue_by_id_reply(title: &str, state: (&str, &str), updated_at: &str) -> String {
+    serde_json::json!({
+        "data": { "issue": linear_issue(title, state, updated_at) }
+    })
+    .to_string()
+}
+
+fn linear_issue(title: &str, state: (&str, &str), updated_at: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": "linear-uuid-1",
+        "identifier": "ENG-412",
+        "title": title,
+        "description": "The upstream spec text.",
+        "url": "https://linear.app/acme/issue/ENG-412",
+        "updatedAt": updated_at,
+        "priority": 2,
+        "dueDate": "2026-08-15",
+        "state": {"id": "state-todo", "name": state.0, "type": state.1, "position": 1.0},
+        "team": {"id": "team-1", "key": "ENG", "name": "Engineering"},
+        "labels": {"nodes": [{"name": "bug"}]}
+    })
+}
+
+fn team_reply() -> String {
+    serde_json::json!({
+        "data": { "teams": { "nodes": [{
+            "id": "team-1", "key": "ENG", "name": "Engineering",
+            "states": { "nodes": [
+                {"id": "state-todo", "name": "Todo", "type": "unstarted", "position": 1.0},
+                {"id": "state-prog", "name": "In Progress", "type": "started", "position": 2.0},
+                {"id": "state-rev", "name": "In Review", "type": "started", "position": 3.0},
+                {"id": "state-done", "name": "Done", "type": "completed", "position": 4.0}
+            ]}
+        }]}}
+    })
+    .to_string()
+}
+
+fn import_replies(title: &str, state: (&str, &str), updated_at: &str) -> Replies {
+    HashMap::from([(
+        "IssueByKey".to_string(),
+        issue_reply(title, state, updated_at),
+    )])
+}
+
+// ---------------------------------------------------------------- harness
+
+static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct Board {
+    db: String,
+}
+
+impl Board {
+    /// A fresh temp DB with one project.
+    fn new(tag: &str) -> Board {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let db = std::env::temp_dir()
+            .join(format!("cliban_linear_{tag}_{nanos}_{n}.db"))
+            .to_string_lossy()
+            .to_string();
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{db}{suffix}"));
+        }
+        let board = Board { db };
+        board
+            .run(&["project", "add", "PROJ", "--name", "Demo"], None)
+            .assert_ok();
+        board
+    }
+
+    /// Run the binary against this board with a clean environment, so a
+    /// developer's own `CLIBAN_DB` or `LINEAR_API_KEY` cannot leak in.
+    fn run(&self, args: &[&str], stub: Option<&Stub>) -> Run {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_cliban"));
+        cmd.env_clear()
+            .env("HOME", std::env::temp_dir())
+            // No config file exists at this HOME, which is the default the
+            // bridge is meant to work under.
+            .env(
+                "XDG_CONFIG_HOME",
+                std::env::temp_dir().join("cliban-no-config"),
+            )
+            .env("CLIBAN_DB", &self.db)
+            .args(args);
+        if let Some(stub) = stub {
+            cmd.env("LINEAR_API_KEY", "lin_api_test")
+                .env("CLIBAN_LINEAR_ENDPOINT", &stub.endpoint);
+        }
+        let out = cmd.output().expect("run cliban");
+        Run {
+            stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+            code: out.status.code().unwrap_or(-1),
+        }
+    }
+
+    /// The issue as JSON, via the CLI's own read path.
+    fn show(&self, key: &str) -> serde_json::Value {
+        let run = self.run(&["issue", "show", key, "--json"], None);
+        run.assert_ok();
+        serde_json::from_str(&run.stdout).expect("issue show --json")
+    }
+}
+
+impl Drop for Board {
+    fn drop(&mut self) {
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", self.db));
+        }
+    }
+}
+
+struct Run {
+    stdout: String,
+    stderr: String,
+    code: i32,
+}
+
+impl Run {
+    fn assert_ok(&self) {
+        assert_eq!(
+            self.code, 0,
+            "expected success, got {}\nstdout: {}\nstderr: {}",
+            self.code, self.stdout, self.stderr
+        );
+    }
+}
+
+// ---------------------------------------------------------------- tests
+
+#[test]
+fn import_creates_a_cliban_issue_from_a_linear_issue() {
+    let board = Board::new("import");
+    let stub = Stub::start(import_replies(
+        "Fix the flaky thing",
+        ("In Progress", "started"),
+        "2026-07-29T12:00:00.000Z",
+    ));
+
+    let run = board.run(
+        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        Some(&stub),
+    );
+    run.assert_ok();
+
+    let out: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(out["action"], "imported");
+    assert_eq!(out["linear"], "ENG-412");
+    let key = out["cliban"].as_str().unwrap().to_string();
+
+    let issue = board.show(&key);
+    assert_eq!(issue["title"], "Fix the flaky thing");
+    assert_eq!(issue["status"], "in-progress", "state name maps to status");
+    assert_eq!(issue["priority"], "high", "Linear priority 2 is high");
+    assert_eq!(issue["due_date"], "2026-08-15");
+    assert_eq!(issue["labels"], serde_json::json!(["bug"]));
+
+    let description = issue["description"].as_str().unwrap();
+    assert!(description.contains("## Spec"));
+    assert!(description.contains("The upstream spec text."));
+    assert!(
+        description.contains("https://linear.app/acme/issue/ENG-412"),
+        "provenance link is missing"
+    );
+    assert!(
+        description.contains("## Plan"),
+        "tick needs a ## Plan section to exist from the start"
+    );
+}
+
+#[test]
+fn reimport_refreshes_the_spec_and_preserves_a_ticked_plan() {
+    let board = Board::new("refresh");
+
+    let stub = Stub::start(import_replies(
+        "Original title",
+        ("Todo", "unstarted"),
+        "2026-07-29T12:00:00.000Z",
+    ));
+    let run = board.run(
+        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        Some(&stub),
+    );
+    run.assert_ok();
+    let key = serde_json::from_str::<serde_json::Value>(&run.stdout).unwrap()["cliban"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // An agent writes a plan and ticks a step — the state that must survive.
+    let plan = "## Spec\n\nThe upstream spec text.\n\n## Plan\n\n\
+                ### Task 1: wire it up\n\n\
+                - [ ] **Step 1: write the client**\n\
+                - [ ] **Step 2: write the tests**\n";
+    board
+        .run(&["issue", "edit", &key, "--description", plan], None)
+        .assert_ok();
+    board
+        .run(&["issue", "tick", &key, "--task", "1", "--step", "1"], None)
+        .assert_ok();
+    board
+        .run(&["issue", "log", &key, "client landed, tests next"], None)
+        .assert_ok();
+
+    // Re-import with a changed upstream title.
+    let stub2 = Stub::start(import_replies(
+        "Renamed upstream",
+        ("In Review", "started"),
+        "2026-07-30T12:00:00.000Z",
+    ));
+    let run = board.run(
+        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        Some(&stub2),
+    );
+    run.assert_ok();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&run.stdout).unwrap()["action"],
+        "refreshed",
+        "the second import should refresh, not create a duplicate"
+    );
+
+    let issue = board.show(&key);
+    assert_eq!(issue["title"], "Renamed upstream", "Linear owns the title");
+    assert_eq!(issue["status"], "in-review");
+
+    let description = issue["description"].as_str().unwrap();
+    assert!(
+        description.contains("- [x] **Step 1: write the client**"),
+        "the ticked step was lost — this is the guarantee the design rests on:\n{description}"
+    );
+    assert!(
+        description.contains("- [ ] **Step 2: write the tests**"),
+        "the untouched step was lost:\n{description}"
+    );
+    assert!(
+        description.contains("client landed, tests next"),
+        "the logged note was lost:\n{description}"
+    );
+    assert!(
+        description.contains("### Task 1: wire it up"),
+        "the task heading was lost:\n{description}"
+    );
+}
+
+#[test]
+fn a_second_import_does_not_create_a_second_issue() {
+    let board = Board::new("dupe");
+    for _ in 0..2 {
+        let stub = Stub::start(import_replies(
+            "Same issue",
+            ("Todo", "unstarted"),
+            "2026-07-29T12:00:00.000Z",
+        ));
+        board
+            .run(
+                &["import", "linear", "ENG-412", "--project", "PROJ"],
+                Some(&stub),
+            )
+            .assert_ok();
+    }
+    let run = board.run(&["issue", "ls", "--project", "PROJ", "--json"], None);
+    run.assert_ok();
+    let count = run.stdout.lines().filter(|l| !l.trim().is_empty()).count();
+    assert_eq!(count, 1, "importing twice created {count} issues");
+}
+
+#[test]
+fn a_cancelled_linear_issue_is_archived_rather_than_deleted() {
+    let board = Board::new("cancelled");
+    let stub = Stub::start(import_replies(
+        "Abandoned work",
+        ("Canceled", "canceled"),
+        "2026-07-29T12:00:00.000Z",
+    ));
+    let run = board.run(
+        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        Some(&stub),
+    );
+    run.assert_ok();
+    let out: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(out["status"], "done");
+    assert_eq!(out["archived"], true, "cliban archives, it never deletes");
+}
+
+#[test]
+fn import_dry_run_writes_nothing() {
+    let board = Board::new("dryrun");
+    let stub = Stub::start(import_replies(
+        "Not yet imported",
+        ("Todo", "unstarted"),
+        "2026-07-29T12:00:00.000Z",
+    ));
+    let run = board.run(
+        &[
+            "import",
+            "linear",
+            "ENG-412",
+            "--project",
+            "PROJ",
+            "--dry-run",
+        ],
+        Some(&stub),
+    );
+    run.assert_ok();
+    assert!(run.stdout.contains("dry run"), "{}", run.stdout);
+    assert!(run.stdout.contains("Not yet imported"), "{}", run.stdout);
+
+    let ls = board.run(&["issue", "ls", "--project", "PROJ", "--json"], None);
+    ls.assert_ok();
+    assert!(
+        ls.stdout.trim().is_empty(),
+        "dry run created an issue: {}",
+        ls.stdout
+    );
+}
+
+#[test]
+fn push_moves_the_linear_state_and_posts_a_comment() {
+    let board = Board::new("push");
+
+    let stub = Stub::start(import_replies(
+        "Work to do",
+        ("Todo", "unstarted"),
+        "2026-07-29T12:00:00.000Z",
+    ));
+    let run = board.run(
+        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        Some(&stub),
+    );
+    run.assert_ok();
+    let key = serde_json::from_str::<serde_json::Value>(&run.stdout).unwrap()["cliban"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    board
+        .run(&["issue", "mv", &key, "in-review"], None)
+        .assert_ok();
+
+    let push_stub = Stub::start(HashMap::from([
+        (
+            "IssueById".to_string(),
+            issue_by_id_reply(
+                "Work to do",
+                ("Todo", "unstarted"),
+                "2026-07-29T12:00:00.000Z",
+            ),
+        ),
+        ("TeamByKey".to_string(), team_reply()),
+        (
+            "IssueUpdate".to_string(),
+            serde_json::json!({"data": {"issueUpdate": {"success": true,
+                "issue": linear_issue("Work to do", ("In Review", "started"),
+                                      "2026-07-29T13:00:00.000Z")}}})
+            .to_string(),
+        ),
+        (
+            "CommentCreate".to_string(),
+            serde_json::json!({"data": {"commentCreate": {"success": true}}}).to_string(),
+        ),
+    ]));
+
+    let run = board.run(&["push", "linear", &key, "--json"], Some(&push_stub));
+    run.assert_ok();
+    let out: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(out["action"], "pushed");
+    assert_eq!(out["linear"], "ENG-412");
+    assert_eq!(out["state"], "In Review", "in-review mapped to the column");
+    assert_eq!(out["wrote"], serde_json::json!(["state", "comment"]));
+
+    let ops = push_stub.operations();
+    assert!(ops.contains(&"IssueUpdate".to_string()), "{ops:?}");
+    assert!(
+        ops.contains(&"CommentCreate".to_string()),
+        "the default push posts a comment: {ops:?}"
+    );
+}
+
+#[test]
+fn push_refuses_when_linear_moved_since_the_last_sync() {
+    let board = Board::new("stale");
+    let stub = Stub::start(import_replies(
+        "Work to do",
+        ("Todo", "unstarted"),
+        "2026-07-29T12:00:00.000Z",
+    ));
+    let run = board.run(
+        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        Some(&stub),
+    );
+    run.assert_ok();
+    let key = serde_json::from_str::<serde_json::Value>(&run.stdout).unwrap()["cliban"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Move it locally, so a successful push has a real state change to make and
+    // the --force assertion below is testing something.
+    board.run(&["issue", "mv", &key, "done"], None).assert_ok();
+
+    // Upstream has moved on since the import stamped `remote_updated_at`.
+    let stale_replies = HashMap::from([
+        (
+            "IssueById".to_string(),
+            issue_by_id_reply(
+                "Renamed by a human",
+                ("Todo", "unstarted"),
+                "2026-07-31T09:00:00.000Z",
+            ),
+        ),
+        ("TeamByKey".to_string(), team_reply()),
+        (
+            "IssueUpdate".to_string(),
+            serde_json::json!({"data": {"issueUpdate": {"success": true,
+                "issue": linear_issue("Renamed by a human", ("Done", "completed"),
+                                      "2026-07-31T10:00:00.000Z")}}})
+            .to_string(),
+        ),
+        (
+            "CommentCreate".to_string(),
+            serde_json::json!({"data": {"commentCreate": {"success": true}}}).to_string(),
+        ),
+    ]);
+
+    let stub2 = Stub::start(stale_replies.clone());
+    let run = board.run(&["push", "linear", &key], Some(&stub2));
+    assert_eq!(run.code, 2, "stale write should exit 2: {run:?}");
+    assert!(
+        run.stderr.contains("changed in Linear"),
+        "stderr should explain: {}",
+        run.stderr
+    );
+    assert!(run.stderr.contains("--force"), "and offer the way out");
+    let ops = stub2.operations();
+    assert!(
+        !ops.contains(&"IssueUpdate".to_string()),
+        "nothing should have been written: {ops:?}"
+    );
+
+    // --force is the documented override.
+    let stub3 = Stub::start(stale_replies);
+    board
+        .run(&["push", "linear", &key, "--force"], Some(&stub3))
+        .assert_ok();
+    assert!(stub3.operations().contains(&"IssueUpdate".to_string()));
+}
+
+#[test]
+fn push_dry_run_writes_nothing_and_shows_the_comment() {
+    let board = Board::new("pushdry");
+    let stub = Stub::start(import_replies(
+        "Work to do",
+        ("Todo", "unstarted"),
+        "2026-07-29T12:00:00.000Z",
+    ));
+    let run = board.run(
+        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        Some(&stub),
+    );
+    run.assert_ok();
+    let key = serde_json::from_str::<serde_json::Value>(&run.stdout).unwrap()["cliban"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let push_stub = Stub::start(HashMap::from([
+        (
+            "IssueById".to_string(),
+            issue_by_id_reply(
+                "Work to do",
+                ("Todo", "unstarted"),
+                "2026-07-29T12:00:00.000Z",
+            ),
+        ),
+        ("TeamByKey".to_string(), team_reply()),
+    ]));
+    let run = board.run(&["push", "linear", &key, "--dry-run"], Some(&push_stub));
+    run.assert_ok();
+    assert!(run.stdout.contains("dry run"), "{}", run.stdout);
+    assert!(run.stdout.contains("comment:"), "{}", run.stdout);
+    // The imported issue is still where Linear has it, so there is no state
+    // move to make and the dry run should say so rather than implying a write.
+    assert!(
+        run.stdout.contains("already Todo, no change"),
+        "{}",
+        run.stdout
+    );
+    let ops = push_stub.operations();
+    assert!(
+        !ops.contains(&"IssueUpdate".to_string()) && !ops.contains(&"CommentCreate".to_string()),
+        "dry run performed a mutation: {ops:?}"
+    );
+}
+
+// ---- failure paths that need no network at all ----
+
+#[test]
+fn push_on_an_unlinked_issue_exits_1_without_needing_a_token() {
+    let board = Board::new("unlinked");
+    board
+        .run(
+            &["issue", "add", "--project", "PROJ", "--title", "Local work"],
+            None,
+        )
+        .assert_ok();
+
+    let run = board.run(&["push", "linear", "PROJ-1"], None);
+    assert_eq!(run.code, 1, "{run:?}");
+    assert!(
+        run.stderr.contains("not linked to Linear"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("--create"),
+        "the message should name the way forward: {}",
+        run.stderr
+    );
+    assert!(
+        !run.stderr.contains("LINEAR_API_KEY"),
+        "an unlinked issue is knowable without a token: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn push_on_a_missing_issue_exits_1() {
+    let board = Board::new("missing");
+    let run = board.run(&["push", "linear", "PROJ-999"], None);
+    assert_eq!(run.code, 1, "{run:?}");
+    assert!(run.stderr.contains("not found"), "{}", run.stderr);
+}
+
+#[test]
+fn import_with_a_malformed_key_exits_1_before_touching_the_network() {
+    let board = Board::new("badkey");
+    for bad in ["ENG", "ENG-abc", "412"] {
+        let run = board.run(&["import", "linear", bad, "--project", "PROJ"], None);
+        assert_eq!(run.code, 1, "{bad:?} should be rejected: {run:?}");
+        assert!(
+            run.stderr.contains("not a Linear issue key"),
+            "{bad:?}: {}",
+            run.stderr
+        );
+    }
+}
+
+#[test]
+fn import_without_a_token_says_which_variable_to_set() {
+    let board = Board::new("notoken");
+    // No stub, so no LINEAR_API_KEY in the child environment.
+    let run = board.run(&["import", "linear", "ENG-412", "--project", "PROJ"], None);
+    assert_eq!(run.code, 2, "{run:?}");
+    assert!(run.stderr.contains("LINEAR_API_KEY"), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("linear.app/settings/api"),
+        "point them at where to get one: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn push_create_without_a_team_explains_the_two_ways_to_supply_one() {
+    let board = Board::new("noteam");
+    board
+        .run(
+            &["issue", "add", "--project", "PROJ", "--title", "Local work"],
+            None,
+        )
+        .assert_ok();
+    let stub = Stub::start(HashMap::new());
+    let run = board.run(&["push", "linear", "PROJ-1", "--create"], Some(&stub));
+    assert_eq!(run.code, 2, "{run:?}");
+    assert!(run.stderr.contains("--team"), "{}", run.stderr);
+    assert!(run.stderr.contains("linear.toml"), "{}", run.stderr);
+}
+
+impl std::fmt::Debug for Run {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "exit {}\nstdout: {}\nstderr: {}",
+            self.code, self.stdout, self.stderr
+        )
+    }
+}

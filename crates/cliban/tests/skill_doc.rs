@@ -50,6 +50,15 @@ fn documented_paths(md: &str) -> BTreeSet<Vec<String>> {
     out
 }
 
+/// Commands that only exist when an optional feature is compiled in. The doc
+/// describes the default build, so under `--no-default-features` these are
+/// legitimately absent and must not be reported as drift.
+fn feature_gated(path: &[String]) -> bool {
+    let gated = cfg!(not(feature = "linear")) && matches!(path[0].as_str(), "import" | "push");
+    // `issue import` is unrelated to the Linear bridge and always present.
+    gated && path.len() > 1
+}
+
 #[test]
 fn every_command_the_skill_names_exists() {
     let md = skill_md();
@@ -61,7 +70,7 @@ fn every_command_the_skill_names_exists() {
     );
 
     let mut missing = Vec::new();
-    for path in &paths {
+    for path in paths.iter().filter(|p| !feature_gated(p)) {
         let out = Command::new(env!("CARGO_BIN_EXE_cliban"))
             .args(path)
             .arg("--help")

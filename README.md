@@ -123,6 +123,9 @@ build fails.
 - `cliban-tui`: the kanban board, priority-colored cards over cliban's five columns.
 - `cliban`: the CLI binary. `cliban <subcommand>` for scripting, `cliban`
   (no args) or `cliban tui` for the board.
+- `cliban-sync`: the Linear bridge — a GraphQL client, the status map, and the
+  `remote_links` table pairing a local issue with a remote one. Optional
+  (`--no-default-features` drops it and its TLS stack).
 - `cliban-tenancy`: multi-tenant storage for the daemon, a `registry.db`
   (users, pubkeys, memberships, invites) routing to one cliban-core database
   per tenant under `tenants/<id>.db`.
@@ -451,6 +454,59 @@ keeps its default, so a light theme only overrides what hurts.
 [`assets/themes/light.toml`](assets/themes/light.toml) is a ready-made
 starting point; the full slot list is documented in
 `crates/cliban-tui/src/ui/theme.rs`.
+
+## Linear
+
+If the work already lives in Linear, cliban can borrow an issue, give it a plan
+your agent can tick, and hand the outcome back.
+
+```sh
+export LINEAR_API_KEY=lin_api_...
+
+cliban import linear ENG-412 --project PROJ    # borrow it
+cliban issue tick PROJ-42 --task 1 --step 1    # work it
+cliban push linear PROJ-42                     # hand it back
+```
+
+That is the entire feature. There is no daemon, no polling, no webhook, and no
+merge algorithm — the only time anything crosses the boundary is when you run
+one of those two commands. It stays comprehensible because **field ownership is
+declared rather than negotiated**:
+
+| Field | Owner | What that means |
+|---|---|---|
+| title, priority, labels, due date, workflow state, `## Spec` | Linear | a re-import overwrites local edits (and warns first) |
+| `## Plan`, `## Activity Log`, `## Notes` | cliban | a re-import never touches them |
+| Linear description outside cliban's fence, Linear comments | humans | never modified |
+
+So `import` is safe to re-run: the half-ticked plan an agent has been working
+survives every refresh. That is the one property the whole design is built
+around, and there is a test named after it.
+
+`push` writes the workflow state and a progress comment by default. Both are
+additive — a comment cannot destroy anything. Mirroring into the Linear
+description is opt-in (`--description`) and confined to a fenced region
+delimited by HTML comments, so prose outside it is left byte-identical. If
+Linear changed since your last sync, `push` refuses (exit 2) rather than
+clobbering it; re-import, or `--force` if you are the authority.
+
+cliban's five statuses map onto a team's workflow states by name first, falling
+back to Linear's state *type*. `backlog` / `in-progress` / `done` round-trip
+cleanly. `blocked` and `in-review` only survive if the team has a column named
+for them, because Linear types both as "started" — which is what the optional
+config file is for:
+
+```toml
+# ~/.config/cliban/linear.toml
+[linear]
+team = "ENG"                 # default team for `push --create`
+
+[linear.states]
+in-review = "Code Review"    # cliban status -> exact Linear state name
+```
+
+The API token is read from `$LINEAR_API_KEY` and nowhere else — deliberately not
+a config field, so there is no cliban-owned file on disk worth stealing.
 
 ## Roadmap
 

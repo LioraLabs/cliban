@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cliban-core", "crates/cliban-tui", "crates/cliban", "crates/cliban-server", "crates/cliban-tenancy"]
+members = ["crates/cliban-core", "crates/cliban-tui", "crates/cliban", "crates/cliban-server", "crates/cliban-tenancy", "crates/cliban-sync"]
 
 [workspace.package]
 version = "0.2.1"
@@ -13,6 +13,7 @@ homepage = "https://github.com/LioraLabs/cliban"
 cliban-core = { path = "crates/cliban-core", version = "0.2.1" }
 cliban-tui = { path = "crates/cliban-tui", version = "0.2.1" }
 cliban-tenancy = { path = "crates/cliban-tenancy", version = "0.2.1" }
+cliban-sync = { path = "crates/cliban-sync", version = "0.2.1" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros"] }
 serde = { version = "1", features = ["derive"] }

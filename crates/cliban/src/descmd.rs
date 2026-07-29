@@ -10,45 +10,11 @@ use chrono::{DateTime, Utc};
 /// precision, UTC, "Z" suffix (Go layout "2006-01-02T15:04Z").
 const ACTIVITY_LOG_TIME_FORMAT: &str = "%Y-%m-%dT%H:%MZ";
 
-/// Locates a top-level H2 section by its exact anchor text (the part after
-/// "## "). Returns the [start, end) byte offsets of the section's *content* —
-/// everything after the heading line up to (but not including) the next H2
-/// heading or end of string.
-///
-/// Matching rules:
-///   - Anchor match is case-sensitive and exact (no leading/trailing spaces).
-///   - The heading must appear at the start of a line.
-///   - Content includes the leading newline after the heading and the trailing
-///     newlines up to the next `## ` heading.
-pub fn find_section(desc: &str, anchor: &str) -> (usize, usize, bool) {
-    if anchor.is_empty() {
-        return (0, 0, false);
-    }
-    let needle = format!("## {anchor}");
-    let mut offset = 0usize;
-    let mut section_content_start: Option<usize> = None;
-    for line in desc.split_inclusive('\n') {
-        let line_len = line.len();
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        match section_content_start {
-            None => {
-                if trimmed == needle {
-                    section_content_start = Some(offset + line_len);
-                }
-            }
-            Some(start) => {
-                if trimmed.starts_with("## ") {
-                    return (start, offset, true);
-                }
-            }
-        }
-        offset += line_len;
-    }
-    match section_content_start {
-        None => (0, 0, false),
-        Some(start) => (start, desc.len(), true),
-    }
-}
+/// Locating an H2 section now lives in `cliban_core::sections`, because the
+/// Linear bridge needs the identical boundaries when it replaces `## Spec`
+/// without disturbing `## Plan`. Re-exported here so every call site in this
+/// crate reads the same as it always did.
+pub use cliban_core::sections::find_section;
 
 /// Constructs a descmd error string with the structured `descmd: ` prefix.
 fn errf(msg: String) -> String {

@@ -14,6 +14,7 @@ pub mod paths;
 pub mod projection;
 pub mod rows;
 pub mod schema;
+pub mod sections;
 pub mod store;
 pub mod time;
 

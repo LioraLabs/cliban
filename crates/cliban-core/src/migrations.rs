@@ -7,6 +7,55 @@ pub const LEGACY_SCHEMA_VERSION: i64 = 20260619000001;
 pub const SUPERSEDED_NOTES_SCHEMA_VERSION: i64 = 20260713000001;
 pub const SCHEMA_VERSION: i64 = 20260713000002;
 
+/// `remote_links` — the local↔remote issue mapping the sync bridges keep.
+///
+/// # Why adding this table did NOT bump `SCHEMA_VERSION`
+///
+/// Because the ledger is not cliban's alone to write. Sibling tools vendor a
+/// fork of this crate and stamp their own versions into the same
+/// `schema_migrations` table in the same default database — and loom's vendored
+/// runner, unlike this one, has no escape hatch for a version it does not
+/// recognize: it returns `rusqlite::Error::InvalidQuery`, whose Display string
+/// is the famously unhelpful "Query is not read-only". Stamping a new cliban
+/// version into a shared ledger therefore breaks loom at open time, for every
+/// command, until its vendored copy is updated in lockstep.
+///
+/// A version bump would buy nothing here anyway. The statements below are
+/// additive and written entirely with `IF NOT EXISTS`, applied from two
+/// directions: the fresh-database path in [`run`], and directly by
+/// `cliban-sync::links::ensure_table` before every sync command. The second
+/// path is what actually guarantees the table on an existing database — including
+/// one whose ledger a sibling owns, where [`run`] deliberately declines to
+/// migrate at all. Nothing is left for a ledger entry to do.
+///
+/// The DDL lives here rather than in `cliban-sync` so there is one copy, and so
+/// core does not need to depend on its own dependent.
+///
+/// If a future change genuinely needs a version bump, check
+/// `~/dev/loom/vendor/cliban-core/src/migrations.rs` first: cliban's versions
+/// are date-stamped, so simply cutting a release can move cliban's number past
+/// the sibling's and flip the sibling's entry from "newer, fine" to "unknown,
+/// refuse" in the runner below.
+pub const REMOTE_LINKS_DDL: &[&str] = &[
+    r#"CREATE TABLE IF NOT EXISTS "remote_links" (
+        "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+        "provider" TEXT NOT NULL,
+        "entity" TEXT NOT NULL,
+        "local_id" INTEGER NOT NULL,
+        "remote_id" TEXT NOT NULL,
+        "remote_key" TEXT NOT NULL,
+        "remote_updated_at" TEXT,
+        "base_hash" TEXT,
+        "last_synced_at" TEXT NOT NULL,
+        "inserted_at" TEXT NOT NULL,
+        "updated_at" TEXT NOT NULL
+    )"#,
+    r#"CREATE UNIQUE INDEX IF NOT EXISTS "remote_links_local_index"
+        ON "remote_links" ("provider", "entity", "local_id")"#,
+    r#"CREATE UNIQUE INDEX IF NOT EXISTS "remote_links_remote_index"
+        ON "remote_links" ("provider", "entity", "remote_id")"#,
+];
+
 const SCHEMA_DDL: &[&str] = &[
     r#"CREATE TABLE IF NOT EXISTS "schema_migrations" (
         "version" INTEGER PRIMARY KEY,
@@ -103,7 +152,7 @@ const SCHEMA_DDL: &[&str] = &[
 pub fn run(conn: &Connection) -> crate::error::Result<bool> {
     if !has_ledger(conn)? {
         let tx = conn.unchecked_transaction()?;
-        for stmt in SCHEMA_DDL {
+        for stmt in SCHEMA_DDL.iter().chain(REMOTE_LINKS_DDL) {
             tx.execute_batch(stmt)?;
         }
         stamp(&tx)?;
@@ -158,6 +207,11 @@ pub fn run(conn: &Connection) -> crate::error::Result<bool> {
             "DROP TABLE notes; \
              ALTER TABLE projects DROP COLUMN note_seq;",
         )?;
+    }
+    // Additive and idempotent, so it runs for every recognized prior version
+    // without needing to know which one we came from.
+    for stmt in REMOTE_LINKS_DDL {
+        tx.execute_batch(stmt)?;
     }
     stamp(&tx)?;
     tx.commit()?;
