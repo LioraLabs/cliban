@@ -9,3 +9,9 @@
 .worktrees/
 /target
 /.cook/
+# makepkg leavings when validating packaging/aur/PKGBUILD locally
+/packaging/aur/src/
+/packaging/aur/pkg/
+/packaging/aur/*.tar.gz
+/packaging/aur/*.pkg.tar.*
+/packaging/aur/.SRCINFO
