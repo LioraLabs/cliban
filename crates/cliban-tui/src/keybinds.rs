@@ -47,6 +47,7 @@ pub fn map_key(key: KeyEvent, app: &mut App) -> Option<Action> {
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(Action::Cancel),
             _ => None,
         },
+        Mode::NewDialog(_) => map_new_dialog(key),
         Mode::MilestonePicker(_) => map_picker(key),
         Mode::FuzzyFind(_) => map_fuzzy(key),
         Mode::MilestonePage(_) => map_milestone_page(key),
@@ -217,6 +218,22 @@ fn map_confirm_archive(key: KeyEvent) -> Option<Action> {
 // types into the query — including j/k, so a project named "jira" is
 // reachable — and navigation is arrows or Ctrl-n/p. (Ctrl-j is off the
 // table: it arrives as a bare LF byte, indistinguishable from Enter.)
+
+/// The quick-create form: every printable character types into the focused
+/// field, Tab/arrows move between fields, Enter creates, Esc cancels.
+fn map_new_dialog(key: KeyEvent) -> Option<Action> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Enter, _) => Some(Action::NewDialogConfirm),
+        (KeyCode::Esc, _) => Some(Action::Cancel),
+        (KeyCode::Backspace, _) => Some(Action::NewDialogBackspace),
+        (KeyCode::Tab, _) | (KeyCode::Down, _) => Some(Action::NewDialogNextField),
+        (KeyCode::BackTab, _) | (KeyCode::Up, _) => Some(Action::NewDialogPrevField),
+        (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
+            Some(Action::NewDialogInput(c))
+        }
+        _ => None,
+    }
+}
 
 fn map_picker(key: KeyEvent) -> Option<Action> {
     match (key.code, key.modifiers) {

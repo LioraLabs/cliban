@@ -72,8 +72,9 @@ impl ColumnId {
     }
 }
 
-/// Scope chips (loom §18): project key + milestone name. Invariant: milestone
-/// is None whenever project is None.
+/// Scope chips (loom §18): project key + milestone name. Invariant: the
+/// milestone always belongs to the scoped project, so it is None whenever
+/// project is None.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Scope {
     pub project: Option<String>,
@@ -81,11 +82,14 @@ pub struct Scope {
 }
 
 impl Scope {
+    /// Any change of project drops the milestone — a milestone name is only
+    /// meaningful within its own project, so carrying it across would filter
+    /// the board by a milestone the new project doesn't have.
     pub fn set_project(&mut self, p: Option<String>) {
-        self.project = p;
-        if self.project.is_none() {
+        if self.project != p {
             self.milestone = None;
         }
+        self.project = p;
     }
 }
 
@@ -121,6 +125,103 @@ pub struct FuzzyState {
     pub query: String,
     pub results: Vec<String>,
     pub cursor: usize,
+}
+
+/// What the new-dialog creates, with everything the eventual write needs
+/// resolved at open time — confirm never has to look at app state again.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NewKind {
+    Issue {
+        project: String,
+        status: String,
+        /// Inherited from the board's milestone scope; empty means none.
+        milestone: String,
+    },
+    Milestone {
+        project: String,
+    },
+    Project,
+}
+
+/// Which mode Esc (and a successful create) returns to.
+#[derive(Debug, Clone)]
+pub enum NewOrigin {
+    Board,
+    MilestonePage(MilestonePageState),
+    ProjectPage(ProjectPageState),
+}
+
+#[derive(Debug, Clone)]
+pub struct NewField {
+    pub label: &'static str,
+    pub value: String,
+}
+
+/// The quick-create form (n/N): just enough fields to get the thing on
+/// screen — everything else is an `e`/`E` edit away.
+#[derive(Debug, Clone)]
+pub struct NewDialogState {
+    pub kind: NewKind,
+    pub fields: Vec<NewField>,
+    /// Index of the field receiving keystrokes.
+    pub focus: usize,
+    pub origin: NewOrigin,
+    /// Validation feedback, drawn inside the dialog; any edit clears it.
+    pub error: Option<String>,
+}
+
+impl NewDialogState {
+    fn field(label: &'static str) -> NewField {
+        NewField {
+            label,
+            value: String::new(),
+        }
+    }
+
+    pub fn issue(project: String, status: String, milestone: String) -> Self {
+        Self {
+            kind: NewKind::Issue {
+                project,
+                status,
+                milestone,
+            },
+            fields: vec![Self::field("Title")],
+            focus: 0,
+            origin: NewOrigin::Board,
+            error: None,
+        }
+    }
+
+    pub fn milestone(project: String, origin: NewOrigin) -> Self {
+        Self {
+            kind: NewKind::Milestone { project },
+            fields: vec![Self::field("Name"), Self::field("Target")],
+            focus: 0,
+            origin,
+            error: None,
+        }
+    }
+
+    pub fn project(origin: NewOrigin) -> Self {
+        Self {
+            kind: NewKind::Project,
+            fields: vec![Self::field("Key"), Self::field("Name")],
+            focus: 0,
+            origin,
+            error: None,
+        }
+    }
+
+    /// The dialog's title line, e.g. `New issue · CLI → backlog`.
+    pub fn title(&self) -> String {
+        match &self.kind {
+            NewKind::Issue {
+                project, status, ..
+            } => format!("New issue · {project} → {status}"),
+            NewKind::Milestone { project } => format!("New milestone · {project}"),
+            NewKind::Project => "New project".into(),
+        }
+    }
 }
 
 /// The milestone page's view state. Deliberately holds no milestone data of
@@ -471,6 +572,8 @@ pub enum Mode {
     },
     AwaitingMove,   // Space pressed; waiting for column letter
     Detail(String), // focused card key
+    /// The quick-create form (n/N) — layers over whatever `origin` shows.
+    NewDialog(NewDialogState),
     MilestonePicker(PickerState),
     FuzzyFind(FuzzyState),
     MilestonePage(MilestonePageState),
@@ -699,10 +802,15 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
         }
         Action::Quit => None,
         Action::Cancel => {
-            // Declining the project-archive dialog returns to the page it
-            // came from; every other cancel unwinds to the board.
+            // Dialogs that layered over a page return to that page exactly
+            // as the user left it; every other cancel unwinds to the board.
             app.mode = match &app.mode {
                 Mode::ConfirmProjectArchive { page, .. } => Mode::ProjectPage(page.clone()),
+                Mode::NewDialog(st) => match &st.origin {
+                    NewOrigin::Board => Mode::Normal,
+                    NewOrigin::MilestonePage(s) => Mode::MilestonePage(s.clone()),
+                    NewOrigin::ProjectPage(s) => Mode::ProjectPage(s.clone()),
+                },
                 _ => Mode::Normal,
             };
             None
@@ -853,12 +961,43 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
             }
         },
         Action::NewIssue => {
-            let status = app.focus.column.status().to_string();
-            Some(Command::NewIssue { status })
+            // Same project resolution the editor flow used: scope, then the
+            // focused card, then anything on the board.
+            let project = app
+                .scope
+                .project
+                .clone()
+                .or_else(|| app.focused_card().map(|c| c.project.clone()))
+                .or_else(|| app.cards.first().map(|c| c.project.clone()));
+            match project {
+                Some(project) => {
+                    let status = app.focus.column.status().to_string();
+                    // A milestone-scoped board creates into that milestone —
+                    // the card would otherwise vanish behind its own filter.
+                    let milestone = app.scope.milestone.clone().unwrap_or_default();
+                    app.mode = Mode::NewDialog(NewDialogState::issue(project, status, milestone));
+                }
+                None => app.status_msg = Some("scope a project (p) before creating".into()),
+            }
+            None
         }
-        Action::NewMilestone => Some(Command::NewMilestone {
-            project: app.scope.project.clone(),
-        }),
+        Action::NewMilestone => {
+            match app.scope.project.clone() {
+                Some(project) => {
+                    app.mode =
+                        Mode::NewDialog(NewDialogState::milestone(project, NewOrigin::Board));
+                }
+                None => {
+                    app.status_msg = Some("scope a project (p) before adding a milestone".into())
+                }
+            }
+            None
+        }
+        Action::NewDialogInput(_)
+        | Action::NewDialogBackspace
+        | Action::NewDialogNextField
+        | Action::NewDialogPrevField
+        | Action::NewDialogConfirm => update_new_dialog(app, action),
         Action::TagMilestone => {
             let card = app.focused_card()?.clone();
             // Only this card's own project's milestones are taggable: with no
@@ -889,6 +1028,113 @@ pub fn update(app: &mut App, action: Action) -> Option<Command> {
             })
         }
         _ => update_overlays(app, action),
+    }
+}
+
+/// The quick-create form. Typing edits the focused field, Tab moves between
+/// fields, Enter validates and emits the create; the dialog closes back to
+/// its origin, leaving refusals in `state.error` with the input intact.
+fn update_new_dialog(app: &mut App, action: Action) -> Option<Command> {
+    let Mode::NewDialog(st) = &mut app.mode else {
+        return None;
+    };
+    match action {
+        Action::NewDialogInput(c) => {
+            // Project keys are uppercase by definition; typing lowercase
+            // into the Key field just works instead of failing validation.
+            let upper = matches!(st.kind, NewKind::Project) && st.focus == 0;
+            st.fields[st.focus]
+                .value
+                .push(if upper { c.to_ascii_uppercase() } else { c });
+            st.error = None;
+            None
+        }
+        Action::NewDialogBackspace => {
+            st.fields[st.focus].value.pop();
+            st.error = None;
+            None
+        }
+        Action::NewDialogNextField => {
+            st.focus = (st.focus + 1) % st.fields.len();
+            st.error = None;
+            None
+        }
+        Action::NewDialogPrevField => {
+            st.focus = (st.focus + st.fields.len() - 1) % st.fields.len();
+            st.error = None;
+            None
+        }
+        Action::NewDialogConfirm => {
+            let values: Vec<String> = st
+                .fields
+                .iter()
+                .map(|f| f.value.trim().to_string())
+                .collect();
+            let cmd = match &st.kind {
+                NewKind::Issue {
+                    project,
+                    status,
+                    milestone,
+                } => {
+                    if values[0].is_empty() {
+                        st.error = Some("title is required".into());
+                        return None;
+                    }
+                    Command::CreateIssue {
+                        project: project.clone(),
+                        status: status.clone(),
+                        title: values[0].clone(),
+                        milestone: milestone.clone(),
+                    }
+                }
+                NewKind::Milestone { project } => {
+                    if values[0].is_empty() {
+                        st.error = Some("name is required".into());
+                        return None;
+                    }
+                    if !values[1].is_empty()
+                        && chrono::NaiveDate::parse_from_str(&values[1], "%Y-%m-%d").is_err()
+                    {
+                        st.error = Some("target: want YYYY-MM-DD (or leave empty)".into());
+                        return None;
+                    }
+                    Command::CreateMilestone {
+                        project: project.clone(),
+                        name: values[0].clone(),
+                        target: values[1].clone(),
+                    }
+                }
+                NewKind::Project => {
+                    // Mirror core's key rule so most refusals happen here,
+                    // in the dialog, where the input is still editable.
+                    let key = &values[0];
+                    if key.len() < 2
+                        || key.len() > 10
+                        || !key
+                            .chars()
+                            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                    {
+                        st.error = Some("key: 2-10 uppercase letters/digits".into());
+                        return None;
+                    }
+                    if values[1].is_empty() {
+                        st.error = Some("name is required".into());
+                        return None;
+                    }
+                    Command::CreateProject {
+                        key: key.clone(),
+                        name: values[1].clone(),
+                    }
+                }
+            };
+            app.mode = match &st.origin {
+                NewOrigin::Board => Mode::Normal,
+                NewOrigin::MilestonePage(s) => Mode::MilestonePage(s.clone()),
+                NewOrigin::ProjectPage(s) => Mode::ProjectPage(s.clone()),
+            };
+            Some(cmd)
+        }
+        _ => None,
     }
 }
 
@@ -1230,13 +1476,25 @@ fn update_milestone_page(app: &mut App, action: Action) -> Option<Command> {
                 name: m.name.clone(),
             })
         }
-        Action::MsPageNew => Some(Command::NewMilestone {
+        Action::MsPageNew => {
             // Create into whatever the cursor is sitting in, so the page works
             // unscoped; fall back to the board's scope on an empty list.
-            project: page_focused(app, &state)
+            let project = page_focused(app, &state)
                 .map(|m| m.project.clone())
-                .or_else(|| app.scope.project.clone()),
-        }),
+                .or_else(|| app.scope.project.clone());
+            match project {
+                Some(project) => {
+                    app.mode = Mode::NewDialog(NewDialogState::milestone(
+                        project,
+                        NewOrigin::MilestonePage(state),
+                    ));
+                }
+                None => {
+                    app.status_msg = Some("scope a project (p) before adding a milestone".into())
+                }
+            }
+            None
+        }
         Action::MsPageCycleStatus => {
             let m = page_focused(app, &state)?;
             Some(Command::SetMilestoneStatus {
@@ -1402,7 +1660,10 @@ fn update_project_page(app: &mut App, action: Action) -> Option<Command> {
             let p = project_focused(app, &state)?;
             Some(Command::EditProject { key: p.key.clone() })
         }
-        Action::ProjPageNew => Some(Command::NewProject),
+        Action::ProjPageNew => {
+            app.mode = Mode::NewDialog(NewDialogState::project(NewOrigin::ProjectPage(state)));
+            None
+        }
         Action::ProjPageArchiveRequest => {
             let p = project_focused(app, &state)?;
             app.mode = Mode::ConfirmProjectArchive {
@@ -1572,7 +1833,7 @@ pub fn fuzzy_search(app: &App, query: &str) -> Vec<String> {
     out
 }
 
-fn locate_focus_for_key(app: &App, key: &str) -> Option<Focus> {
+pub(crate) fn locate_focus_for_key(app: &App, key: &str) -> Option<Focus> {
     for col in app.visible_columns() {
         for (idx, c) in app.column_cards(col).iter().enumerate() {
             if c.key == key {
@@ -1707,6 +1968,26 @@ mod tests {
         };
         s.set_project(None);
         assert_eq!(s.milestone, None);
+    }
+
+    #[test]
+    fn scope_switching_project_clears_milestone() {
+        let mut s = Scope {
+            project: Some("CLI".into()),
+            milestone: Some("M1".into()),
+        };
+        s.set_project(Some("PULSE".into()));
+        assert_eq!(s.milestone, None);
+    }
+
+    #[test]
+    fn scope_reselecting_same_project_keeps_milestone() {
+        let mut s = Scope {
+            project: Some("CLI".into()),
+            milestone: Some("M1".into()),
+        };
+        s.set_project(Some("CLI".into()));
+        assert_eq!(s.milestone.as_deref(), Some("M1"));
     }
 
     use crate::actions::{Action, Command, Direction};
@@ -1995,10 +2276,150 @@ mod tests {
             }
             c => panic!("{c:?}"),
         }
-        match update(&mut app, Action::MsPageNew).unwrap() {
-            Command::NewMilestone { project } => assert_eq!(project.as_deref(), Some("LM")),
+        assert!(update(&mut app, Action::MsPageNew).is_none());
+        match &app.mode {
+            Mode::NewDialog(st) => {
+                assert_eq!(
+                    st.kind,
+                    NewKind::Milestone {
+                        project: "LM".into()
+                    }
+                );
+                assert!(
+                    matches!(&st.origin, NewOrigin::MilestonePage(_)),
+                    "Esc must land back on the page"
+                );
+            }
+            m => panic!("expected the new-milestone dialog, got {m:?}"),
+        }
+    }
+
+    #[test]
+    fn n_opens_the_issue_dialog_and_confirm_creates_into_the_focused_column() {
+        let mut app = App::new();
+        app.cards = vec![card("CLI-1", "backlog", 1000.0)];
+        app.focus.column = ColumnId::InProgress; // create lands where you are
+        assert!(update(&mut app, Action::NewIssue).is_none());
+        for c in "Ship".chars() {
+            update(&mut app, Action::NewDialogInput(c));
+        }
+        match update(&mut app, Action::NewDialogConfirm) {
+            Some(Command::CreateIssue {
+                project,
+                status,
+                title,
+                milestone,
+            }) => {
+                assert_eq!(project, "CLI");
+                assert_eq!(status, "in-progress");
+                assert_eq!(title, "Ship");
+                assert_eq!(milestone, "");
+            }
             c => panic!("{c:?}"),
         }
+        assert!(matches!(app.mode, Mode::Normal), "dialog closes on create");
+    }
+
+    #[test]
+    fn issue_dialog_inherits_the_boards_milestone_scope() {
+        let mut app = App::new();
+        app.cards = vec![card("CLI-1", "backlog", 1000.0)];
+        app.scope.set_project(Some("CLI".into()));
+        app.scope.milestone = Some("v1".into());
+        update(&mut app, Action::NewIssue);
+        update(&mut app, Action::NewDialogInput('x'));
+        match update(&mut app, Action::NewDialogConfirm) {
+            Some(Command::CreateIssue { milestone, .. }) => assert_eq!(milestone, "v1"),
+            c => panic!("{c:?}"),
+        }
+    }
+
+    #[test]
+    fn issue_dialog_needs_some_project_to_aim_at() {
+        let mut app = App::new(); // no cards, no scope
+        assert!(update(&mut app, Action::NewIssue).is_none());
+        assert!(matches!(app.mode, Mode::Normal), "nothing to open");
+        assert!(app
+            .status_msg
+            .as_deref()
+            .unwrap()
+            .contains("scope a project"));
+    }
+
+    #[test]
+    fn new_dialog_refuses_empty_required_fields_and_stays_open() {
+        let mut app = App::new();
+        app.cards = vec![card("CLI-1", "backlog", 1000.0)];
+        update(&mut app, Action::NewIssue);
+        assert!(update(&mut app, Action::NewDialogConfirm).is_none());
+        match &app.mode {
+            Mode::NewDialog(st) => assert!(st.error.as_deref().unwrap().contains("title")),
+            m => panic!("dialog must stay open, got {m:?}"),
+        }
+        // Typing clears the refusal.
+        update(&mut app, Action::NewDialogInput('a'));
+        if let Mode::NewDialog(st) = &app.mode {
+            assert!(st.error.is_none());
+        }
+    }
+
+    #[test]
+    fn milestone_dialog_validates_the_target_date() {
+        let mut app = App::new();
+        app.scope.set_project(Some("CLI".into()));
+        update(&mut app, Action::NewMilestone);
+        update(&mut app, Action::NewDialogInput('m'));
+        update(&mut app, Action::NewDialogNextField); // -> Target
+        for c in "soon".chars() {
+            update(&mut app, Action::NewDialogInput(c));
+        }
+        assert!(update(&mut app, Action::NewDialogConfirm).is_none());
+        match &app.mode {
+            Mode::NewDialog(st) => {
+                assert!(st.error.as_deref().unwrap().contains("YYYY-MM-DD"));
+                assert_eq!(st.fields[1].value, "soon", "input survives the refusal");
+            }
+            m => panic!("{m:?}"),
+        }
+    }
+
+    #[test]
+    fn project_dialog_uppercases_the_key_and_validates_it() {
+        let mut app = App::new();
+        update(&mut app, Action::OpenProjectPage);
+        update(&mut app, Action::ProjPageNew);
+        for c in "pulse".chars() {
+            update(&mut app, Action::NewDialogInput(c));
+        }
+        if let Mode::NewDialog(st) = &app.mode {
+            assert_eq!(st.fields[0].value, "PULSE", "key uppercases as typed");
+        }
+        // Name still empty -> refused.
+        assert!(update(&mut app, Action::NewDialogConfirm).is_none());
+        update(&mut app, Action::NewDialogNextField);
+        for c in "Pulse tracker".chars() {
+            update(&mut app, Action::NewDialogInput(c));
+        }
+        match update(&mut app, Action::NewDialogConfirm) {
+            Some(Command::CreateProject { key, name }) => {
+                assert_eq!(key, "PULSE");
+                assert_eq!(name, "Pulse tracker");
+            }
+            c => panic!("{c:?}"),
+        }
+        assert!(
+            matches!(app.mode, Mode::ProjectPage(_)),
+            "create returns to the page it came from"
+        );
+    }
+
+    #[test]
+    fn esc_returns_the_dialog_to_its_origin() {
+        let mut app = App::new();
+        update(&mut app, Action::OpenProjectPage);
+        update(&mut app, Action::ProjPageNew);
+        update(&mut app, Action::Cancel);
+        assert!(matches!(app.mode, Mode::ProjectPage(_)));
     }
 
     #[test]
@@ -2034,8 +2455,15 @@ mod tests {
         assert!(update(&mut app, Action::MsPageEdit).is_none());
         assert!(update(&mut app, Action::MsPageSelect).is_none());
         assert!(update(&mut app, Action::MsPageCycleStatus).is_none());
-        // New still works — it is how you get your first milestone.
-        assert!(update(&mut app, Action::MsPageNew).is_some());
+        // New has no project to create into (empty list, no scope) — it
+        // explains instead of opening a dialog that could only fail.
+        assert!(update(&mut app, Action::MsPageNew).is_none());
+        assert!(app.status_msg.is_some());
+        assert!(matches!(app.mode, Mode::MilestonePage(_)));
+        // Scoped, it works — that is how you get your first milestone.
+        app.scope.project = Some("CLI".into());
+        update(&mut app, Action::MsPageNew);
+        assert!(matches!(app.mode, Mode::NewDialog(_)));
     }
 
     fn names<'a>(app: &'a App, s: &MilestonePageState) -> Vec<&'a str> {

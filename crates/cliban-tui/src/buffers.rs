@@ -1,4 +1,5 @@
-//! On-disk editor buffers for the e/E/n/N $EDITOR flows. Mirrors cliban's Go
+//! On-disk editor buffers for the e/E $EDITOR flows (creation happens in the
+//! quick-create dialog; these carry the deep edits). Mirrors cliban's Go
 //! `internal/issuebuf` format: `---` frontmatter + markdown body.
 
 #[derive(Debug, Default, Clone, PartialEq)]

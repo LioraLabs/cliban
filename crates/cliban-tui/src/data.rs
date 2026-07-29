@@ -546,10 +546,11 @@ impl Data {
         Ok(())
     }
 
-    pub fn create_issue(&self, project: &str, b: &IssueBuffer) -> Result<(), DataError> {
+    /// Returns the new issue's key so callers can focus it.
+    pub fn create_issue(&self, project: &str, b: &IssueBuffer) -> Result<String, DataError> {
         let (project, b) = (project.to_string(), b.clone());
-        self.rt.block_on(self.store.call(move |conn| {
-            issues::create(
+        let key = self.rt.block_on(self.store.call(move |conn| {
+            let issue = issues::create(
                 conn,
                 &project,
                 issues::CreateIssue {
@@ -578,10 +579,10 @@ impl Data {
                     ..Default::default()
                 },
             )?;
-            Ok(())
+            Ok(issue.key)
         }))?;
         self.notify();
-        Ok(())
+        Ok(key)
     }
 
     pub fn milestone_buffer(

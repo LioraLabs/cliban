@@ -8,6 +8,7 @@ pub mod detail;
 pub mod fuzzy;
 pub mod help;
 pub mod milestone_page;
+pub mod new_dialog;
 pub mod picker;
 pub mod project_page;
 pub mod theme;
@@ -158,6 +159,23 @@ pub fn render(frame: &mut Frame, app: &App, hits: &mut HitMap) {
         confirm_quit::draw_confirm_project(frame, frame.area(), key, *archived);
         return;
     }
+    // Same deal for a new-dialog opened from a page (a board-origin dialog
+    // falls through to the board render below and layers at the end).
+    if let Mode::NewDialog(st) = &app.mode {
+        match &st.origin {
+            crate::app::NewOrigin::MilestonePage(s) => {
+                milestone_page::draw(frame, frame.area(), app, s);
+                new_dialog::draw(frame, frame.area(), st);
+                return;
+            }
+            crate::app::NewOrigin::ProjectPage(s) => {
+                project_page::draw(frame, frame.area(), app, s);
+                new_dialog::draw(frame, frame.area(), st);
+                return;
+            }
+            crate::app::NewOrigin::Board => {}
+        }
+    }
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -221,6 +239,8 @@ pub fn render(frame: &mut Frame, app: &App, hits: &mut HitMap) {
             );
         }
         Mode::FuzzyFind(state) => fuzzy::draw(frame, frame.area(), app, state),
+        // Page-origin dialogs were fully drawn (page + popup) above.
+        Mode::NewDialog(st) => new_dialog::draw(frame, frame.area(), st),
         // Handled above — they replace the board rather than layering over it.
         Mode::MilestonePage(_)
         | Mode::ProjectPage(_)

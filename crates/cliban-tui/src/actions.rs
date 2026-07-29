@@ -34,6 +34,12 @@ pub enum Action {
     EditScope,
     NewIssue,
     NewMilestone,
+    // The new-dialog form (n/N open it; these drive it).
+    NewDialogInput(char),
+    NewDialogBackspace,
+    NewDialogNextField,
+    NewDialogPrevField,
+    NewDialogConfirm,
     TagMilestone,
     /// `a`: ask before archiving (opens the confirm dialog).
     ArchiveRequest,
@@ -140,16 +146,24 @@ pub enum Command {
     EditIssue {
         key: String,
     },
-    NewIssue {
+    /// Create straight from the new-issue dialog — everything the write needs
+    /// was resolved when the dialog opened, so no editor round-trip.
+    CreateIssue {
+        project: String,
         status: String,
+        title: String,
+        /// Inherited from the board's milestone scope; empty means none.
+        milestone: String,
     },
     EditMilestone {
         project: String,
         name: String,
     },
-    /// `None` falls back to the board's scoped project (and errors if unscoped).
-    NewMilestone {
-        project: Option<String>,
+    CreateMilestone {
+        project: String,
+        name: String,
+        /// `YYYY-MM-DD`, already validated by the dialog; empty means none.
+        target: String,
     },
     SetMilestoneStatus {
         project: String,
@@ -159,8 +173,10 @@ pub enum Command {
     EditProject {
         key: String,
     },
-    /// Open an editor buffer for a brand-new project (key + name + body).
-    NewProject,
+    CreateProject {
+        key: String,
+        name: String,
+    },
     SetProjectArchived {
         key: String,
         archived: bool,

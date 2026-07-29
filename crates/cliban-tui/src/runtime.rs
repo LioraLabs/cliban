@@ -93,7 +93,7 @@ fn run_editor<B: Backend>(
 
 fn handle_editor<B: Backend>(
     data: &Data,
-    app: &mut App,
+    _app: &mut App,
     terminal: &mut Terminal<B>,
     session: &mut dyn Session,
     cmd: &Command,
@@ -109,30 +109,6 @@ fn handle_editor<B: Backend>(
             }
             let _ = std::fs::remove_file(&path);
         }
-        Command::NewIssue { status } => {
-            let buf = IssueBuffer {
-                status: status.clone(),
-                priority: "none".into(),
-                ..Default::default()
-            };
-            let path = temp_path("new-issue");
-            std::fs::write(&path, buf.serialize())?;
-            if run_editor(terminal, session, &path)? {
-                if let Ok(p) = parse_issue(&std::fs::read_to_string(&path)?) {
-                    let project = app
-                        .scope
-                        .project
-                        .clone()
-                        .or_else(|| app.focused_card().map(|c| c.project.clone()))
-                        .or_else(|| app.cards.first().map(|c| c.project.clone()));
-                    match project {
-                        Some(pj) => data.create_issue(&pj, &p)?,
-                        None => app.status_msg = Some("scope a project (p) before creating".into()),
-                    }
-                }
-            }
-            let _ = std::fs::remove_file(&path);
-        }
         Command::EditMilestone { project, name } => {
             let path = temp_path("milestone");
             std::fs::write(&path, data.milestone_buffer(project, name)?.serialize())?;
@@ -143,23 +119,6 @@ fn handle_editor<B: Backend>(
             }
             let _ = std::fs::remove_file(&path);
         }
-        Command::NewMilestone { project } => match project.clone().or(app.scope.project.clone()) {
-            Some(project) => {
-                let buf = MilestoneBuffer {
-                    status: "open".into(),
-                    ..Default::default()
-                };
-                let path = temp_path("new-milestone");
-                std::fs::write(&path, buf.serialize())?;
-                if run_editor(terminal, session, &path)? {
-                    if let Ok(p) = parse_milestone(&std::fs::read_to_string(&path)?) {
-                        data.create_milestone(&project, &p)?;
-                    }
-                }
-                let _ = std::fs::remove_file(&path);
-            }
-            None => app.status_msg = Some("scope a project (p) before adding a milestone".into()),
-        },
         Command::EditProject { key } => {
             let path = temp_path("project");
             std::fs::write(&path, data.project_buffer(key)?.serialize())?;
@@ -170,27 +129,71 @@ fn handle_editor<B: Backend>(
             }
             let _ = std::fs::remove_file(&path);
         }
-        Command::NewProject => {
-            let buf = ProjectBuffer {
-                header: "# New project — key: 2-10 uppercase letters/digits, e.g. PULSE.".into(),
-                ..Default::default()
-            };
-            let path = temp_path("new-project");
-            std::fs::write(&path, buf.serialize())?;
-            if run_editor(terminal, session, &path)? {
-                if let Ok(p) = parse_project(&std::fs::read_to_string(&path)?) {
-                    // Core validates the key; a rejection becomes status text
-                    // rather than tearing the whole session down.
-                    if let Err(e) = data.create_project(&p) {
-                        app.status_msg = Some(format!("project not created: {e}"));
-                    }
-                }
-            }
-            let _ = std::fs::remove_file(&path);
-        }
         _ => {}
     }
     Ok(())
+}
+
+/// Dispatch a quick-create from the new-dialog. Any refusal (core validates
+/// the write) becomes status text rather than tearing the session down.
+/// Returns the created issue's key so the board cursor can land on it.
+fn handle_create(data: &Data, app: &mut App, cmd: &Command) -> Option<String> {
+    match cmd {
+        Command::CreateIssue {
+            project,
+            status,
+            title,
+            milestone,
+        } => {
+            let buf = IssueBuffer {
+                title: title.clone(),
+                status: status.clone(),
+                priority: "none".into(),
+                milestone: milestone.clone(),
+                ..Default::default()
+            };
+            match data.create_issue(project, &buf) {
+                Ok(key) => {
+                    app.status_msg = Some(format!("created {key} (e to edit)"));
+                    Some(key)
+                }
+                Err(e) => {
+                    app.status_msg = Some(format!("issue not created: {e}"));
+                    None
+                }
+            }
+        }
+        Command::CreateMilestone {
+            project,
+            name,
+            target,
+        } => {
+            let buf = MilestoneBuffer {
+                name: name.clone(),
+                target: target.clone(),
+                status: "open".into(),
+                ..Default::default()
+            };
+            match data.create_milestone(project, &buf) {
+                Ok(()) => app.status_msg = Some(format!("created milestone {name}")),
+                Err(e) => app.status_msg = Some(format!("milestone not created: {e}")),
+            }
+            None
+        }
+        Command::CreateProject { key, name } => {
+            let buf = ProjectBuffer {
+                key: key.clone(),
+                name: name.clone(),
+                ..Default::default()
+            };
+            match data.create_project(&buf) {
+                Ok(()) => app.status_msg = Some(format!("created project {key}")),
+                Err(e) => app.status_msg = Some(format!("project not created: {e}")),
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 fn seed_milestone_picker(app: &mut App) {
@@ -320,13 +323,22 @@ fn apply_action<B: Backend>(
     if let Some(cmd) = cmd {
         match cmd {
             Command::EditIssue { .. }
-            | Command::NewIssue { .. }
             | Command::EditMilestone { .. }
-            | Command::NewMilestone { .. }
-            | Command::EditProject { .. }
-            | Command::NewProject => {
+            | Command::EditProject { .. } => {
                 handle_editor(data, app, terminal, session, &cmd)?;
                 reload(data, app)?;
+            }
+            Command::CreateIssue { .. }
+            | Command::CreateMilestone { .. }
+            | Command::CreateProject { .. } => {
+                let focus_key = handle_create(data, app, &cmd);
+                reload(data, app)?;
+                // Land the cursor on the new card so `e` deepens it at once.
+                if let Some(key) = focus_key {
+                    if let Some(f) = crate::app::locate_focus_for_key(app, &key) {
+                        app.focus = f;
+                    }
+                }
             }
             other => {
                 if dispatch_command(data, app, &other)? {
@@ -575,6 +587,64 @@ mod tests {
         data.tag_milestone("CLI-1", Some("v0.3".into())).unwrap();
         reload(&data, &mut app).unwrap();
         (data, app, t, s)
+    }
+
+    #[test]
+    fn headless_n_dialog_creates_an_issue_and_focuses_it() {
+        let (data, mut app, mut t, mut s) = harness();
+        s.feed_bytes(b"2"); // jump to the (empty) in-progress column
+        s.feed_bytes(b"nShip the dialog\r");
+        pump(&mut t, &mut s, &data, &mut app);
+        assert!(matches!(app.mode, Mode::Normal), "dialog closed");
+        let card = app
+            .cards
+            .iter()
+            .find(|c| c.title == "Ship the dialog")
+            .expect("issue created");
+        assert_eq!(card.status, "in-progress");
+        // The cursor followed the new card, so `e` deepens it immediately.
+        assert_eq!(app.focused_card().unwrap().key, card.key);
+        let d = dump(&t);
+        assert!(d.contains("(e to edit)"), "footer confirms:\n{d}");
+    }
+
+    #[test]
+    fn headless_esc_closes_the_dialog_without_creating() {
+        let (data, mut app, mut t, mut s) = harness();
+        s.feed_bytes(b"nabandoned");
+        pump(&mut t, &mut s, &data, &mut app);
+        assert!(matches!(app.mode, Mode::NewDialog(_)));
+        assert!(dump(&t).contains("New issue"), "dialog on screen");
+        s.feed_bytes(b"\x1b");
+        pump(&mut t, &mut s, &data, &mut app);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(app.cards.len(), 1, "nothing was created");
+    }
+
+    #[test]
+    fn headless_capital_n_dialog_creates_a_milestone_with_target() {
+        let (data, mut app, mut t, mut s) = harness();
+        app.scope.set_project(Some("CLI".into()));
+        s.feed_bytes(b"Nv1.0\t2026-12-01\r");
+        pump(&mut t, &mut s, &data, &mut app);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(app.milestones[0].name, "v1.0");
+        assert_eq!(app.milestones[0].target.as_deref(), Some("2026-12-01"));
+    }
+
+    #[test]
+    fn headless_project_page_n_dialog_creates_a_project() {
+        let (data, mut app, mut t, mut s) = harness();
+        s.feed_bytes(b"pN"); // project page, then New
+        pump(&mut t, &mut s, &data, &mut app);
+        assert!(dump(&t).contains("New project"), "dialog over the page");
+        s.feed_bytes(b"pulse\tPulse tracker\r"); // key uppercases as typed
+        pump(&mut t, &mut s, &data, &mut app);
+        assert!(matches!(app.mode, Mode::ProjectPage(_)), "back on the page");
+        assert!(app
+            .projects
+            .iter()
+            .any(|p| p.key == "PULSE" && p.name == "Pulse tracker"));
     }
 
     #[test]
