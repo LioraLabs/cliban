@@ -1,11 +1,11 @@
 {
   "name": "cliban",
-  "description": "Cliban kanban/issue CLI workflow: issue and bug tracking, project status, ticket creation, progressive project memory, and end-to-end milestone orchestration",
-  "version": "0.1.0",
+  "description": "Cliban kanban/issue CLI workflow: issue and bug tracking, project status, ticket creation, progressive project memory, the Linear import/push bridge, and end-to-end milestone orchestration",
+  "version": "0.2.0",
   "author": {
     "name": "Liora Labs"
   },
   "repository": "https://github.com/LioraLabs/cliban",
   "license": "MIT",
-  "keywords": ["cliban", "kanban", "issues", "workflow", "milestones", "ai-agents"]
+  "keywords": ["cliban", "kanban", "issues", "workflow", "milestones", "linear", "ai-agents"]
 }
