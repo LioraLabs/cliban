@@ -137,6 +137,9 @@ test "$(git rev-parse <ticket-branch>)" = "$(git rev-parse HEAD^2)" || echo "LAT
 
 cliban issue mv <KEY> done
 cliban issue log <KEY> "merged to milestone/$SLUG as $(git rev-parse --short HEAD)"
+# If the ticket was imported from Linear (activity log shows a `sync` entry),
+# hand it back — additive, and a failure here never blocks the milestone:
+cliban push linear <KEY> || true
 git worktree remove "$ROOT/.worktrees/<ticket-branch>"
 git branch -d "<ticket-branch>" || git branch -D "<ticket-branch>"   # -d fails after conflict-resolved --no-ff; -D once verified merged
 ```
@@ -184,3 +187,4 @@ The whole skill, graded. Each rule appears once.
 | **SHOULD** | Brief every agent: commit everything first, THEN report — no dangling commits | The integrator silently missing a commit that arrives after the report (hazard 2) |
 | **SHOULD** | Check the both-halves invariant when a path-based hook could pass on a half-done paired change | A completeness gap a per-file hook can't catch (hazard 4) |
 | **SHOULD** | Re-scan `git worktree list` for stragglers before finalizing; never remove a live agent's worktree | A late rebase resurrecting a branch/worktree you already cleaned up (hazard 6) |
+| **MAY** | `cliban push linear <KEY>` after a Linear-imported ticket moves to done (never fatal to the milestone) | Linear drifting behind the board that mirrors it |

@@ -84,7 +84,9 @@ is reversible, and the history survives every rewrite.
 them through rate-limited APIs with auth tokens, and your plans live on
 someone else's server. cliban is a local SQLite file with a flat CLI:
 nothing leaves your machine unless you run `cliband`, and then it goes only
-where your SSH keys say.
+where your SSH keys say. That said, when the team's source of truth is
+Linear anyway, cliban can borrow an issue and hand the outcome back — see
+[Linear](#linear) below.
 
 **Your agent's own memory?** That's the thing that keeps getting compacted.
 

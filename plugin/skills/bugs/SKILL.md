@@ -78,6 +78,13 @@ cliban issue mv <BUG-KEY> done
 cliban issue log <BUG-KEY> "resolved: <one-line reason>"
 ```
 
+4. If the bug is Linear-linked (its `## Activity Log` shows a `sync` entry
+   like "imported from ENG-412"), hand the resolution back:
+
+```bash
+cliban push linear <BUG-KEY>
+```
+
 ## Output Format
 
 For each bug, show:
@@ -90,3 +97,4 @@ For each bug, show:
 
 - Cliban auto-creates the `bug` label on first use; no setup needed.
 - Use cliban's relation flags for dependencies: `--blocks KEY` if this bug blocks another body of work; `--blocked-by KEY` if it's gated on something else.
+- A bug reported in Linear can be pulled onto the board with `cliban import linear <LINEAR-KEY> --project <KEY>` instead of `/bugs add` — see the `cliban-workflow` skill's Linear section for ownership rules and failure modes.

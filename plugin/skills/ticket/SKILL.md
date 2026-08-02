@@ -12,6 +12,22 @@ Create a well-formed cliban issue through natural conversation. Starts quick, go
 
 Cliban must be on `$PATH`. The `cliban-workflow` skill handles detection and graceful degradation.
 
+## Linear Issues First
+
+If the user references an existing Linear issue — a key like `ENG-412` or a
+linear.app URL — don't draft a new ticket. Import it instead:
+
+```bash
+cliban import linear ENG-412 --project <KEY> [--milestone "<name>"]
+```
+
+The import brings the title, priority, labels, and spec with it; report the
+created key and branch as usual. Requires `$LINEAR_API_KEY`; the
+`cliban-workflow` skill's Linear section covers field ownership and failure
+modes. Conversely, if the user wants the new ticket mirrored into Linear,
+create it normally (below), then `cliban push linear <KEY> --create --team
+<TEAM>`.
+
 ## The Process
 
 ### Phase 1: Quick Understanding (2-3 questions)

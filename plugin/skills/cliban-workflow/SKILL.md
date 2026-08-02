@@ -162,6 +162,55 @@ Each of these runs in a single SQL transaction. Concurrent calls are serialized.
 - **Relations:** use `--blocks` / `--blocked-by` for hard dependencies, `--related-to` for soft references.
 - **Promotion-mirror responsibility:** when a promoted child issue moves to `done`, the workflow skill that did the move is responsible for also calling `cliban issue tick` on the referencing step in the parent. Cliban core does NOT auto-mirror — this is the skill's job, deliberately kept out of cliban to avoid coupling the core to the description-parsing contract.
 
+## Linear-Linked Issues
+
+Some issues are borrowed from Linear and are expected to be handed back:
+
+```bash
+cliban import linear ENG-412 --project KEY   # borrow (or refresh) it
+cliban push linear KEY-42                    # hand back state + a progress comment
+```
+
+Probe bridge support once with `cliban push --help`. If it fails, the installed
+CLI predates the bridge or was built without it — skip all Linear actions for
+the session while continuing every other workflow normally, exactly like the
+project-memory probe above.
+
+**Detecting a linked issue.** An imported or pushed issue carries `sync`
+entries in its `## Activity Log` ("imported from ENG-412", "pushed to
+ENG-412"). If the log shows one, treat the issue as Linear-linked. To confirm
+without side effects, `cliban push linear KEY --dry-run` exits 1 when unlinked.
+
+**Field ownership is declared, not merged.** Linear owns title, priority,
+labels, due date, workflow state, and `## Spec` — never edit these locally on a
+linked issue; change them in Linear and re-run the import (a re-import
+overwrites local edits to Linear-owned fields). cliban owns `## Plan`,
+`## Activity Log`, and `## Notes` — work them exactly as on any other issue; a
+re-import never touches them, so a half-ticked plan survives every refresh.
+
+**When to push.** Only on linked issues, and only when `$LINEAR_API_KEY` is
+set (push exits 2 without it — surface once, then skip for the session):
+
+- After `issue mv KEY in-review` (PR opened) and after `issue mv KEY done`,
+  run `cliban push linear KEY`. It writes the workflow state and a progress
+  comment; both are additive and cannot destroy anything.
+- Exit 2 means Linear moved since the last sync: re-import, then push again.
+  Pass `--force` only when the user has said cliban is the authority.
+- Exit 1 means the issue is not linked after all: skip silently. Use
+  `push linear KEY --create --team X` only when the user explicitly asks for a
+  Linear counterpart.
+- `--description` (mirror the plan into the Linear description's fenced block)
+  is opt-in — use it only on user request.
+
+**Status caveat.** `backlog` / `in-progress` / `done` round-trip cleanly.
+`blocked` and `in-review` collapse into Linear's "started" type unless the
+team has a matching state name (the user can map names in
+`~/.config/cliban/linear.toml`). Push anyway; mention the collapse only if the
+user asks why Linear shows in-progress.
+
+The token comes from `$LINEAR_API_KEY` and nowhere else. Never write it into
+`linear.toml`, an issue description, or a log entry.
+
 ## Workflow Actions by Stage
 
 Stages map onto the [superpowers](https://github.com/obra/superpowers) plugin's skills when it is installed (`superpowers:brainstorming`, `superpowers:writing-plans`, `superpowers:executing-plans`, `superpowers:subagent-driven-development`, `superpowers:finishing-a-development-branch`). Use those skills for the *craft* of each stage; this contract governs *where the artifacts live* — sections of the cliban node description — and supersedes any file-based storage those skills describe. Without superpowers, perform the stage directly with the actions below.
@@ -199,6 +248,7 @@ Stages map onto the [superpowers](https://github.com/obra/superpowers) plugin's 
 - PR opened: `cliban issue mv KEY in-review` + `cliban issue log KEY "PR opened: <url>"`
 - Local merge: `cliban issue mv KEY done`
 - Discard: `cliban issue log KEY "work discarded"` (keep current status)
+- If the issue is Linear-linked (see above): `cliban push linear KEY` after the move
 
 ## What NOT to Do
 
@@ -207,5 +257,6 @@ Stages map onto the [superpowers](https://github.com/obra/superpowers) plugin's 
 - Don't mutate the structured sections (`## Plan`, `## Activity Log`) outside of `tick`/`promote`/`log`. Hand-editing breaks the contract and the next mutation command exits 2.
 - Don't pre-create labels — `issue add --label X` auto-creates.
 - Don't pass `--editor` in an agent context — exits 2 without a TTY.
+- Don't edit Linear-owned fields (title, priority, labels, due date, `## Spec`) on a Linear-linked issue — change them in Linear and re-import, or the next re-import silently wins.
 - Don't write spec or plan content to plan/spec files in project repos (e.g. superpowers' `docs/` locations). Under this workflow, specs and plans live in the cliban node description.
 - **Never write a cliban issue key into source code, comments, commit messages, or any committed artifact.** A cliban key (e.g. `PROJ-42`) is private local tracking metadata — meaningless to anyone reading the repo. Track the work *in cliban* (`tick`/`log`); the key stays out of the code. (A global pre-commit hook enforces this and will block such commits.)
