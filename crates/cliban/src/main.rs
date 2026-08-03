@@ -58,6 +58,9 @@ enum Command {
     /// Push a cliban issue back to an external tracker
     #[cfg(feature = "linear")]
     Push(cmd::sync::PushArgs),
+    /// Refresh every linked issue from an external tracker in one call
+    #[cfg(feature = "linear")]
+    Sync(cmd::sync::SyncArgs),
     /// Migrate a legacy Go cliban db into a fresh cliban-core db
     MigrateLegacy(MigrateLegacyArgs),
 }
@@ -99,6 +102,8 @@ async fn run(cli: Cli) -> errors::CliResult<()> {
         Some(Command::Import(args)) => cmd::sync::run_import(&cli.db, args).await,
         #[cfg(feature = "linear")]
         Some(Command::Push(args)) => cmd::sync::run_push(&cli.db, args).await,
+        #[cfg(feature = "linear")]
+        Some(Command::Sync(args)) => cmd::sync::run_sync(&cli.db, args).await,
         Some(Command::MigrateLegacy(args)) => {
             let report = migrate::migrate(
                 std::path::Path::new(&args.from),

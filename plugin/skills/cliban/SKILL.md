@@ -130,6 +130,7 @@ read and most writes.
 | `fff` | fuzzy-find, prints the selected key |
 | `import linear` | pull a Linear issue onto the board (see below) |
 | `push linear` | send state + progress back to Linear (see below) |
+| `sync linear` | refresh every Linear-linked issue in one call (see below) |
 | `tui` | the interactive board (needs a TTY — not for agents) |
 
 ## Vocabulary
@@ -564,10 +565,21 @@ boundary unless you ask.
 ```bash
 cliban import linear ENG-412 --project PROJ            # pull it onto the board
 cliban import linear ENG-412 --project PROJ --dry-run  # see it first
+cliban import linear --mine --project PROJ             # everything assigned to you
 cliban push linear PROJ-42                             # state + progress comment
 cliban push linear PROJ-42 --description               # also mirror into the description
 cliban push linear PROJ-42 --create --team ENG         # no counterpart yet? make one
+cliban sync linear                                     # refresh every linked issue
+cliban sync linear --project PROJ                      # ... in one project only
 ```
+
+**The inbound queue.** `import linear --mine` imports every open Linear issue
+assigned to the token's viewer: where the issue's team runs cycles, only the
+active cycle counts (the rest is backlog and is reported as skipped); where it
+does not, every open assigned issue is in scope. Already-linked issues are
+refreshed, not duplicated. `sync linear` re-imports every linked issue in one
+call, each under its own link's origin semantics. Both report
+created/refreshed/skipped counts and take `--dry-run` / `--json`.
 
 Needs `$LINEAR_API_KEY`. Optional `~/.config/cliban/linear.toml` sets the
 default team and any state-name overrides; never put the token in it.
