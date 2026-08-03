@@ -477,7 +477,8 @@ declared rather than negotiated**:
 
 | Field | Owner | What that means |
 |---|---|---|
-| title, priority, labels, due date, workflow state, `## Spec` | Linear | a re-import overwrites local edits (and warns first) |
+| title, priority, labels, due date, workflow state | Linear | a re-import overwrites local edits (and warns first) |
+| `## Spec` | whoever created the pairing | `import` made the link → Linear owns it and a re-import refreshes it; `push --create` made the link → cliban owns it and a re-import leaves it alone. `push --description` may always mirror it outward |
 | `## Plan`, `## Activity Log`, `## Notes` | cliban | a re-import never touches them |
 | Linear description outside cliban's fence, Linear comments | humans | never modified |
 

@@ -37,6 +37,12 @@ pub const SCHEMA_VERSION: i64 = 20260713000002;
 /// the sibling's and flip the sibling's entry from "newer, fine" to "unknown,
 /// refuse" in the runner below.
 pub const REMOTE_LINKS_DDL: &[&str] = &[
+    // `origin` records who created the pairing ('imported' | 'pushed') and
+    // decides which side owns the `## Spec` prose. It appears here so fresh
+    // databases get it; a table that predates the column (an older build, or a
+    // sibling fork's vendored copy of this DDL) is upgraded by the pragma-check
+    // ALTER in `cliban-sync::links::ensure_table` — additive, idempotent, and
+    // deliberately NOT a `SCHEMA_VERSION` bump, per the essay above.
     r#"CREATE TABLE IF NOT EXISTS "remote_links" (
         "id" INTEGER PRIMARY KEY AUTOINCREMENT,
         "provider" TEXT NOT NULL,
@@ -48,7 +54,8 @@ pub const REMOTE_LINKS_DDL: &[&str] = &[
         "base_hash" TEXT,
         "last_synced_at" TEXT NOT NULL,
         "inserted_at" TEXT NOT NULL,
-        "updated_at" TEXT NOT NULL
+        "updated_at" TEXT NOT NULL,
+        "origin" TEXT NOT NULL DEFAULT 'imported'
     )"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "remote_links_local_index"
         ON "remote_links" ("provider", "entity", "local_id")"#,

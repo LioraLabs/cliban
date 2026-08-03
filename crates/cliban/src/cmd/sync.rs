@@ -7,10 +7,13 @@
 //! for it.
 //!
 //! What each side owns is fixed and not negotiable at runtime. Linear owns
-//! title, priority, labels, due date, workflow state, and the `## Spec` prose.
-//! cliban owns `## Plan`, `## Activity Log`, and `## Notes` — an agent's
-//! half-ticked plan survives every refresh, which is the guarantee that makes
-//! the bridge safe to run repeatedly.
+//! title, priority, labels, due date, and workflow state. The `## Spec` prose
+//! follows the link's recorded origin: a pairing created by `import` means
+//! Linear wrote the spec first and a re-import refreshes it; a pairing created
+//! by `push --create` means the spec was born on the board and a re-import
+//! leaves it alone. cliban owns `## Plan`, `## Activity Log`, and `## Notes` —
+//! an agent's half-ticked plan survives every refresh, which is the guarantee
+//! that makes the bridge safe to run repeatedly.
 
 use cliban_core::contexts::{activity_log, issues};
 use cliban_core::schema::Issue;
@@ -173,18 +176,21 @@ async fn import_linear(db: &Option<String>, args: ImportLinearArgs) -> CliResult
         return Ok(());
     }
 
-    let (issue, action) = match target {
-        ImportTarget::Existing(existing) => {
-            let refreshed = refresh_existing(&store, existing, &remote, &mapped).await?;
-            (refreshed, "refreshed")
+    let (issue, action, origin) = match target {
+        ImportTarget::Existing(existing, origin) => {
+            let refreshed = refresh_existing(&store, existing, &remote, &mapped, origin).await?;
+            (refreshed, "refreshed", origin)
         }
+        // Adopting creates the pairing right now, via import — so its origin
+        // is `Imported`, and this refresh installs Linear's spec.
         ImportTarget::Adopt(existing) => {
-            let refreshed = refresh_existing(&store, existing, &remote, &mapped).await?;
-            (refreshed, "adopted")
+            let origin = links::Origin::Imported;
+            let refreshed = refresh_existing(&store, existing, &remote, &mapped, origin).await?;
+            (refreshed, "adopted", origin)
         }
         ImportTarget::Create => {
             let created = create_from_remote(&store, &project, &remote, &mapped, &args).await?;
-            (created, "imported")
+            (created, "imported", links::Origin::Imported)
         }
     };
 
@@ -198,7 +204,7 @@ async fn import_linear(db: &Option<String>, args: ImportLinearArgs) -> CliResult
             .await?
     };
 
-    record_link(&store, &issue, &remote).await?;
+    record_link(&store, &issue, &remote, origin).await?;
     audit(
         &store,
         &issue,
@@ -233,8 +239,8 @@ async fn import_linear(db: &Option<String>, args: ImportLinearArgs) -> CliResult
 
 /// Where an import is going to land.
 enum ImportTarget {
-    /// Already linked — refresh in place.
-    Existing(Issue),
+    /// Already linked — refresh in place, honoring the link's recorded origin.
+    Existing(Issue, links::Origin),
     /// `--link-to` named an unlinked issue to adopt.
     Adopt(Issue),
     Create,
@@ -272,7 +278,7 @@ async fn resolve_import_target(
                 )));
             }
         }
-        return Ok(ImportTarget::Existing(issue));
+        return Ok(ImportTarget::Existing(issue, link.origin));
     }
 
     match link_to {
@@ -331,15 +337,24 @@ async fn create_from_remote(
 
 /// Refresh the Linear-owned fields of an issue that is (or is about to be)
 /// linked, preserving every cliban-owned description section.
+///
+/// Which side owns `## Spec` follows the link's origin: an imported pairing
+/// means the spec came from Linear and refreshes with it; a pushed pairing
+/// means the spec was written on the board, so a re-import leaves the whole
+/// description alone and refreshes only the scalar fields Linear always owns.
 async fn refresh_existing(
     store: &Store,
     issue: Issue,
     remote: &model::Issue,
     mapped: &states::Mapped,
+    origin: links::Origin,
 ) -> CliResult<Issue> {
     warn_on_local_edits(store, &issue).await?;
 
-    let description = render::refresh_description(&issue.description, remote);
+    let description = match origin {
+        links::Origin::Imported => render::refresh_description(&issue.description, remote),
+        links::Origin::Pushed => issue.description.clone(),
+    };
     let attrs = issues::UpdateIssue {
         title: Some(remote.title.clone()),
         description: Some(description),
@@ -363,7 +378,10 @@ async fn warn_on_local_edits(store: &Store, issue: &Issue) -> CliResult<()> {
     let link = store
         .call(move |conn| links::by_local(conn, PROVIDER_LINEAR, ENTITY_ISSUE, local_id))
         .await?;
-    let Some(base) = link.and_then(|l| l.base_hash) else {
+    let Some(link) = link else {
+        return Ok(());
+    };
+    let Some(base) = link.base_hash else {
         return Ok(());
     };
     let labels = {
@@ -372,10 +390,16 @@ async fn warn_on_local_edits(store: &Store, issue: &Issue) -> CliResult<()> {
             .call(move |conn| issues::label_names(conn, id))
             .await?
     };
-    if local_fingerprint(issue, &labels) != base {
+    // The origin the base hash was recorded under: for a pushed link the spec
+    // is cliban's, so it is outside both the hash and the field list.
+    if local_fingerprint(issue, &labels, link.origin) != base {
+        let owned = match link.origin {
+            links::Origin::Imported => "title, priority, labels, due date, ## Spec",
+            links::Origin::Pushed => "title, priority, labels, due date",
+        };
         eprintln!(
             "warning: {} has local edits to fields Linear owns \
-             (title, priority, labels, due date, ## Spec); refreshing overwrites them",
+             ({owned}); refreshing overwrites them",
             issue.key
         );
     }
@@ -385,12 +409,21 @@ async fn warn_on_local_edits(store: &Store, issue: &Issue) -> CliResult<()> {
 /// Fingerprint of the remote-owned fields as they currently stand locally. At
 /// import time this equals the fingerprint of what we just wrote, so a later
 /// mismatch means someone edited the local copy.
-fn local_fingerprint(issue: &Issue, labels: &[String]) -> String {
-    let (start, end, found) = sections::find_section(&issue.description, render::SPEC);
-    let spec = if found {
-        &issue.description[start..end]
-    } else {
-        ""
+///
+/// `## Spec` counts as remote-owned only on an imported-origin link. On a
+/// pushed-origin link the spec belongs to the board — editing it is normal
+/// work, not drift, and it must not trip the overwrite warning.
+fn local_fingerprint(issue: &Issue, labels: &[String], origin: links::Origin) -> String {
+    let spec = match origin {
+        links::Origin::Imported => {
+            let (start, end, found) = sections::find_section(&issue.description, render::SPEC);
+            if found {
+                &issue.description[start..end]
+            } else {
+                ""
+            }
+        }
+        links::Origin::Pushed => "",
     };
     let due = issue.due_date.map(time::format_date).unwrap_or_default();
     cliban_sync::fingerprint(&[
@@ -551,7 +584,13 @@ async fn push_linear(db: &Option<String>, args: PushLinearArgs) -> CliResult<()>
             .map_err(sync_err)?;
     }
 
-    record_link(&store, &issue, &remote).await?;
+    // A push that just created the Linear issue is the one place a pairing is
+    // born with origin `Pushed` — the spec lived on the board first.
+    let origin = match link.as_ref() {
+        Some(link) => link.origin,
+        None => links::Origin::Pushed,
+    };
+    record_link(&store, &issue, &remote, origin).await?;
     let verb = if created { "created" } else { "pushed" };
     audit(
         &store,
@@ -625,7 +664,16 @@ async fn ensure_links_table(store: &Store) -> CliResult<()> {
     Ok(())
 }
 
-async fn record_link(store: &Store, issue: &Issue, remote: &model::Issue) -> CliResult<()> {
+/// `origin` is honored only when this call creates the pairing; on an existing
+/// row the upsert keeps the recorded origin. It still matters on every call,
+/// because the base hash must be computed under the same origin the next
+/// `warn_on_local_edits` will read back.
+async fn record_link(
+    store: &Store,
+    issue: &Issue,
+    remote: &model::Issue,
+    origin: links::Origin,
+) -> CliResult<()> {
     let labels = {
         let id = issue.id;
         store
@@ -648,7 +696,8 @@ async fn record_link(store: &Store, issue: &Issue, remote: &model::Issue) -> Cli
         remote_id: remote.id.clone(),
         remote_key: remote.identifier.clone(),
         remote_updated_at: Some(remote.updated_at),
-        base_hash: Some(local_fingerprint(&current, &labels)),
+        base_hash: Some(local_fingerprint(&current, &labels, origin)),
+        origin,
     };
     store.call(move |conn| links::upsert(conn, new)).await?;
     Ok(())
@@ -695,7 +744,7 @@ fn report_import_plan(
     target: &ImportTarget,
 ) {
     let action = match target {
-        ImportTarget::Existing(i) => format!("refresh {}", i.key),
+        ImportTarget::Existing(i, _) => format!("refresh {}", i.key),
         ImportTarget::Adopt(i) => format!("adopt {}", i.key),
         ImportTarget::Create => format!("create a new issue in {}", args.project.to_uppercase()),
     };
@@ -728,8 +777,11 @@ fn report_import_plan(
     if mapped.archive {
         println!("  archived: yes (cancelled in Linear)");
     }
-    if matches!(target, ImportTarget::Existing(_) | ImportTarget::Adopt(_)) {
+    if matches!(target, ImportTarget::Existing(..) | ImportTarget::Adopt(_)) {
         println!("  ## Plan, ## Activity Log and ## Notes are preserved");
+    }
+    if matches!(target, ImportTarget::Existing(_, links::Origin::Pushed)) {
+        println!("  ## Spec is preserved too (this pairing was created by push --create)");
     }
 }
 

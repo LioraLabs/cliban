@@ -576,12 +576,15 @@ default team and any state-name overrides; never put the token in it.
 
 | Field | Owner |
 |---|---|
-| title, priority, labels, due date, workflow state, `## Spec` | Linear — a re-import overwrites your local edits |
+| title, priority, labels, due date, workflow state | Linear — a re-import overwrites your local edits |
+| `## Spec` | follows who created the pairing: link born from `import` → Linear owns it (re-import refreshes it); link born from `push --create` → cliban owns it (re-import leaves it alone; `push --description` may always mirror it outward) |
 | `## Plan`, `## Activity Log`, `## Notes` | cliban — a re-import never touches them |
 | Linear description outside cliban's fenced block, Linear comments | humans — never modified |
 
-So: re-import as often as you like, your ticked plan survives. But don't edit
-the title or spec locally and expect it to stick — change it in Linear.
+So: re-import as often as you like, your ticked plan survives. But on an
+imported issue, don't edit the title or spec locally and expect it to stick —
+change it in Linear. An issue you pushed out with `--create` keeps its local
+spec forever.
 
 **Statuses.** `backlog` / `in-progress` / `done` round-trip cleanly.
 `blocked` and `in-review` only survive if the Linear team has a column named for

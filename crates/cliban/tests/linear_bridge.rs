@@ -625,6 +625,142 @@ fn push_dry_run_writes_nothing_and_shows_the_comment() {
     );
 }
 
+// ---- per-link origin: spec ownership follows who created the pairing ----
+
+#[test]
+fn reimport_over_a_pushed_origin_link_keeps_the_local_spec() {
+    let board = Board::new("pushedorigin");
+
+    // The issue is born on the board, spec and all — cliban owns that spec.
+    board
+        .run(
+            &["issue", "add", "--project", "PROJ", "--title", "Local work"],
+            None,
+        )
+        .assert_ok();
+    let description = "## Spec\n\nThe LOCAL spec, written on the board.\n\n## Plan\n\n\
+                       ### Task 1: do it\n\n- [ ] **Step 1: start**\n";
+    board
+        .run(
+            &["issue", "edit", "PROJ-1", "--description", description],
+            None,
+        )
+        .assert_ok();
+
+    // push --create is what stamps the link's origin as 'pushed'.
+    let create_stub = Stub::start(HashMap::from([
+        ("TeamByKey".to_string(), team_reply()),
+        (
+            "IssueCreate".to_string(),
+            serde_json::json!({"data": {"issueCreate": {"success": true,
+                "issue": linear_issue("Local work", ("Todo", "unstarted"),
+                                      "2026-07-29T12:00:00.000Z")}}})
+            .to_string(),
+        ),
+        (
+            "CommentCreate".to_string(),
+            serde_json::json!({"data": {"commentCreate": {"success": true}}}).to_string(),
+        ),
+    ]));
+    board
+        .run(
+            &["push", "linear", "PROJ-1", "--create", "--team", "ENG"],
+            Some(&create_stub),
+        )
+        .assert_ok();
+
+    // Re-import: Linear still owns the title, but the spec stays local.
+    let stub = Stub::start(import_replies(
+        "Renamed upstream",
+        ("In Progress", "started"),
+        "2026-07-30T12:00:00.000Z",
+    ));
+    let run = board.run(
+        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        Some(&stub),
+    );
+    run.assert_ok();
+    let out: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(out["action"], "refreshed");
+    assert!(
+        !run.stderr.contains("local edits"),
+        "a locally owned spec must not read as drift: {}",
+        run.stderr
+    );
+
+    let issue = board.show("PROJ-1");
+    assert_eq!(
+        issue["title"], "Renamed upstream",
+        "Linear still owns the title, whatever the origin"
+    );
+    let description = issue["description"].as_str().unwrap();
+    assert!(
+        description.contains("The LOCAL spec, written on the board."),
+        "a pushed-origin link means cliban owns the spec — the re-import ate it:\n{description}"
+    );
+    assert!(
+        !description.contains("The upstream spec text."),
+        "the upstream description must not replace a cliban-owned spec:\n{description}"
+    );
+    assert!(
+        description.contains("- [ ] **Step 1: start**"),
+        "the plan must survive as always:\n{description}"
+    );
+}
+
+#[test]
+fn reimport_over_an_imported_origin_link_still_refreshes_the_spec() {
+    let board = Board::new("importedorigin");
+    let stub = Stub::start(import_replies(
+        "Upstream work",
+        ("Todo", "unstarted"),
+        "2026-07-29T12:00:00.000Z",
+    ));
+    let run = board.run(
+        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        Some(&stub),
+    );
+    run.assert_ok();
+    let key = serde_json::from_str::<serde_json::Value>(&run.stdout).unwrap()["cliban"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Someone edits the spec locally. For an imported-origin link that edit
+    // does not stick — Linear owns the spec, exactly as before this feature.
+    let edited = "## Spec\n\nLOCAL EDIT that must not survive\n\n## Plan\n\n\
+                  ### Task 1: t\n\n- [ ] **Step 1: s**\n";
+    board
+        .run(&["issue", "edit", &key, "--description", edited], None)
+        .assert_ok();
+
+    let stub2 = Stub::start(import_replies(
+        "Upstream work",
+        ("Todo", "unstarted"),
+        "2026-07-30T12:00:00.000Z",
+    ));
+    let run = board.run(
+        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        Some(&stub2),
+    );
+    run.assert_ok();
+    assert!(
+        run.stderr.contains("local edits"),
+        "the overwrite should be announced first: {}",
+        run.stderr
+    );
+
+    let description = board.show(&key)["description"].as_str().unwrap().to_string();
+    assert!(
+        description.contains("The upstream spec text."),
+        "imported-origin spec must refresh from Linear:\n{description}"
+    );
+    assert!(
+        !description.contains("LOCAL EDIT that must not survive"),
+        "the local edit should have been overwritten:\n{description}"
+    );
+}
+
 // ---- failure paths that need no network at all ----
 
 #[test]

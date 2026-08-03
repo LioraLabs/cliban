@@ -117,6 +117,16 @@ fn a_fresh_database_gets_remote_links() {
     let conn = Connection::open_in_memory().unwrap();
     assert!(migrations::run(&conn).unwrap());
     assert!(has_table(&conn, "remote_links"));
+    // Including the columns added after the table first shipped — the fresh
+    // path must land where `cliban-sync::links::ensure_table` upgrades to.
+    let has_origin: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('remote_links') WHERE name = 'origin'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has_origin, 1);
 }
 
 #[test]
