@@ -1,13 +1,12 @@
 //! Parses and mutates the cliban issue/milestone description markdown contract.
 //!
-//! Ported verbatim in behavior from the Go `internal/descmd/descmd.go`. All
-//! functions are pure: input string in, output string + error out. The store
+//! All functions are pure: input string in, output string + error out. The store
 //! layer wraps these in SQL transactions so mutations are atomic.
 
 use chrono::{DateTime, Utc};
 
 /// Timestamp format for `## Activity Log` entries: RFC-3339 with minute
-/// precision, UTC, "Z" suffix (Go layout "2006-01-02T15:04Z").
+/// precision, UTC, "Z" suffix.
 const ACTIVITY_LOG_TIME_FORMAT: &str = "%Y-%m-%dT%H:%MZ";
 
 /// Locating an H2 section now lives in `cliban_core::sections`, because the
@@ -56,8 +55,8 @@ pub fn find_task(plan_body: &str, n: i32) -> (usize, usize, bool) {
 
 /// One bite-sized step line in a Task body.
 pub struct Step {
-    /// 1-based step index within the task. Part of the parsed descmd `Step`
-    /// contract (Go `descmd.Step`); reserved for future step-level mutations.
+    /// 1-based step index within the task; reserved for future step-level
+    /// mutations.
     #[allow(dead_code)]
     pub index: i32,
     /// Current checkbox state.
@@ -65,7 +64,7 @@ pub struct Step {
     /// Byte offset of the line start within the task body.
     pub line_start: usize,
     /// Byte offset just past the trailing newline (or len(task) if last).
-    /// Reserved for future step-level mutations (mirrors Go `descmd.Step`).
+    /// Reserved for future step-level mutations.
     #[allow(dead_code)]
     pub line_end: usize,
     /// The full line content including the trailing newline (and \r if input

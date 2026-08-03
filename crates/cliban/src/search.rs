@@ -1,7 +1,7 @@
-//! Fuzzy search over issues, ported to match the Go oracle
-//! (`internal/search`). The scorer is a verbatim port of
-//! `github.com/sahilm/fuzzy` v0.1.2 (`fuzzy.go`) so that per-field scores —
-//! and therefore the summed `score` and the result ORDER — match byte-for-byte.
+//! Fuzzy search over issues. The scorer implements the
+//! `github.com/sahilm/fuzzy` v0.1.2 algorithm, so per-field scores — and
+//! therefore the summed `score` and the result order — are stable across
+//! releases.
 
 use cliban_core::contexts::issues::{self, ListOpts};
 use cliban_core::contexts::milestones;
@@ -25,15 +25,14 @@ fn is_separator(c: char) -> bool {
     SEPARATORS.contains(&c)
 }
 
-/// `unicode.SimpleFold`-free ASCII-leaning equalFold, matching Go's
-/// `strings.EqualFold` for the rune pairs this code compares. For ASCII it is
-/// exact; for non-ASCII it falls back to Rust's `char::eq_ignore` semantics via
-/// simple case folding, which matches Go for the common cases.
+/// ASCII-leaning case-insensitive rune comparison: exact for ASCII, simple
+/// case folding for the rest — which covers the rune pairs this code
+/// actually compares.
 fn equal_fold(tr: char, sr: char) -> bool {
     if tr == sr {
         return true;
     }
-    // Order so that `tr >= sr` like the Go code.
+    // Order so that `tr >= sr`.
     let (tr, sr) = if tr < sr { (sr, tr) } else { (tr, sr) };
     if (tr as u32) < 0x80 {
         // ASCII, sr is upper case → tr must be lower case.
@@ -42,7 +41,7 @@ fn equal_fold(tr: char, sr: char) -> bool {
         }
         return false;
     }
-    // General (non-ASCII) case: compare simple-folded forms. Go uses
+    // General (non-ASCII) case: compare simple-folded forms. Full Unicode
     // unicode.SimpleFold iteration; for the inputs cliban deals with this
     // lowercase-comparison is equivalent for matching purposes.
     tr.to_lowercase().eq(sr.to_lowercase())
@@ -61,8 +60,7 @@ fn adjacent_char_bonus(i: usize, last_match: usize, current_bonus: i64) -> i64 {
 /// matched_byte_offsets)` when every pattern rune is matched in order, else
 /// `None`.
 ///
-/// Indexes are byte offsets into `text` (matching the Go code, which records
-/// `j`, a byte index, in `MatchedIndexes`).
+/// Indexes are byte offsets into `text`.
 pub fn fuzzy_find(pattern: &str, text: &str) -> Option<(i64, Vec<usize>)> {
     if pattern.is_empty() {
         return None;
@@ -75,8 +73,8 @@ pub fn fuzzy_find(pattern: &str, text: &str) -> Option<(i64, Vec<usize>)> {
         None => text,
     };
 
-    // Pre-decode candidate runes with their byte offsets so we can do the
-    // `next` look-ahead the Go code performs by byte-indexing.
+    // Pre-decode candidate runes with their byte offsets for the `next`
+    // look-ahead below.
     let chars: Vec<(usize, char)> = clean.char_indices().collect();
     let n = chars.len();
 
@@ -117,9 +115,9 @@ pub fn fuzzy_find(pattern: &str, text: &str) -> Option<(i64, Vec<usize>)> {
             }
         }
 
-        // Determine the next pattern rune and the next candidate rune (byte
-        // value-wise look-ahead mirrors the Go code; for matching purposes the
-        // decoded rune is what matters).
+        // Determine the next pattern rune and the next candidate rune (the
+        // look-ahead compares byte values; for matching purposes the decoded
+        // rune is what matters).
         let nextp: char = if pattern_index < runes.len() - 1 {
             runes[pattern_index + 1]
         } else {
@@ -138,7 +136,7 @@ pub fn fuzzy_find(pattern: &str, text: &str) -> Option<(i64, Vec<usize>)> {
             matched_index = -1;
             pattern_index += 1;
             if pattern_index >= runes.len() {
-                // All pattern runes consumed. The Go loop continues to the
+                // All pattern runes consumed. The loop continues to the
                 // end of the string but never matches again (pattern_index
                 // out of range); replicate by breaking after the final
                 // per-char penalty accounting below.
@@ -168,7 +166,7 @@ pub fn fuzzy_find(pattern: &str, text: &str) -> Option<(i64, Vec<usize>)> {
     }
 }
 
-// ---- description stripping (internal/search/strip.go) ----
+// ---- description stripping ----
 
 const MAX_DESC_BYTES: usize = 4096;
 
@@ -192,9 +190,8 @@ pub fn strip_description(s: &str) -> String {
     let s = re_link.replace_all(&s, "$1");
     let mut s = s.into_owned();
     if s.len() > MAX_DESC_BYTES {
-        // Byte-truncate, then back off to a char boundary (Go slices raw bytes;
-        // for ASCII these agree, and truncating to a boundary is the safe Rust
-        // equivalent — fuzzy matching is unaffected by a dropped partial rune).
+        // Byte-truncate, then back off to a char boundary — fuzzy matching
+        // is unaffected by a dropped partial rune.
         let mut cut = MAX_DESC_BYTES;
         while cut > 0 && !s.is_char_boundary(cut) {
             cut -= 1;
@@ -204,7 +201,7 @@ pub fn strip_description(s: &str) -> String {
     s
 }
 
-// ---- weighted multi-field search (internal/search/search.go) ----
+// ---- weighted multi-field search ----
 
 const WEIGHT_TITLE: i64 = 30;
 const WEIGHT_KEY: i64 = 25;
@@ -217,7 +214,7 @@ pub struct Match {
     pub score: i64,
 }
 
-/// Options for [`search`], mirroring Go `search.Options`. Each filter field is
+/// Options for [`search`]. Each filter field is
 /// the resolved (parsed/normalized) value, an empty option meaning "no filter".
 pub struct Options {
     pub query: String,
@@ -240,9 +237,8 @@ fn project_prefix(key: &str) -> &str {
     }
 }
 
-/// Base ordering matching the Go store query (`ORDER BY p.key, i.status,
-/// i.position`). Establishes the stable-sort input order so score/updated_at
-/// tiebreaks resolve identically to the oracle.
+/// Base ordering (`ORDER BY p.key, i.status, i.position`): the stable-sort
+/// input order, so score/updated_at tiebreaks resolve deterministically.
 fn base_order(issues: &mut [Issue]) {
     issues.sort_by(|a, b| {
         project_prefix(&a.key)
@@ -305,8 +301,7 @@ pub async fn search(store: &Store, opts: Options) -> CliResult<Vec<Match>> {
         issues.retain(|i| &i.priority == pr);
     }
     if let Some(pk) = &parent_key {
-        // Go's search.Search parses the parent key up front and errors on a
-        // malformed key.
+        // Parse the parent key up front so a malformed key errors early.
         let parsed = crate::cmd::issue::parse_issue_key_pub(pk)
             .map_err(|e| CliError::other(format!("parent key {pk:?}: {}", e.message())))?;
         let lookup = parsed.clone();
@@ -336,7 +331,7 @@ pub async fn search(store: &Store, opts: Options) -> CliResult<Vec<Match>> {
         issues = kept;
     }
 
-    // Establish the Go store's input ordering before the stable result sort.
+    // Establish the base input ordering before the stable result sort.
     base_order(&mut issues);
 
     let q = opts.query.trim();
@@ -350,7 +345,7 @@ pub async fn search(store: &Store, opts: Options) -> CliResult<Vec<Match>> {
         // stable sort by updated_at desc
         matches.sort_by_key(|m| std::cmp::Reverse(m.issue.updated_at));
     } else {
-        // Resolve labels per issue (one lookup each — matches the bulk Go path
+        // Resolve labels per issue (one lookup each — same result as a bulk path
         // result, just N round-trips on our writer thread).
         matches = Vec::with_capacity(issues.len());
         for issue in issues.into_iter() {

@@ -1,5 +1,4 @@
-//! `cliban milestone` subcommands. Output is byte-for-byte parity with the Go
-//! oracle (`internal/cli/milestone.go`).
+//! `cliban milestone` subcommands.
 
 use chrono::NaiveDate;
 use serde_json::{json, Map, Value};
@@ -110,14 +109,6 @@ pub enum MilestoneCmd {
         #[arg(long = "clear-target")]
         clear_target: bool,
     },
-    /// Cancels instead of deleting (kept for muscle memory; hidden)
-    #[command(hide = true)]
-    Rm {
-        #[arg(long)]
-        project: String,
-        #[arg(long)]
-        name: String,
-    },
 }
 
 pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
@@ -185,34 +176,11 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             )
             .await
         }
-        MilestoneCmd::Rm { project, name } => {
-            // `cancelled` is a milestone's archived state, so that is what a
-            // delete becomes.
-            let project_key = project.to_uppercase();
-            edit(
-                db,
-                project_key.clone(),
-                name.clone(),
-                None,
-                None,
-                None,
-                Some("cancelled".to_string()),
-                None,
-                false,
-            )
-            .await?;
-            println!(
-                "cancelled milestone {name} in {project_key} — cliban cancels instead of \
-                 deleting (undo: cliban milestone edit --project {project_key} --name {name} \
-                 --status open)"
-            );
-            Ok(())
-        }
     }
 }
 
-/// `parseTarget`: empty → None; otherwise parse `YYYY-MM-DD`. A parse failure is
-/// a plain (exit-3) error in Go (NOT wrapped in ErrValidation).
+/// Parse `--target`: empty → None; otherwise `YYYY-MM-DD`. A parse failure
+/// is a plain exit-3 error, deliberately not a validation error.
 fn parse_target(s: &str) -> CliResult<Option<NaiveDate>> {
     if s.is_empty() {
         return Ok(None);
@@ -516,7 +484,7 @@ async fn show(
 
     if json {
         // Build alpha-ordered map inline so `issues` lands between issue_count
-        // and name (matches Go's map[string]any alphabetical serialization).
+        // and name (keys stay alphabetical).
         let mut map = Map::new();
         map.insert("created_at".into(), json!(format_usec(m.inserted_at)));
         map.insert("description".into(), json!(m.description));

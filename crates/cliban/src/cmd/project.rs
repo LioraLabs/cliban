@@ -1,5 +1,4 @@
-//! `cliban project` subcommands. Output is byte-for-byte parity with the Go
-//! oracle (`internal/cli/project.go`).
+//! `cliban project` subcommands.
 
 use std::io::Read;
 
@@ -83,14 +82,6 @@ pub enum ProjectCmd {
     Archive { key: String },
     /// Unarchive a project
     Unarchive { key: String },
-    /// Archives instead of deleting (kept for muscle memory; hidden)
-    #[command(hide = true)]
-    Rm {
-        key: String,
-        /// accepted and ignored — archiving needs no force
-        #[arg(long)]
-        force: bool,
-    },
 }
 
 #[derive(clap::Subcommand)]
@@ -161,15 +152,6 @@ pub async fn run(db: &Option<String>, args: ProjectArgs) -> CliResult<()> {
         },
         ProjectCmd::Archive { key } => set_archived(db, key, true).await,
         ProjectCmd::Unarchive { key } => set_archived(db, key, false).await,
-        ProjectCmd::Rm { key, force: _ } => {
-            let key = key.to_uppercase();
-            set_archived(db, key.clone(), true).await?;
-            println!(
-                "archived project {key} — cliban archives instead of deleting \
-                 (undo: cliban project unarchive {key})"
-            );
-            Ok(())
-        }
     }
 }
 
@@ -506,11 +488,9 @@ async fn edit(
 ) -> CliResult<()> {
     let key = key.to_uppercase();
     let description = resolve_description(description, description_file)?;
-    // Parse the duration before opening the store so a bad value fails fast,
-    // matching Go's order of effects only for the auto-archive update (which
-    // Go runs after the name/description update — but parse errors there abort
-    // before any DB write of the duration). Go updates name/desc first, then
-    // sets the duration. We mirror that: parse here, write both via store.
+    // Parse the duration before opening the store so a bad value fails fast
+    // and nothing is half-written: name/description first, then the
+    // auto-archive duration, both inside one store call.
     let days = match &auto_archive_done_after {
         Some(s) => Some(parse_duration_days(s)?),
         None => None,

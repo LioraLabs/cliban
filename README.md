@@ -223,9 +223,9 @@ rewrite itself is recorded: `description rewritten, dropped ## Activity
 Log`).
 
 Nothing is ever deleted. A deleted row would take its timeline with it, so
-`issue rm` and `project rm` archive, `milestone rm` cancels, and each
-reports what it really did and how to undo it. (`label rm` still deletes: a
-label is a tag, not a work item.)
+there is no `rm` for work items at all — archiving and cancelling are the
+whole vocabulary, both reversible and both recorded. (`label rm` exists and
+deletes: a label is a tag, not a work item.)
 
 ## Persistent agent memory
 
@@ -248,13 +248,11 @@ without loading the whole archive.
 
 ## Finding things
 
-Three surfaces share one matcher (title ×3.0, key ×2.5, labels ×2.0,
+Two surfaces share one matcher (title ×3.0, key ×2.5, labels ×2.0,
 description ×1.0):
 
 - `cliban issue ls --search QUERY` — pipeable, adds a `score` field, respects
   every other `ls` filter.
-- `cliban fff [QUERY]` — prints the selected key to stdout:
-  `cliban issue show $(cliban fff)`. Batch NDJSON when stdin isn't a TTY.
 - `/` inside the TUI — fuzzy overlay that snaps the cursor to the match.
 
 ## The TUI

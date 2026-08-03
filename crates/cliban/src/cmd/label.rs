@@ -1,5 +1,4 @@
-//! `cliban label` subcommands. Output is byte-for-byte parity with the Go
-//! oracle (`internal/cli/label.go`).
+//! `cliban label` subcommands.
 
 use cliban_core::contexts::{labels, projects};
 

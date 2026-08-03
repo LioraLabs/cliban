@@ -84,8 +84,8 @@ pub fn parse_since(s: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     parse_ts(s)
 }
 
-/// A single signed decimal with a unit suffix. Supersets Go's
-/// `time.ParseDuration` units with `d` (day) and `w` (week), which is what
+/// A single signed decimal with a unit suffix: `s`/`m`/`h` plus `d` (day)
+/// and `w` (week), which is what
 /// people reach for first when asking "what changed since yesterday".
 pub fn parse_duration(s: &str) -> Option<chrono::Duration> {
     let s = s.trim();

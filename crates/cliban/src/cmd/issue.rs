@@ -1,5 +1,4 @@
-//! `cliban issue` subcommands. Output is byte-for-byte parity with the Go
-//! oracle (`internal/cli/issue.go`).
+//! `cliban issue` subcommands.
 
 use std::io::{Read, Write};
 
@@ -59,9 +58,6 @@ pub enum IssueCmd {
         #[arg(long, allow_hyphen_values = true)]
         note: Option<String>,
     },
-    /// Archives instead of deleting (kept for muscle memory; hidden)
-    #[command(hide = true)]
-    Rm { key: String },
     /// Archive an issue (hides it from the default board and lists)
     Archive { key: String },
     /// Unarchive an issue
@@ -421,16 +417,6 @@ pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
         IssueCmd::ArchiveDone(a) => archive_done(db, a).await,
         IssueCmd::Import(a) => import(db, a).await,
         IssueCmd::Mv { key, status, note } => mv(db, key, status, note).await,
-        IssueCmd::Rm { key } => {
-            // Do the closest safe thing rather than spending a turn refusing.
-            let key = parse_issue_key(&key)?;
-            set_archived(db, key.clone(), true).await?;
-            println!(
-                "archived {key} — cliban archives instead of deleting \
-                 (undo: cliban issue unarchive {key})"
-            );
-            Ok(())
-        }
         IssueCmd::Archive { key } => set_archived(db, key, true).await,
         IssueCmd::Unarchive { key } => set_archived(db, key, false).await,
         IssueCmd::Current { json } => current(db, json).await,
@@ -457,9 +443,9 @@ pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
     }
 }
 
-/// `domain.ParseStatus`: lowercase+trim, must be a known status. Returns a
-/// plain (exit-3) error to mirror the Go oracle, which does NOT wrap this in
-/// `ErrValidation` at the `issue mv`/`issue ls` call sites.
+/// Parse a status: lowercase+trim, must be a known status. Returns a plain
+/// exit-3 error — deliberately not a validation error — at the `issue mv`/
+/// `issue ls` call sites.
 fn parse_status(s: &str) -> Result<String, CliError> {
     let norm = s.trim().to_lowercase();
     if ISSUE_STATUSES.contains(&norm.as_str()) {
@@ -472,7 +458,7 @@ fn parse_status(s: &str) -> Result<String, CliError> {
 }
 
 /// `domain.ParsePriority`: lowercase+trim, must be a known priority. Plain
-/// (exit-3) error, mirroring the Go oracle.
+/// (exit-3) error.
 fn parse_priority(s: &str) -> Result<String, CliError> {
     let norm = s.trim().to_lowercase();
     if ISSUE_PRIORITIES.contains(&norm.as_str()) {
@@ -496,7 +482,7 @@ fn priority_rank(p: &str) -> i32 {
 }
 
 /// `ParseIssueKey`: trim, split on the LAST `-`. Returns the normalized key
-/// `"<UPPER>-<seq>"`. Mirrors Go `domain.ParseIssueKey`.
+/// `"<UPPER>-<seq>"`.
 fn parse_issue_key(s: &str) -> Result<String, CliError> {
     let s = s.trim();
     match s.rfind('-') {
@@ -579,13 +565,13 @@ async fn add(db: &Option<String>, a: AddArgs) -> CliResult<()> {
         ));
     }
 
-    // Pre-parse the parent key (Go parses before the store call).
+    // Pre-parse the parent key before any store work.
     let parent_key = match &a.parent {
         Some(p) if !p.is_empty() => Some(parse_issue_key(p)?),
         _ => None,
     };
 
-    // Parse the due date (Go parseDueDate, validation on failure).
+    // Parse the due date (validation error on failure).
     let due_date = match &a.due {
         Some(d) if !d.is_empty() => match parse_date(d) {
             Some(dt) => Some(dt),
@@ -598,7 +584,7 @@ async fn add(db: &Option<String>, a: AddArgs) -> CliResult<()> {
         _ => None,
     };
 
-    // Normalize the relation key flags up front (Go ParseIssueKey on each).
+    // Normalize the relation key flags up front.
     let blocks: Vec<String> = a
         .blocks
         .iter()
@@ -641,7 +627,7 @@ async fn add(db: &Option<String>, a: AddArgs) -> CliResult<()> {
         })
         .await?;
 
-    // Step 2: attach labels (idempotent, sequential — matches Go).
+    // Step 2: attach labels (idempotent, sequential).
     for lbl in a.label {
         let id = issue.id;
         let name = lbl;
@@ -687,7 +673,7 @@ async fn add(db: &Option<String>, a: AddArgs) -> CliResult<()> {
     print_issue_result(&store, &issue, "created", a.json).await
 }
 
-/// Mirrors Go `printIssueResult`: human `{verb} {KEY}: {title}\n`; json pretty.
+/// Echo a mutated issue: human `{verb} {KEY}: {title}\n`; json pretty.
 async fn print_issue_result(store: &Store, issue: &Issue, verb: &str, json: bool) -> CliResult<()> {
     if json {
         let inputs = issue_json_inputs(store, issue).await?;
@@ -855,7 +841,7 @@ async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
         };
         let (start, end, ok) = find_section(&issue.description, &anchor);
         if !ok && recorded.is_empty() {
-            // Go wraps with %w on store.ErrNotFound → "not found: <msg>".
+            // Wrapped as "not found: <msg>" so the caller sees what was missing.
             return Err(CliError::not_found(format!(
                 "not found: no ## {anchor} section in {}",
                 a.key
@@ -986,21 +972,20 @@ fn parse_updated_since(s: &str) -> Result<chrono::DateTime<Utc>, CliError> {
 }
 
 async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
-    // --search branch. The flag being *present* (even empty) maps to Go's
-    // `cmd.Flags().Changed("search")`; an empty/whitespace value is a clean
-    // validation error.
+    // --search branch. The flag being *present* (even empty) selects the
+    // branch; an empty/whitespace value is a clean validation error.
     if let Some(raw) = &a.search {
         if raw.trim().is_empty() {
             return Err(CliError::validation("--search requires a non-empty query"));
         }
-        // --sort is ignored under --search; emit the Go note to stderr.
+        // --sort is ignored under --search; say so on stderr.
         if a.sort.is_some() {
             eprintln!("note: --sort is ignored when --search is set");
         }
         return run_search(db, &a, raw.clone()).await;
     }
 
-    // Pre-parse the typed filters (Go parses before the store call).
+    // Pre-parse the typed filters before any store work.
     let project = a.project.as_deref().map(str::to_uppercase);
     let status = match &a.status {
         Some(s) if !s.is_empty() => Some(parse_status(s)?),
@@ -1018,7 +1003,7 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
         Some(s) if !s.is_empty() => Some(parse_updated_since(s)?),
         _ => None,
     };
-    // Validate sort spec up front (matches Go: sort runs after the fetch, but a
+    // Validate the sort spec up front (sort runs after the fetch, but a
     // bad spec is a clean validation error either way).
     let sort = a.sort.clone().filter(|s| !s.is_empty());
     if let Some(spec) = &sort {
@@ -1028,7 +1013,7 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
     let store = store_open::open(db).await?;
 
     // Core list handles project/status/milestone, but its `archived` flag is an
-    // exact match (archived = this). Go's `--archived` means *include* archived:
+    // exact match (archived = this). `--archived` means *include* archived:
     // unset → only non-archived; set → both. So when set we fetch both and
     // concatenate (the base ordering below re-sorts the union).
     let list_project = project.clone();
@@ -1062,8 +1047,8 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
         })
         .await?;
 
-    // Rust-side filters applied AFTER fetch (Go applies these in the store
-    // query, but the net result set is identical).
+    // These filters apply after the fetch; the result set is the same as
+    // filtering in the query.
     if let Some(pr) = &priority {
         issues.retain(|i| &i.priority == pr);
     }
@@ -1100,7 +1085,7 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
         issues.retain(|i| i.updated_at >= threshold);
     }
 
-    // Base ordering mirrors the Go store query: ORDER BY p.key, i.status,
+    // Base ordering: ORDER BY p.key, i.status,
     // i.position (the issue key embeds the project key, so its prefix sorts by
     // project). The explicit --sort below is then applied stably on top.
     base_order(&mut issues);
@@ -1126,7 +1111,7 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
     Ok(())
 }
 
-/// `issue ls --search` branch. Mirrors Go `runIssueSearch`: default limit 50
+/// `issue ls --search` branch: default limit 50
 /// (the `--limit` flag overrides; 0 → 50), NDJSON rows carry a `score` field,
 /// human output uses the search table with a leading SCORE column.
 async fn run_search(db: &Option<String>, a: &LsArgs, query: String) -> CliResult<()> {
@@ -1187,7 +1172,7 @@ fn project_prefix(key: &str) -> &str {
     }
 }
 
-/// Base ordering matching the Go store: (project key, status, position).
+/// Base ordering: (project key, status, position).
 fn base_order(issues: &mut [Issue]) {
     issues.sort_by(|a, b| {
         project_prefix(&a.key)
@@ -1403,7 +1388,7 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
         match mid {
             Some(id) => Some(Some(id)),
             None => {
-                // Match Go: ErrNotFound "not found: milestone \"name\"".
+                // A missing milestone is not-found, not a validation error.
                 let n = a.milestone.clone().unwrap_or_default();
                 return Err(CliError::not_found(format!("not found: milestone {n:?}")));
             }
@@ -1412,7 +1397,7 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
         None
     };
 
-    // Resolve parent key → id (same-project + own-parent checks mirror Go).
+    // Resolve parent key → id (same-project + not-its-own-parent checks).
     let parent_field: Option<Option<i64>> = if a.clear_parent {
         Some(None)
     } else if let Some(pk) = parent_key.clone() {
@@ -1487,7 +1472,7 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
             })
             .await?;
     } else {
-        // Even with no field update, confirm the issue exists (Go fetches it).
+        // Even with no field update, confirm the issue exists.
         let lookup = key.clone();
         let cas_check = cas.clone();
         store
@@ -1749,7 +1734,7 @@ async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
     let key = parse_issue_key(&a.key)?;
     let project_part = project_prefix(&key).to_string();
 
-    // Up-front validations (mirror Go PromoteStep ordering).
+    // Up-front validations, before any store work.
     if a.title.is_empty() {
         return Err(CliError::validation("--title required"));
     }
@@ -1907,7 +1892,7 @@ async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
     Ok(())
 }
 
-/// Mirror Go `findStepForRewrite`: FindSection(Plan) → FindTask → FindStep,
+/// Locate a step line for rewriting: FindSection(Plan) → FindTask → FindStep,
 /// returning the raw step line.
 fn find_step_for_rewrite(desc: &str, task_n: i32, step_m: i32) -> Option<String> {
     let (plan_start, plan_end, ok) = find_section(desc, "Plan");
@@ -1922,7 +1907,7 @@ fn find_step_for_rewrite(desc: &str, task_n: i32, step_m: i32) -> Option<String>
     crate::descmd::find_step(&plan_body[task_start..task_end], step_m).map(|s| s.raw)
 }
 
-/// Mirror Go `buildPromotedLine`: strip an existing " → ..." suffix and append
+/// Build the promoted step line: strip an existing " → ..." suffix and append
 /// " → {NEWKEY}\n".
 fn build_promoted_line(original: &str, new_key: &str) -> String {
     let trimmed = original.trim_end_matches('\n');
@@ -1939,7 +1924,7 @@ async fn archive_done(db: &Option<String>, a: ArchiveDoneArgs) -> CliResult<()> 
         let n = store
             .call(|conn| {
                 let now = format_usec(cliban_core::time::now_usec());
-                // Per-project policy sweep (mirror Go SweepAutoArchive).
+                // Per-project policy sweep.
                 let mut pols: Vec<(String, i64)> = Vec::new();
                 {
                     let mut stmt = conn.prepare(
@@ -2284,7 +2269,7 @@ fn current_branch() -> Result<String, CliError> {
 async fn current(db: &Option<String>, json: bool) -> CliResult<()> {
     let branch = current_branch()?;
     let (proj, seq) = parse_branch(&branch).ok_or_else(|| {
-        // Go wraps with %w on store.ErrNotFound → "not found: <msg>".
+        // Wrapped as "not found: <msg>" so the caller sees what was missing.
         CliError::not_found(format!(
             "not found: no issue found for current branch {branch:?}"
         ))
@@ -2327,7 +2312,7 @@ async fn blocked(
     let mut issues = store
         .call(move |conn| relations::list_blocked(conn, pk.as_deref()))
         .await?;
-    // Match the Go store ordering: ORDER BY p.key, i.status, i.position.
+    // Base ordering: ORDER BY p.key, i.status, i.position.
     base_order(&mut issues);
     if json {
         for i in &issues {

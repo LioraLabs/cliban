@@ -1,9 +1,9 @@
-//! JSON + table output builders with Go-parity key ordering.
+//! JSON + table output builders.
 //!
-//! The Go binary renders JSON from `map[string]any`, which `encoding/json`
-//! serializes with ALPHABETICALLY sorted keys. We rely on the workspace
-//! `serde_json` `preserve_order` feature: insert keys in alphabetical order
-//! into a `Map` and the serialized output preserves that order.
+//! JSON keys are emitted in ALPHABETICAL order — a stable shape consumers can
+//! sort-merge and diff. We rely on the workspace `serde_json` `preserve_order`
+//! feature: insert keys in alphabetical order into a `Map` and the serialized
+//! output preserves that order.
 //!
 use serde_json::{json, Map, Value};
 
@@ -121,8 +121,7 @@ pub fn build_issue_json(i: IssueJsonInputs, detail: Detail) -> Value {
 }
 
 /// Build the NDJSON object for a search match: the full issue JSON plus a
-/// `score` field, with keys in alphabetical order (Go serializes a
-/// `map[string]any` so adding `out["score"]` lands it alphabetically between
+/// `score` field, keeping the keys alphabetical (`score` lands between
 /// `relations` and `status`).
 pub fn build_search_match_json(i: IssueJsonInputs, score: i64, detail: Detail) -> Value {
     let base = build_issue_json(i, detail);
@@ -221,7 +220,7 @@ pub fn build_milestone_json(
     Value::Object(m)
 }
 
-// ---- Table writers (Go text/tabwriter parity) ----
+// ---- Table writers ----
 
 pub struct IssueRow {
     pub key: String,
@@ -252,8 +251,8 @@ fn dash(s: &str) -> String {
     }
 }
 
-/// Render a grid of string cells (header + body) using Go's text/tabwriter
-/// semantics with minwidth=0, tabwidth=0, padding=2, padchar=' ', no flags.
+/// Render a grid of string cells (header + body): two spaces of padding
+/// between columns, space-padded, nothing trailing.
 ///
 /// Each column width = max cell width (in chars) across all rows. Every cell
 /// except the LAST in its row is right-padded with spaces to (colwidth + 2);

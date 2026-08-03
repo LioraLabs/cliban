@@ -1,6 +1,6 @@
 use cliban_core::Error;
 
-/// Map a core error to the Go binary's exit code: 1 not-found, 2 validation, 3 other.
+/// Map a core error to its exit code: 1 not-found, 2 validation, 3 other.
 pub fn exit_code_for(err: &Error) -> i32 {
     match err {
         Error::NotFound | Error::ProjectNotFound => 1,
@@ -9,7 +9,7 @@ pub fn exit_code_for(err: &Error) -> i32 {
     }
 }
 
-/// The human message printed after `error: `. Mirrors the Go strings.
+/// The human message printed after `error: `.
 pub fn message_for(err: &Error) -> String {
     match err {
         Error::NotFound | Error::ProjectNotFound => "not found".to_string(),

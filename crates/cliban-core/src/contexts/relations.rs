@@ -1,4 +1,4 @@
-//! Port of cliban's Go `internal/store/relation.go`. Issue-to-issue edges:
+//! Issue-to-issue edges:
 //! `blocks` (directional) and `related_to` (symmetric). `blocked_by` is the
 //! read-side reverse of an incoming `blocks` edge.
 

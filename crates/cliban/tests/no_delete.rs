@@ -51,85 +51,46 @@ fn seeded() -> String {
 }
 
 #[test]
-fn rm_archives_and_says_so_rather_than_refusing() {
+fn rm_is_not_a_command_for_work_items() {
+    // The Go-era muscle-memory aliases are gone: deleting a work item is not
+    // a thing cliban does under any spelling. clap refuses the subcommand.
     let db = seeded();
-    for (args, expect) in [
-        (vec!["issue", "rm", "CLI-1"], "archived CLI-1"),
-        (vec!["project", "rm", "CLI"], "archived project CLI"),
-        (
-            vec!["milestone", "rm", "--project", "CLI", "--name", "v1"],
-            "cancelled milestone v1",
-        ),
+    for args in [
+        vec!["issue", "rm", "CLI-1"],
+        vec!["project", "rm", "CLI"],
+        vec!["milestone", "rm", "--project", "CLI", "--name", "v1"],
     ] {
-        let (out, _, code) = run(&db, &args);
-        assert_eq!(code, 0, "`{args:?}` must succeed");
+        let (_, err, code) = run(&db, &args);
+        assert_ne!(code, 0, "`{args:?}` must be rejected");
         assert!(
-            out.contains(expect),
-            "`{args:?}` must report {expect:?}: {out}"
-        );
-        assert!(
-            out.contains("instead of deleting"),
-            "`{args:?}` must be explicit that nothing was deleted: {out}"
-        );
-        assert!(
-            out.contains("undo: cliban"),
-            "`{args:?}` must name the undo: {out}"
+            err.contains("unrecognized subcommand") || err.contains("error:"),
+            "`{args:?}` should fail as an unknown subcommand: {err}"
         );
     }
+    // A label is a tag, not a work item: its rm is real and stays.
+    assert_eq!(run(&db, &["label", "add", "bug", "--project", "CLI"]).2, 0);
+    assert_eq!(run(&db, &["label", "rm", "bug", "--project", "CLI"]).2, 0);
 }
 
 #[test]
-fn rm_archives_rather_than_destroying() {
+fn archiving_is_recorded_and_reversible() {
     let db = seeded();
-    run(&db, &["issue", "rm", "CLI-1"]);
-    run(&db, &["project", "rm", "CLI"]);
-    run(
-        &db,
-        &["milestone", "rm", "--project", "CLI", "--name", "v1"],
-    );
+    assert_eq!(run(&db, &["issue", "archive", "CLI-1"]).2, 0);
 
-    // Every row is still there, just archived/cancelled.
+    // Still there, just archived — and the archive landed on the timeline.
     let issue = run(&db, &["issue", "show", "CLI-1", "--json"]).0;
     assert!(issue.contains("keep me"), "{issue}");
     assert!(issue.contains("\"archived\": true"), "{issue}");
-    assert!(
-        !run(&db, &["project", "ls", "--json"]).0.contains("CLI"),
-        "an archived project leaves the default listing"
-    );
-    assert!(
-        run(&db, &["project", "ls", "--archived", "--json"])
-            .0
-            .contains("CLI"),
-        "…but the project itself is still there"
-    );
-    let ms = run(&db, &["milestone", "ls", "--project", "CLI"]).0;
-    assert!(ms.contains("v1") && ms.contains("cancelled"), "{ms}");
-
-    // …and each is reversible, so `rm` costs nothing irreversible.
-    assert_eq!(run(&db, &["issue", "unarchive", "CLI-1"]).2, 0);
-    assert!(run(&db, &["issue", "ls", "--json"]).0.contains("CLI-1"));
-}
-
-#[test]
-fn an_rm_lands_on_the_timeline_like_any_other_archive() {
-    let db = seeded();
-    run(&db, &["issue", "rm", "CLI-1"]);
     let feed = run(&db, &["activity", "--archived", "--json"]).0;
     assert!(
         feed.lines()
             .any(|l| l.contains("\"kind\":\"archive\"") && l.contains("archived")),
         "the archive must be recorded: {feed}"
     );
-}
 
-#[test]
-fn project_rm_still_accepts_the_old_force_flag() {
-    // Old scripts pass --force; archiving needs no force, but rejecting the
-    // flag would cost exactly the turn this alias exists to save.
-    let db = seeded();
-    let (out, err, code) = run(&db, &["project", "rm", "CLI", "--force"]);
-    assert_eq!(code, 0, "{err}");
-    assert!(out.contains("archived project CLI"), "{out}");
+    // …and reversible, so nothing is ever lost.
+    assert_eq!(run(&db, &["issue", "unarchive", "CLI-1"]).2, 0);
+    assert!(run(&db, &["issue", "ls", "--json"]).0.contains("CLI-1"));
 }
 
 #[test]
