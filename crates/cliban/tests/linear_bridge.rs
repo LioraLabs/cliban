@@ -249,6 +249,10 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 struct Board {
     db: String,
+    /// Per-board `XDG_CONFIG_HOME`, unique like the DB. Nothing exists under
+    /// it until a test calls [`Board::write_linear_toml`], so the default is
+    /// still config-free — and boards never race over a shared file.
+    config_home: std::path::PathBuf,
 }
 
 impl Board {
@@ -266,11 +270,20 @@ impl Board {
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{db}{suffix}"));
         }
-        let board = Board { db };
+        let config_home = std::env::temp_dir().join(format!("cliban_linear_cfg_{tag}_{nanos}_{n}"));
+        let _ = std::fs::remove_dir_all(&config_home);
+        let board = Board { db, config_home };
         board
             .run(&["project", "add", "PROJ", "--name", "Demo"], None)
             .assert_ok();
         board
+    }
+
+    /// Install a `linear.toml` under this board's config home.
+    fn write_linear_toml(&self, contents: &str) {
+        let dir = self.config_home.join("cliban");
+        std::fs::create_dir_all(&dir).expect("create config dir");
+        std::fs::write(dir.join("linear.toml"), contents).expect("write linear.toml");
     }
 
     /// Run the binary against this board with a clean environment, so a
@@ -279,12 +292,9 @@ impl Board {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_cliban"));
         cmd.env_clear()
             .env("HOME", std::env::temp_dir())
-            // No config file exists at this HOME, which is the default the
+            // Empty until a test writes a config, which is the default the
             // bridge is meant to work under.
-            .env(
-                "XDG_CONFIG_HOME",
-                std::env::temp_dir().join("cliban-no-config"),
-            )
+            .env("XDG_CONFIG_HOME", &self.config_home)
             .env("CLIBAN_DB", &self.db)
             .args(args);
         if let Some(stub) = stub {
@@ -312,6 +322,7 @@ impl Drop for Board {
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", self.db));
         }
+        let _ = std::fs::remove_dir_all(&self.config_home);
     }
 }
 
@@ -1568,6 +1579,167 @@ fn import_linear_needs_exactly_one_of_key_and_mine() {
         None,
     );
     assert_ne!(run.code, 0, "{run:?}");
+}
+
+// ---- push_on_move: mv on a linked issue pushes state + comment ----
+
+/// Replies for a successful push triggered by a move: issue lookup at the
+/// imported timestamp (so the stale guard passes), team lookup, state write,
+/// comment creation.
+fn move_push_replies() -> Replies {
+    HashMap::from([
+        (
+            "IssueById".to_string(),
+            issue_by_id_reply(
+                "Work to do",
+                ("Todo", "unstarted"),
+                "2026-07-29T12:00:00.000Z",
+            ),
+        ),
+        ("TeamByKey".to_string(), team_reply()),
+        (
+            "IssueUpdate".to_string(),
+            serde_json::json!({"data": {"issueUpdate": {"success": true,
+                "issue": linear_issue("Work to do", ("In Review", "started"),
+                                      "2026-07-29T13:00:00.000Z")}}})
+            .to_string(),
+        ),
+        (
+            "CommentCreate".to_string(),
+            comment_create_reply("comment-uuid-move-1"),
+        ),
+    ])
+}
+
+#[test]
+fn mv_on_a_linked_issue_with_push_on_move_pushes_once() {
+    let board = Board::new("movepush");
+    let key = import_eng412(&board);
+    board.write_linear_toml("[linear]\npush_on_move = true\n");
+
+    let stub = Stub::start(move_push_replies());
+    let run = board.run(&["issue", "mv", &key, "in-review"], Some(&stub));
+    run.assert_ok();
+    assert!(
+        run.stdout.contains("pushed"),
+        "the auto-push should announce itself like a manual one: {run:?}"
+    );
+
+    let ops = stub.operations();
+    assert_eq!(
+        ops.iter().filter(|o| *o == "IssueUpdate").count(),
+        1,
+        "exactly one state write per move: {ops:?}"
+    );
+    assert_eq!(
+        ops.iter().filter(|o| *o == "CommentCreate").count(),
+        1,
+        "exactly one comment write per move: {ops:?}"
+    );
+    assert_eq!(board.show(&key)["status"], "in-review");
+}
+
+#[test]
+fn a_failed_push_on_move_leaves_the_move_intact_and_records_it() {
+    let board = Board::new("movefail");
+    let key = import_eng412(&board);
+    board.write_linear_toml("[linear]\npush_on_move = true\n");
+
+    // Every operation gets a GraphQL error: the push cannot succeed.
+    let stub = Stub::start(HashMap::new());
+    let run = board.run(&["issue", "mv", &key, "in-review"], Some(&stub));
+    run.assert_ok();
+    assert_eq!(
+        board.show(&key)["status"],
+        "in-review",
+        "the local move must survive a failed push"
+    );
+
+    let warnings: Vec<&str> = run.stderr.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(
+        warnings.len(),
+        1,
+        "quiet-but-visible means one line, not a stack: {}",
+        run.stderr
+    );
+    assert!(
+        warnings[0].contains("warning") && warnings[0].contains("push"),
+        "the line should say what did not happen: {}",
+        warnings[0]
+    );
+
+    let activity = board.run(&["issue", "show", &key, "--section", "activity"], None);
+    activity.assert_ok();
+    assert!(
+        activity.stdout.contains("push_on_move failed"),
+        "a failed push must land on the board so nothing silently drifts: {}",
+        activity.stdout
+    );
+}
+
+#[test]
+fn mv_on_an_unlinked_issue_makes_no_calls_and_reads_no_config() {
+    let board = Board::new("moveunlinked");
+    board
+        .run(
+            &["issue", "add", "--project", "PROJ", "--title", "Local only"],
+            None,
+        )
+        .assert_ok();
+    // A config file that cannot even parse: if the move read it, the error
+    // would surface as a warning. An unlinked move must not get that far.
+    board.write_linear_toml("this is [not toml");
+
+    let stub = Stub::start(HashMap::new());
+    let run = board.run(&["issue", "mv", "PROJ-1", "in-progress"], Some(&stub));
+    run.assert_ok();
+    assert!(
+        run.stderr.trim().is_empty(),
+        "an unlinked move reads no config and says nothing: {}",
+        run.stderr
+    );
+    assert!(
+        stub.operations().is_empty(),
+        "an unlinked move makes zero HTTP calls: {:?}",
+        stub.operations()
+    );
+    assert_eq!(board.show("PROJ-1")["status"], "in-progress");
+}
+
+#[test]
+fn mv_without_the_flag_does_not_push() {
+    let board = Board::new("moveflagless");
+    let key = import_eng412(&board);
+    // A config file exists, but the flag is absent — same as no file at all.
+    board.write_linear_toml("[linear]\nteam = \"ENG\"\n");
+
+    let stub = Stub::start(HashMap::new());
+    let run = board.run(&["issue", "mv", &key, "in-review"], Some(&stub));
+    run.assert_ok();
+    assert!(run.stderr.trim().is_empty(), "{}", run.stderr);
+    assert!(
+        stub.operations().is_empty(),
+        "push_on_move is opt-in: {:?}",
+        stub.operations()
+    );
+    assert_eq!(board.show(&key)["status"], "in-review");
+}
+
+#[test]
+fn mv_to_the_same_status_does_not_push() {
+    let board = Board::new("movesame");
+    let key = import_eng412(&board);
+    board.write_linear_toml("[linear]\npush_on_move = true\n");
+
+    let status = board.show(&key)["status"].as_str().unwrap().to_string();
+    let stub = Stub::start(HashMap::new());
+    let run = board.run(&["issue", "mv", &key, &status], Some(&stub));
+    run.assert_ok();
+    assert!(
+        stub.operations().is_empty(),
+        "no status change, nothing to push: {:?}",
+        stub.operations()
+    );
 }
 
 // ---- failure paths that need no network at all ----
