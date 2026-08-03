@@ -6,6 +6,7 @@ use cliban::migrate;
 
 mod audit;
 mod errors;
+mod lint;
 mod output;
 mod search;
 mod since;
@@ -44,7 +45,7 @@ enum Command {
     /// Manage labels
     Label(cmd::label::LabelArgs),
     /// Manage issues
-    Issue(cmd::issue::IssueArgs),
+    Issue(Box<cmd::issue::IssueArgs>),
     /// What changed on the board recently (newest first)
     Activity(cmd::activity::ActivityArgs),
     /// Manage milestones
@@ -90,7 +91,7 @@ async fn run(cli: Cli) -> errors::CliResult<()> {
         None | Some(Command::Tui) => unreachable!("TUI handled in main before runtime"),
         Some(Command::Project(args)) => cmd::project::run(&cli.db, args).await,
         Some(Command::Label(args)) => cmd::label::run(&cli.db, args).await,
-        Some(Command::Issue(args)) => cmd::issue::run(&cli.db, args).await,
+        Some(Command::Issue(args)) => cmd::issue::run(&cli.db, *args).await,
         Some(Command::Activity(args)) => cmd::activity::run(&cli.db, args).await,
         Some(Command::Milestone(args)) => cmd::milestone::run(&cli.db, args).await,
         Some(Command::Fff(args)) => cmd::fff::run(&cli.db, args).await,

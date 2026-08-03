@@ -17,12 +17,27 @@ use crate::schema::Issue;
 /// `CLIBAN_ACTOR=claude` or `CLIBAN_ACTOR=alex`.
 pub const ACTOR_ENV: &str = "CLIBAN_ACTOR";
 
-/// Who is acting, if they said so. Blank/whitespace counts as unset.
+/// Claude Code exports this into every shell it spawns; when nobody set
+/// `CLIBAN_ACTOR`, it is the actor — which agent session touched the board —
+/// for free.
+pub const SESSION_ENV: &str = "CLAUDE_CODE_SESSION_ID";
+
+/// Who is acting: an explicit `CLIBAN_ACTOR` wins; otherwise the ambient
+/// Claude Code session id, recorded as `session:<first-8>` (readable in a
+/// timeline, still unique enough to tell concurrent sessions apart).
+/// Blank/whitespace counts as unset.
 pub fn actor() -> Option<String> {
-    std::env::var(ACTOR_ENV)
+    let explicit = std::env::var(ACTOR_ENV)
         .ok()
         .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+        .filter(|v| !v.is_empty());
+    explicit.or_else(|| {
+        std::env::var(SESSION_ENV)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .map(|id| format!("session:{}", id.chars().take(8).collect::<String>()))
+    })
 }
 
 /// Record one audit entry against `issue`. Best-effort by design: a board

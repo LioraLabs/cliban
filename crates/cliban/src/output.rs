@@ -20,6 +20,9 @@ pub struct IssueJsonInputs {
     pub priority: String,
     pub position: f64,
     pub archived: bool,
+    /// Live claim, if any. Absent from the JSON when unclaimed, so boards that
+    /// never claim keep their exact historical shape.
+    pub claimed_by: Option<String>,
     pub due_date: Option<String>,
     pub completed_at: Option<String>,
     pub milestone: Option<String>,
@@ -79,6 +82,9 @@ impl Detail {
 pub fn build_issue_json(i: IssueJsonInputs, detail: Detail) -> Value {
     let mut m = Map::new();
     m.insert("archived".into(), json!(i.archived));
+    if let Some(c) = &i.claimed_by {
+        m.insert("claimed_by".into(), json!(c));
+    }
     if let Some(c) = &i.completed_at {
         m.insert("completed_at".into(), json!(c));
     }
@@ -352,6 +358,7 @@ mod tests {
             description: "".into(),
             status: "backlog".into(),
             priority: "high".into(),
+            claimed_by: None,
             position: 1000.0,
             archived: false,
             due_date: None,
@@ -388,6 +395,7 @@ mod tests {
             description: "d".into(),
             status: "done".into(),
             priority: "low".into(),
+            claimed_by: None,
             position: 1500.5,
             archived: true,
             due_date: Some("2026-12-31".into()),

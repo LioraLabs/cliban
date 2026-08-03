@@ -78,6 +78,67 @@ pub fn replace_section(desc: &str, anchor: &str, body: &str) -> String {
     collapse_blank_runs(&out)
 }
 
+/// Append `text` to the end of `anchor`'s section body as its own block,
+/// separated by one blank line, leaving everything outside the section
+/// byte-identical. When the section is absent it is created at the end —
+/// callers wanting stricter create semantics check [`find_section`] first.
+pub fn append_section(desc: &str, anchor: &str, text: &str) -> String {
+    let text = text.trim_end();
+    let (start, end, found) = find_section(desc, anchor);
+    if !found {
+        return replace_section(desc, anchor, text);
+    }
+    let existing = desc[start..end].trim_matches('\n');
+    let body = if existing.is_empty() {
+        text.to_string()
+    } else {
+        format!("{existing}\n\n{text}")
+    };
+    replace_section(desc, anchor, &body)
+}
+
+/// Prepare a caller-supplied section payload for writing under `anchor`.
+///
+/// Agents naturally include the heading in the file they pass (`## Plan\n...`);
+/// written verbatim into the section body, that embedded H2 *terminates* the
+/// section on the next parse and the content silently reads as empty. So: a
+/// leading H2 matching the target anchor (case-insensitive) is stripped, and
+/// any other H2 anywhere in the payload is an error naming the line — body
+/// text cannot contain section boundaries.
+pub fn sanitize_section_body(anchor: &str, body: &str) -> Result<String, String> {
+    let mut lines = body.lines();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut first_content_seen = false;
+    for line in &mut lines {
+        let trimmed = line.trim_end();
+        if let Some(heading) = trimmed.strip_prefix("## ") {
+            if !first_content_seen && heading.trim().eq_ignore_ascii_case(anchor) {
+                // The payload restated its own heading; drop it.
+                continue;
+            }
+            return Err(format!(
+                "section payload contains an H2 heading {trimmed:?} — a section holds body \
+                 text only; an embedded H2 would terminate it and the content after would \
+                 silently leave the section"
+            ));
+        }
+        if !trimmed.is_empty() {
+            first_content_seen = true;
+        }
+        kept.push(line);
+    }
+    Ok(kept.join("\n").trim_start_matches('\n').to_string())
+}
+
+/// Every H2 anchor in the description, in order. What "sections: ..." error
+/// messages list so a caller can see what actually exists.
+pub fn h2_anchors(desc: &str) -> Vec<String> {
+    desc.lines()
+        .filter_map(|l| l.trim_end().strip_prefix("## "))
+        .map(str::to_string)
+        .collect()
+}
+
 /// Squeeze runs of 3+ newlines down to 2. Markdown treats them the same, and
 /// without this a section replaced N times grows N blank lines at its seam.
 fn collapse_blank_runs(s: &str) -> String {
@@ -153,6 +214,73 @@ mod tests {
     #[test]
     fn replace_section_on_empty_description_yields_just_the_section() {
         assert_eq!(replace_section("", "Spec", "body"), "## Spec\n\nbody\n");
+    }
+
+    #[test]
+    fn append_section_adds_a_block_and_preserves_neighbours() {
+        let d = "## Spec\n\ns\n\n## Decisions so far\n\n- first\n\n## Plan\n\np\n";
+        let out = append_section(d, "Decisions so far", "- second");
+        assert!(out.contains("- first\n\n- second\n"), "got {out:?}");
+        assert!(out.contains("## Spec\n\ns\n"));
+        assert!(out.contains("## Plan\n\np\n"));
+    }
+
+    #[test]
+    fn append_section_into_empty_section_has_no_leading_blank() {
+        let d = "## Notes\n";
+        let out = append_section(d, "Notes", "first");
+        // Same trailing-seam convention as replace_section: at most one
+        // blank line, never a run.
+        assert_eq!(out.trim_end(), "## Notes\n\nfirst");
+        assert!(!out.contains("\n\n\n"));
+    }
+
+    #[test]
+    fn append_section_creates_when_absent() {
+        let out = append_section("## Spec\n\ns\n", "Rollout", "step one");
+        assert!(out.contains("## Rollout\n\nstep one\n"));
+        assert!(out.contains("## Spec\n\ns\n"));
+    }
+
+    #[test]
+    fn repeated_append_does_not_accumulate_blank_lines() {
+        let mut d = "## Notes\n\nseed\n\n## Plan\n\np\n".to_string();
+        for i in 0..5 {
+            d = append_section(&d, "Notes", &format!("entry {i}"));
+        }
+        assert!(!d.contains("\n\n\n"), "blank-line drift: {d:?}");
+        assert!(d.contains("entry 0\n\nentry 1"));
+        assert!(d.contains("## Plan\n\np\n"));
+    }
+
+    #[test]
+    fn sanitize_strips_the_restated_heading() {
+        let out = sanitize_section_body("Plan", "## Plan\n\n### Task 1: x\n\n- [ ] step\n").unwrap();
+        assert_eq!(out, "### Task 1: x\n\n- [ ] step");
+        // Case-insensitive: agents write "## plan" too.
+        assert!(sanitize_section_body("Plan", "## plan\nbody").unwrap() == "body");
+    }
+
+    #[test]
+    fn sanitize_rejects_foreign_h2s() {
+        let err = sanitize_section_body("Spec", "the spec\n\n## Plan\n\nsneaky").unwrap_err();
+        assert!(err.contains("## Plan"), "{err}");
+        // A matching heading later (after content) is also a boundary, not a restatement.
+        assert!(sanitize_section_body("Spec", "text\n## Spec\nmore").is_err());
+    }
+
+    #[test]
+    fn sanitize_passes_clean_bodies_through() {
+        assert_eq!(
+            sanitize_section_body("Notes", "### lesson\n\nbody").unwrap(),
+            "### lesson\n\nbody"
+        );
+    }
+
+    #[test]
+    fn h2_anchors_lists_in_order() {
+        let d = "## Spec\n\nx\n\n## Decisions so far\n\ny\n\n## Plan\n";
+        assert_eq!(h2_anchors(d), vec!["Spec", "Decisions so far", "Plan"]);
     }
 
     #[test]

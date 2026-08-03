@@ -116,6 +116,72 @@ pub fn for_issue(conn: &Connection, issue_id: i64) -> Result<Vec<Relation>> {
     Ok(out)
 }
 
+/// The frontier: takeable issues — `backlog` status, not archived, no open
+/// blocker, and no live claim. The complement of [`list_blocked`], and the
+/// query behind `cliban issue ready`. `milestone` is project-scoped like
+/// `issues::list`: given without `project_key`, the result is empty.
+pub fn list_ready(
+    conn: &Connection,
+    project_key: Option<&str>,
+    parent_key: Option<&str>,
+    milestone: Option<&str>,
+) -> Result<Vec<Issue>> {
+    crate::contexts::claims::ensure(conn)?;
+    let mut clauses: Vec<String> = Vec::new();
+    let mut binds: Vec<rusqlite::types::Value> = Vec::new();
+    if let Some(key) = project_key {
+        clauses.push(format!(
+            "i.project_id = (SELECT id FROM projects WHERE key = ?{})",
+            binds.len() + 1
+        ));
+        binds.push(key.to_string().into());
+    }
+    if let Some(key) = parent_key {
+        clauses.push(format!(
+            "i.parent_id = (SELECT id FROM issues WHERE key = ?{})",
+            binds.len() + 1
+        ));
+        binds.push(key.to_string().into());
+    }
+    if let Some(name) = milestone {
+        let Some(project) = project_key else {
+            return Ok(vec![]);
+        };
+        match crate::contexts::milestones::get(conn, project, name)? {
+            Some(m) => {
+                clauses.push(format!("i.milestone_id = ?{}", binds.len() + 1));
+                binds.push(m.id.into());
+            }
+            None => return Ok(vec![]),
+        }
+    }
+    let extra = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" AND {}", clauses.join(" AND "))
+    };
+    let sql = format!(
+        "SELECT {} FROM issues i \
+         WHERE i.archived = 0 AND i.status = 'backlog' \
+         AND NOT EXISTS (SELECT 1 FROM issue_relation r \
+             JOIN issues b ON b.id = r.from_issue_id \
+             WHERE r.to_issue_id = i.id AND r.type = 'blocks' \
+             AND b.archived = 0 AND b.status != 'done') \
+         AND NOT EXISTS (SELECT 1 FROM issue_claims c WHERE c.issue_id = i.id)\
+         {extra} ORDER BY i.status, i.position",
+        rows::ISSUE_COLS
+            .split(", ")
+            .map(|c| format!("i.{c}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let out = stmt
+        .query_map(rusqlite::params_from_iter(binds.iter()), rows::issue)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(out)
+}
+
 /// `list_blocked/1`: non-archived issues with at least one open (non-done,
 /// non-archived) blocker. `project_key = None` spans all projects.
 pub fn list_blocked(conn: &Connection, project_key: Option<&str>) -> Result<Vec<Issue>> {

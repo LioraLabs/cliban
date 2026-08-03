@@ -24,13 +24,24 @@ pub struct MilestoneArgs {
 
 #[derive(clap::Subcommand)]
 pub enum MilestoneCmd {
+    /// Partition a milestone's open issues into dependency waves (wave N is
+    /// safe to start once waves 1..N-1 are done)
+    Waves {
+        /// project key
+        #[arg(long)]
+        project: String,
+        /// milestone name
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Add a milestone
     Add {
         #[arg(long)]
         project: String,
         #[arg(long)]
         name: String,
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         description: Option<String>,
         #[arg(long = "description-file")]
         description_file: Option<String>,
@@ -85,7 +96,7 @@ pub enum MilestoneCmd {
         /// new name
         #[arg(long)]
         rename: Option<String>,
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         description: Option<String>,
         #[arg(long = "description-file")]
         description_file: Option<String>,
@@ -111,6 +122,11 @@ pub enum MilestoneCmd {
 
 pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
     match args.cmd {
+        MilestoneCmd::Waves {
+            project,
+            name,
+            json,
+        } => waves(db, project, name, json).await,
         MilestoneCmd::Add {
             project,
             name,
@@ -622,5 +638,40 @@ async fn edit(
             Ok(())
         })
         .await?;
+    Ok(())
+}
+
+/// `milestone waves`: print the dependency-wave partition the core computes —
+/// the deterministic answer to "what can run in parallel, in what order" that
+/// orchestrators previously derived by hand from the blocking graph.
+async fn waves(db: &Option<String>, project: String, name: String, json: bool) -> CliResult<()> {
+    let project = project.to_uppercase();
+    let store = store_open::open(db).await?;
+    let w = store
+        .call(move |conn| milestones::waves(conn, &project, &name))
+        .await?;
+    if json {
+        println!(
+            "{}",
+            json!({
+                "done": w.done,
+                "external_blocked": w.external_blocked,
+                "waves": w.waves,
+            })
+        );
+        return Ok(());
+    }
+    if w.waves.is_empty() && w.external_blocked.is_empty() {
+        println!("no open issues");
+    }
+    for (i, wave) in w.waves.iter().enumerate() {
+        println!("wave {}: {}", i + 1, wave.join(", "));
+    }
+    if !w.external_blocked.is_empty() {
+        println!("externally blocked: {}", w.external_blocked.join(", "));
+    }
+    if !w.done.is_empty() {
+        println!("done: {}", w.done.join(", "));
+    }
     Ok(())
 }

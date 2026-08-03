@@ -30,10 +30,12 @@ fn run_as(db: &str, actor: Option<&str>, args: &[&str]) -> Run {
     let mut cmd = Command::new(bin());
     cmd.arg("--db")
         .arg(db)
-        // A clean env: never inherit the developer's CLIBAN_DB.
+        // A clean env: never inherit the developer's CLIBAN_DB — nor the
+        // ambient Claude session, which would auto-attribute every entry.
         .env_remove("CLIBAN_DB")
         .env_remove("XDG_DATA_HOME")
         .env_remove("CLIBAN_ACTOR")
+        .env_remove("CLAUDE_CODE_SESSION_ID")
         .args(args);
     if let Some(a) = actor {
         cmd.env("CLIBAN_ACTOR", a);
@@ -271,6 +273,53 @@ fn cliban_actor_attributes_recorded_entries() {
         .filter(|e| e["kind"] == "status")
         .any(|e| e["actor"].is_null());
     assert!(unattributed, "a move without an actor is still recorded");
+}
+
+#[test]
+fn ambient_claude_session_attributes_when_no_actor_is_set() {
+    let db = tmp_db("session_actor");
+    ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
+    ok(
+        &db,
+        &["issue", "add", "--project", "CLI", "--title", "work"],
+    );
+
+    // No CLIBAN_ACTOR, but a Claude Code session in the environment: the
+    // session id becomes the actor, shortened for the timeline.
+    let mut cmd = Command::new(bin());
+    cmd.arg("--db")
+        .arg(&db)
+        .env_remove("CLIBAN_DB")
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("CLIBAN_ACTOR")
+        .env(
+            "CLAUDE_CODE_SESSION_ID",
+            "ea8a9c5e-a7b9-4f56-8bda-37c4b8abb59b",
+        )
+        .args(["issue", "mv", "CLI-1", "in-progress"]);
+    assert!(cmd.output().expect("run").status.success());
+
+    // An explicit CLIBAN_ACTOR still wins over the ambient session.
+    let mut cmd = Command::new(bin());
+    cmd.arg("--db")
+        .arg(&db)
+        .env_remove("CLIBAN_DB")
+        .env_remove("XDG_DATA_HOME")
+        .env("CLIBAN_ACTOR", "alex")
+        .env(
+            "CLAUDE_CODE_SESSION_ID",
+            "ea8a9c5e-a7b9-4f56-8bda-37c4b8abb59b",
+        )
+        .args(["issue", "mv", "CLI-1", "done"]);
+    assert!(cmd.output().expect("run").status.success());
+
+    let actors: Vec<String> = events(&db, &[])
+        .iter()
+        .filter(|e| e["kind"] == "status")
+        .filter_map(|e| e["actor"].as_str().map(str::to_string))
+        .collect();
+    assert!(actors.contains(&"session:ea8a9c5e".to_string()), "{actors:?}");
+    assert!(actors.contains(&"alex".to_string()), "{actors:?}");
 }
 
 #[test]

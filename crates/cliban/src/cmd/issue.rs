@@ -4,7 +4,8 @@
 use std::io::{Read, Write};
 
 use cliban_core::contexts::issues::{CreateIssue, ListOpts, UpdateIssue};
-use cliban_core::contexts::{issues, milestones, relations};
+use cliban_core::contexts::{claims, issues, milestones, relations};
+use cliban_core::sections::replace_section;
 use cliban_core::schema::{Issue, ISSUE_PRIORITIES, ISSUE_STATUSES};
 use cliban_core::time::{format_date, format_usec, parse_date};
 use cliban_core::Store;
@@ -38,6 +39,9 @@ pub enum IssueCmd {
     Edit(EditArgs),
     /// Append an entry to the issue's ## Activity Log section
     Log(LogArgs),
+    /// Atomically append a block to the end of one H2 section
+    #[command(name = "append-section")]
+    AppendSection(AppendSectionArgs),
     /// Tick a step in the issue's ## Plan section
     Tick(TickArgs),
     /// Promote a plan step into its own issue
@@ -52,7 +56,7 @@ pub enum IssueCmd {
         key: String,
         status: String,
         /// why — recorded on the issue's timeline with the transition
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         note: Option<String>,
     },
     /// Archives instead of deleting (kept for muscle memory; hidden)
@@ -76,6 +80,47 @@ pub enum IssueCmd {
         /// include each issue's `description` body in --json output
         #[arg(long)]
         full: bool,
+    },
+    /// List takeable issues: backlog status, no open blocker, unclaimed
+    Ready {
+        #[arg(long)]
+        project: Option<String>,
+        /// only sub-issues of this parent key
+        #[arg(long)]
+        parent: Option<String>,
+        /// milestone name (requires --project; names are project-scoped)
+        #[arg(long)]
+        milestone: Option<String>,
+        #[arg(long)]
+        json: bool,
+        /// include each issue's `description` body in --json output
+        #[arg(long)]
+        full: bool,
+    },
+    /// Claim an issue for the current actor ($CLIBAN_ACTOR, or the ambient
+    /// Claude session)
+    Claim {
+        key: String,
+        /// claim as this actor instead of the resolved default
+        #[arg(long)]
+        by: Option<String>,
+        /// take over another actor's live claim
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Release an issue's claim
+    Release {
+        key: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate the description contract (## Spec / ## Plan / ## Activity Log)
+    Lint {
+        key: String,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -146,10 +191,10 @@ pub struct AddArgs {
     #[arg(long)]
     project: String,
     /// issue title
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     title: Option<String>,
     /// description (use '-' to read from stdin)
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     description: Option<String>,
     /// read description from a file (use '-' for stdin)
     #[arg(long = "description-file")]
@@ -194,10 +239,10 @@ pub struct EditArgs {
     /// issue key
     key: String,
     /// new title
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     title: Option<String>,
     /// new description (use '-' for stdin)
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     description: Option<String>,
     /// read description from a file (use '-' for stdin)
     #[arg(long = "description-file")]
@@ -244,6 +289,41 @@ pub struct EditArgs {
     /// open $EDITOR for full edit
     #[arg(long, short = 'e')]
     editor: bool,
+    /// replace only this H2 section with the description content:
+    /// spec|plan|notes, or a verbatim H2 anchor like "Decisions so far"
+    /// (the activity log is owned by `issue log`)
+    #[arg(long)]
+    section: Option<String>,
+    /// allow --section to create the section when it doesn't exist yet
+    #[arg(long = "create-section")]
+    create_section: bool,
+    /// abort unless the issue's updated_at still equals this value (as read
+    /// from a prior --json); closes the read-modify-write race
+    #[arg(long = "if-updated-at")]
+    if_updated_at: Option<String>,
+    /// JSON output
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args)]
+pub struct AppendSectionArgs {
+    /// issue key
+    key: String,
+    /// text to append (leading "-" is fine — markdown bullets are the
+    /// common case)
+    #[arg(allow_hyphen_values = true)]
+    text: Option<String>,
+    /// target section: spec|plan|notes, or a verbatim H2 anchor like
+    /// "Decisions so far" (the activity log is owned by `issue log`)
+    #[arg(long)]
+    section: String,
+    /// read the text from a file (use '-' for stdin)
+    #[arg(long = "text-file")]
+    text_file: Option<String>,
+    /// create the section when it doesn't exist yet
+    #[arg(long = "create-section")]
+    create_section: bool,
     /// JSON output
     #[arg(long)]
     json: bool,
@@ -253,7 +333,8 @@ pub struct EditArgs {
 pub struct LogArgs {
     /// issue key
     key: String,
-    /// log message
+    /// log message (leading "-" is fine)
+    #[arg(allow_hyphen_values = true)]
     message: Option<String>,
     /// read message from file (use '-' for stdin)
     #[arg(long = "message-file")]
@@ -334,6 +415,7 @@ pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
         IssueCmd::Ls(a) => ls(db, a).await,
         IssueCmd::Edit(a) => edit(db, a).await,
         IssueCmd::Log(a) => log(db, a).await,
+        IssueCmd::AppendSection(a) => append_section_cmd(db, a).await,
         IssueCmd::Tick(a) => tick(db, a).await,
         IssueCmd::Promote(a) => promote(db, a).await,
         IssueCmd::ArchiveDone(a) => archive_done(db, a).await,
@@ -357,6 +439,21 @@ pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
             json,
             full,
         } => blocked(db, project, json, full).await,
+        IssueCmd::Ready {
+            project,
+            parent,
+            milestone,
+            json,
+            full,
+        } => ready(db, project, parent, milestone, json, full).await,
+        IssueCmd::Claim {
+            key,
+            by,
+            force,
+            json,
+        } => claim_cmd(db, key, by, force, json).await,
+        IssueCmd::Release { key, json } => release_cmd(db, key, json).await,
+        IssueCmd::Lint { key, json } => lint_cmd(db, key, json).await,
     }
 }
 
@@ -636,6 +733,7 @@ pub async fn issue_json_inputs(store: &Store, issue: &Issue) -> CliResult<IssueJ
                 None => None,
             };
             let labels = issues::label_names(conn, id)?;
+            let claimed_by = claims::get(conn, id)?.map(|c| c.claimed_by);
             let relations = relations::for_issue(conn, id)?
                 .into_iter()
                 .map(|r| RelationOut {
@@ -651,6 +749,7 @@ pub async fn issue_json_inputs(store: &Store, issue: &Issue) -> CliResult<IssueJ
                 priority,
                 position,
                 archived,
+                claimed_by,
                 due_date,
                 completed_at,
                 milestone,
@@ -685,17 +784,49 @@ async fn resolve_refs(store: &Store, issue: &Issue) -> CliResult<(String, String
     Ok(pair)
 }
 
-/// `sectionAnchor`: map a `--section` short name to its canonical H2 anchor.
-fn section_anchor(s: &str) -> Result<&'static str, CliError> {
-    match s {
-        "spec" => Ok("Spec"),
-        "plan" => Ok("Plan"),
-        "activity" => Ok("Activity Log"),
-        "notes" => Ok("Notes"),
-        _ => Err(CliError::validation(format!(
-            "invalid --section {s:?} (want spec|plan|activity|notes)"
-        ))),
+/// Map a `--section` value to its H2 anchor. The four contract sections have
+/// case-insensitive short aliases; anything else is a **verbatim** H2 anchor —
+/// `--section "Decisions so far"` targets `## Decisions so far`, exact match.
+fn resolve_section(s: &str) -> Result<String, CliError> {
+    let t = s.trim();
+    if t.is_empty() {
+        return Err(CliError::validation("--section can't be blank"));
     }
+    Ok(match t.to_lowercase().as_str() {
+        "spec" => "Spec".to_string(),
+        "plan" => "Plan".to_string(),
+        "activity" | "activity log" => "Activity Log".to_string(),
+        "notes" => "Notes".to_string(),
+        _ => t.to_string(),
+    })
+}
+
+/// The write-side existence policy for a section anchor: writing to a section
+/// that isn't there is exit 2 naming what IS there, unless the caller
+/// explicitly asked to create it — `replace_section` would otherwise turn a
+/// typo into a junk section appended below the real one, silently.
+fn require_section(
+    issue: &Issue,
+    anchor: &str,
+    create: bool,
+) -> Result<(), cliban_core::Error> {
+    if create || cliban_core::sections::find_section(&issue.description, anchor).2 {
+        return Ok(());
+    }
+    let existing = cliban_core::sections::h2_anchors(&issue.description);
+    let listing = if existing.is_empty() {
+        "none".to_string()
+    } else {
+        existing.join(", ")
+    };
+    Err(cliban_core::Error::validation(
+        "section",
+        &format!(
+            "no ## {anchor} section in {} (sections: {listing}); \
+             pass --create-section to add it",
+            issue.key
+        ),
+    ))
 }
 
 async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
@@ -709,7 +840,7 @@ async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
 
     // --section is a targeted machine read; mutually exclusive with json/pager.
     if let Some(section) = &a.section {
-        let anchor = section_anchor(section)?;
+        let anchor = resolve_section(section)?;
         // The activity view is the union of the author's narrative and the
         // transitions cliban recorded; either alone is a partial history.
         let recorded = if anchor == "Activity Log" {
@@ -722,7 +853,7 @@ async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
         } else {
             Vec::new()
         };
-        let (start, end, ok) = find_section(&issue.description, anchor);
+        let (start, end, ok) = find_section(&issue.description, &anchor);
         if !ok && recorded.is_empty() {
             // Go wraps with %w on store.ErrNotFound → "not found: <msg>".
             return Err(CliError::not_found(format!(
@@ -1162,6 +1293,26 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
     // resolveDescription: respects mutual exclusivity, only "set" when changed.
     let (desc_content, desc_set) = resolve_description(a.description, a.description_file)?;
 
+    // --section narrows the description write to one H2, merged into the live
+    // description inside the update job so nothing else moves.
+    let section_write: Option<String> = match &a.section {
+        None => None,
+        Some(s) => {
+            let anchor = resolve_section(s)?;
+            if anchor == "Activity Log" {
+                return Err(CliError::validation(
+                    "--section activity is owned by `issue log`; append entries there",
+                ));
+            }
+            if !desc_set {
+                return Err(CliError::validation(
+                    "--section needs content: pass --description or --description-file",
+                ));
+            }
+            Some(anchor)
+        }
+    };
+
     let title = a.title.clone(); // --title given → Some (even if "")
     let priority = match &a.priority {
         Some(p) => Some(parse_priority(p)?),
@@ -1301,8 +1452,10 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
         || milestone_field.is_some()
         || parent_field.is_some()
         || due_date.is_some();
+    let cas = a.if_updated_at.clone();
     if has_field_update {
         let lookup = key.clone();
+        let cas_check = cas.clone();
         let upd = UpdateIssue {
             title: title.clone(),
             description: description.clone(),
@@ -1312,10 +1465,23 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
             due_date,
             ..Default::default()
         };
+        let section_for_job = section_write.clone();
+        let create_section = a.create_section;
         store
             .call(move |conn| {
                 let issue =
                     issues::get_by_key(conn, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+                check_cas(&issue, cas_check.as_deref())?;
+                let mut upd = upd;
+                if let Some(anchor) = &section_for_job {
+                    if let Some(body) = upd.description.take() {
+                        require_section(&issue, anchor, create_section)?;
+                        let body = cliban_core::sections::sanitize_section_body(anchor, &body)
+                            .map_err(|m| cliban_core::Error::validation("section", &m))?;
+                        upd.description =
+                            Some(replace_section(&issue.description, anchor, &body));
+                    }
+                }
                 issues::update(conn, &issue, upd)?;
                 Ok(())
             })
@@ -1323,8 +1489,15 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
     } else {
         // Even with no field update, confirm the issue exists (Go fetches it).
         let lookup = key.clone();
+        let cas_check = cas.clone();
         store
-            .call(move |conn| issues::get_by_key(conn, &lookup))
+            .call(move |conn| {
+                let issue = issues::get_by_key(conn, &lookup)?;
+                if let Some(i) = &issue {
+                    check_cas(i, cas_check.as_deref())?;
+                }
+                Ok(issue)
+            })
             .await?
             .ok_or(cliban_core::Error::NotFound)?;
     }
@@ -1409,22 +1582,27 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
         &issue.due_date.map(format_date).unwrap_or_default(),
     );
     if before.description != issue.description {
-        // The text itself is not worth replaying, but a rewrite that drops
-        // sections is exactly what someone auditing the ticket wants to see.
-        let lost: Vec<&str> = ["Spec", "Plan", "Activity Log", "Notes"]
-            .into_iter()
-            .filter(|anchor| {
-                find_section(&before.description, anchor).2
-                    && !find_section(&issue.description, anchor).2
-            })
-            .collect();
-        if lost.is_empty() {
-            summary.note("description rewritten");
+        if let Some(anchor) = section_write {
+            // A section write cannot drop its neighbours by construction.
+            summary.note(format!("## {anchor} written"));
         } else {
-            summary.note(format!(
-                "description rewritten, dropped ## {}",
-                lost.join(", ## ")
-            ));
+            // The text itself is not worth replaying, but a rewrite that drops
+            // sections is exactly what someone auditing the ticket wants to see.
+            let lost: Vec<&str> = ["Spec", "Plan", "Activity Log", "Notes"]
+                .into_iter()
+                .filter(|anchor| {
+                    find_section(&before.description, anchor).2
+                        && !find_section(&issue.description, anchor).2
+                })
+                .collect();
+            if lost.is_empty() {
+                summary.note("description rewritten");
+            } else {
+                summary.note(format!(
+                    "description rewritten, dropped ## {}",
+                    lost.join(", ## ")
+                ));
+            }
         }
     }
     for l in &added_labels {
@@ -2155,4 +2333,268 @@ async fn blocked(
     let rows = issue_rows(&store, &issues).await?;
     print!("{}", write_issue_table(&rows));
     Ok(())
+}
+
+/// The compare-and-swap guard behind `--if-updated-at`: runs inside the write
+/// job on the store thread, so the check and the write are atomic.
+fn check_cas(issue: &Issue, expected: Option<&str>) -> Result<(), cliban_core::Error> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    let actual = format_usec(issue.updated_at);
+    if actual != expected {
+        return Err(cliban_core::Error::validation(
+            "updated_at",
+            &format!(
+                "stale write: {} was updated at {actual}, you read {expected} — re-read and retry",
+                issue.key
+            ),
+        ));
+    }
+    Ok(())
+}
+
+async fn ready(
+    db: &Option<String>,
+    project: Option<String>,
+    parent: Option<String>,
+    milestone: Option<String>,
+    json: bool,
+    full: bool,
+) -> CliResult<()> {
+    let project = project.map(|p| p.to_uppercase()).filter(|p| !p.is_empty());
+    let parent = match parent {
+        Some(p) => Some(parse_issue_key(&p)?),
+        None => None,
+    };
+    if milestone.is_some() && project.is_none() {
+        return Err(CliError::validation(
+            "--milestone needs --project (milestone names are project-scoped)",
+        ));
+    }
+    let store = store_open::open(db).await?;
+    let (pk, pak, ms) = (project.clone(), parent.clone(), milestone.clone());
+    let mut issues_list = store
+        .call(move |conn| relations::list_ready(conn, pk.as_deref(), pak.as_deref(), ms.as_deref()))
+        .await?;
+    base_order(&mut issues_list);
+    if json {
+        for i in &issues_list {
+            let inputs = issue_json_inputs(&store, i).await?;
+            println!(
+                "{}",
+                serde_json::to_string(&build_issue_json(inputs, Detail::from_full_flag(full)))
+                    .unwrap()
+            );
+        }
+        return Ok(());
+    }
+    let rows = issue_rows(&store, &issues_list).await?;
+    print!("{}", write_issue_table(&rows));
+    Ok(())
+}
+
+async fn claim_cmd(
+    db: &Option<String>,
+    key: String,
+    by: Option<String>,
+    force: bool,
+    json: bool,
+) -> CliResult<()> {
+    let key = parse_issue_key(&key)?;
+    let actor = by
+        .map(|b| b.trim().to_string())
+        .filter(|b| !b.is_empty())
+        .or_else(crate::audit::actor)
+        .ok_or_else(|| {
+            CliError::validation("no actor to claim as: pass --by or set CLIBAN_ACTOR")
+        })?;
+    let store = store_open::open(db).await?;
+    let lookup = key.clone();
+    let as_actor = actor.clone();
+    let (issue, claim) = store
+        .call(move |conn| {
+            let issue = issues::get_by_key(conn, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+            let prev = claims::get(conn, issue.id)?;
+            let claim = claims::claim(conn, &issue, &as_actor, force)?;
+            match prev {
+                Some(p) if p.claimed_by == as_actor => {} // idempotent re-claim: no event
+                Some(p) => crate::audit::record(
+                    conn,
+                    &issue,
+                    "claim",
+                    &format!("claimed by {as_actor} (took over from {})", p.claimed_by),
+                ),
+                None => crate::audit::record(
+                    conn,
+                    &issue,
+                    "claim",
+                    &format!("claimed by {as_actor}"),
+                ),
+            }
+            Ok((issue, claim))
+        })
+        .await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "claimed_at": claim.claimed_at,
+                "claimed_by": claim.claimed_by,
+                "key": issue.key,
+            })
+        );
+    } else {
+        println!("claimed {} by {}", issue.key, claim.claimed_by);
+    }
+    Ok(())
+}
+
+async fn release_cmd(db: &Option<String>, key: String, json: bool) -> CliResult<()> {
+    let key = parse_issue_key(&key)?;
+    let store = store_open::open(db).await?;
+    let lookup = key.clone();
+    let (issue, was_held_by) = store
+        .call(move |conn| {
+            let issue = issues::get_by_key(conn, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+            let was = claims::release(conn, &issue)?;
+            if let Some(holder) = &was {
+                crate::audit::record(
+                    conn,
+                    &issue,
+                    "claim",
+                    &format!("released (was held by {holder})"),
+                );
+            }
+            Ok((issue, was))
+        })
+        .await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "key": issue.key,
+                "released": was_held_by.is_some(),
+                "was_held_by": was_held_by,
+            })
+        );
+    } else {
+        match was_held_by {
+            Some(holder) => println!("released {} (was held by {holder})", issue.key),
+            None => println!("{} was not claimed", issue.key),
+        }
+    }
+    Ok(())
+}
+
+async fn lint_cmd(db: &Option<String>, key: String, json: bool) -> CliResult<()> {
+    let key = parse_issue_key(&key)?;
+    let store = store_open::open(db).await?;
+    let lookup = key.clone();
+    let issue = store
+        .call(move |conn| issues::get_by_key(conn, &lookup))
+        .await?
+        .ok_or(cliban_core::Error::NotFound)?;
+    let findings = crate::lint::lint_description(&issue.description);
+    let errors = findings
+        .iter()
+        .filter(|f| f.severity == crate::lint::Severity::Error)
+        .count();
+    if json {
+        let list: Vec<serde_json::Value> = findings
+            .iter()
+            .map(|f| {
+                serde_json::json!({
+                    "message": f.message,
+                    "severity": f.severity.as_str(),
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::json!({
+                "errors": errors,
+                "findings": list,
+                "key": issue.key,
+                "warnings": findings.len() - errors,
+            })
+        );
+    } else if findings.is_empty() {
+        println!("{}: clean", issue.key);
+    } else {
+        for f in &findings {
+            println!("{}: {}", f.severity.as_str(), f.message);
+        }
+    }
+    if errors > 0 {
+        return Err(CliError::Coded(
+            2,
+            format!("lint: {errors} error(s) in {}", issue.key),
+        ));
+    }
+    Ok(())
+}
+
+/// `issue append-section`: add a block to the end of one section, atomically
+/// on the store thread — no read-modify-write from the caller's side, so no
+/// CAS needed. The activity log stays with `issue log` (it stamps and
+/// dedupes); everything else appends here.
+async fn append_section_cmd(db: &Option<String>, a: AppendSectionArgs) -> CliResult<()> {
+    let key = parse_issue_key(&a.key)?;
+    let anchor = resolve_section(&a.section)?;
+    if anchor == "Activity Log" {
+        return Err(CliError::validation(
+            "--section activity is owned by `issue log`; append entries there",
+        ));
+    }
+    let text = match (a.text, a.text_file) {
+        (Some(_), Some(_)) => {
+            return Err(CliError::validation(
+                "pass the text positionally or via --text-file, not both",
+            ))
+        }
+        (Some(t), None) => t,
+        (None, Some(f)) if f == "-" => read_stdin()?,
+        (None, Some(f)) => std::fs::read_to_string(&f)
+            .map_err(|e| CliError::other(format!("read {f}: {e}")))?,
+        (None, None) => {
+            return Err(CliError::validation(
+                "nothing to append: pass the text positionally or via --text-file",
+            ))
+        }
+    };
+    if text.trim().is_empty() {
+        return Err(CliError::validation("nothing to append: text is blank"));
+    }
+
+    let store = store_open::open(db).await?;
+    let lookup = key.clone();
+    let anchor_job = anchor.clone();
+    let create = a.create_section;
+    let issue = store
+        .call(move |conn| {
+            let issue = issues::get_by_key(conn, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+            require_section(&issue, &anchor_job, create)?;
+            let text = cliban_core::sections::sanitize_section_body(&anchor_job, &text)
+                .map_err(|m| cliban_core::Error::validation("section", &m))?;
+            let new_desc =
+                cliban_core::sections::append_section(&issue.description, &anchor_job, &text);
+            let updated = issues::update(
+                conn,
+                &issue,
+                UpdateIssue {
+                    description: Some(new_desc),
+                    ..Default::default()
+                },
+            )?;
+            crate::audit::record(
+                conn,
+                &updated,
+                "edit",
+                &format!("appended to ## {anchor_job}"),
+            );
+            Ok(updated)
+        })
+        .await?;
+    print_issue_result(&store, &issue, "updated", a.json).await
 }

@@ -25,7 +25,7 @@ pub enum ProjectCmd {
         key: String,
         #[arg(long)]
         name: String,
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         description: Option<String>,
         #[arg(long = "description-file")]
         description_file: Option<String>,
@@ -63,12 +63,21 @@ pub enum ProjectCmd {
         key: String,
         #[arg(long)]
         name: Option<String>,
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         description: Option<String>,
         #[arg(long = "description-file")]
         description_file: Option<String>,
         #[arg(long = "auto-archive-done-after")]
         auto_archive_done_after: Option<String>,
+        /// abort unless the project's updated_at still equals this value (as
+        /// read from a prior --json); closes the read-modify-write race
+        #[arg(long = "if-updated-at")]
+        if_updated_at: Option<String>,
+    },
+    /// Project `## Notes` operations
+    Note {
+        #[command(subcommand)]
+        cmd: NoteCmd,
     },
     /// Archive a project
     Archive { key: String },
@@ -81,6 +90,26 @@ pub enum ProjectCmd {
         /// accepted and ignored — archiving needs no force
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum NoteCmd {
+    /// Append a `### <title>` subsection under the project's `## Notes`,
+    /// leaving everything else byte-identical
+    Add {
+        key: String,
+        /// the note's `###` heading
+        #[arg(long, allow_hyphen_values = true)]
+        title: String,
+        /// note body (use '-' for stdin)
+        #[arg(long, allow_hyphen_values = true)]
+        body: Option<String>,
+        /// read the body from a file (use '-' for stdin)
+        #[arg(long = "body-file")]
+        body_file: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -108,6 +137,7 @@ pub async fn run(db: &Option<String>, args: ProjectArgs) -> CliResult<()> {
             description,
             description_file,
             auto_archive_done_after,
+            if_updated_at,
         } => {
             edit(
                 db,
@@ -116,9 +146,19 @@ pub async fn run(db: &Option<String>, args: ProjectArgs) -> CliResult<()> {
                 description,
                 description_file,
                 auto_archive_done_after,
+                if_updated_at,
             )
             .await
         }
+        ProjectCmd::Note { cmd } => match cmd {
+            NoteCmd::Add {
+                key,
+                title,
+                body,
+                body_file,
+                json,
+            } => note_add(db, key, title, body, body_file, json).await,
+        },
         ProjectCmd::Archive { key } => set_archived(db, key, true).await,
         ProjectCmd::Unarchive { key } => set_archived(db, key, false).await,
         ProjectCmd::Rm { key, force: _ } => {
@@ -462,6 +502,7 @@ async fn edit(
     description: Option<String>,
     description_file: Option<String>,
     auto_archive_done_after: Option<String>,
+    if_updated_at: Option<String>,
 ) -> CliResult<()> {
     let key = key.to_uppercase();
     let description = resolve_description(description, description_file)?;
@@ -478,6 +519,19 @@ async fn edit(
     store
         .call(move |conn| {
             let cur = projects::fetch_by_key(conn, &key)?;
+            if let Some(expected) = if_updated_at.as_deref() {
+                let actual = format_usec(cur.updated_at);
+                if actual != expected {
+                    return Err(cliban_core::Error::validation(
+                        "updated_at",
+                        &format!(
+                            "stale write: {} was updated at {actual}, you read {expected} — \
+                             re-read and retry",
+                            cur.key
+                        ),
+                    ));
+                }
+            }
             let new_name = name.unwrap_or_else(|| cur.name.clone());
             let new_desc = description.unwrap_or_else(|| cur.description.clone());
             projects::update(
@@ -524,5 +578,69 @@ async fn set_archived(db: &Option<String>, key: String, archived: bool) -> CliRe
             Ok(())
         })
         .await?;
+    Ok(())
+}
+
+/// `project note add`: append one `### <title>` subsection under `## Notes`,
+/// splicing via the section machinery so the rest of the description — and
+/// every earlier note — stays byte-identical. This is the safe path the
+/// promote-lesson flow needs: no whole-description rewrite.
+async fn note_add(
+    db: &Option<String>,
+    key: String,
+    title: String,
+    body: Option<String>,
+    body_file: Option<String>,
+    json: bool,
+) -> CliResult<()> {
+    let key = key.to_uppercase();
+    let title = title.trim().to_string();
+    if title.is_empty() {
+        return Err(CliError::validation("--title can't be blank"));
+    }
+    let body = resolve_description(body, body_file)?.unwrap_or_default();
+    let sub = if body.trim().is_empty() {
+        format!("### {title}")
+    } else {
+        format!("### {title}\n\n{}", body.trim_end())
+    };
+    let store = store_open::open(db).await?;
+    let k = key.clone();
+    store
+        .call(move |conn| {
+            let cur = projects::fetch_by_key(conn, &k)?;
+            let (start, end, found) =
+                cliban_core::sections::find_section(&cur.description, "Notes");
+            let new_body = if found {
+                let existing = cur.description[start..end].trim_matches('\n');
+                if existing.is_empty() {
+                    sub
+                } else {
+                    format!("{existing}\n\n{sub}")
+                }
+            } else {
+                sub
+            };
+            let new_desc =
+                cliban_core::sections::replace_section(&cur.description, "Notes", &new_body);
+            projects::update(
+                conn,
+                &cur,
+                UpdateProject {
+                    description: Some(new_desc),
+                    ..Default::default()
+                },
+            )?;
+            Ok(())
+        })
+        .await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "key": key, "note": title, "section": "Notes" })
+        );
+    } else {
+        println!("added note {title:?} to {key} ## Notes");
+    }
     Ok(())
 }

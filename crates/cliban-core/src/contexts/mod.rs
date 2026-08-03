@@ -2,6 +2,7 @@
 //! store's writer thread via [`crate::store::Store::call`].
 
 pub mod activity_log;
+pub mod claims;
 pub mod issues;
 pub mod labels;
 pub mod milestones;

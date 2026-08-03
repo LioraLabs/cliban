@@ -289,3 +289,170 @@ fn get_row(conn: &Connection, project_id: i64, name: &str) -> Result<Option<Mile
         .query_row(&sql, params![project_id, name], rows::milestone)
         .optional()?)
 }
+
+// ---- waves ----
+
+/// The dependency-wave partition of a milestone, for orchestration: wave N is
+/// safe to start once waves 0..N have finished. Derived from the `blocks`
+/// edges among the milestone's own open issues; done issues count as satisfied
+/// dependencies and are listed separately.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Waves {
+    /// Layers of issue keys: everything in `waves[n]` has all its blockers in
+    /// `done` or in earlier waves.
+    pub waves: Vec<Vec<String>>,
+    /// The milestone's issues already done (their dependents may schedule).
+    pub done: Vec<String>,
+    /// Open issues gated — directly or transitively — by open work outside
+    /// this milestone. They cannot be scheduled by finishing the milestone's
+    /// own waves.
+    pub external_blocked: Vec<String>,
+}
+
+/// Partition the milestone's open, non-archived issues into dependency waves
+/// (Kahn layers over the intra-milestone `blocks` edges). A dependency cycle is
+/// an error naming the issues involved — a cyclic milestone cannot be
+/// orchestrated and the board needs fixing, not a guess.
+pub fn waves(conn: &Connection, project_key: &str, name: &str) -> Result<Waves> {
+    use std::collections::{HashMap, HashSet};
+
+    let milestone = get(conn, project_key, name)?.ok_or(Error::NotFound)?;
+
+    struct Node {
+        key: String,
+        done: bool,
+    }
+    let sql = "SELECT id, key, status FROM issues \
+               WHERE milestone_id = ?1 AND archived = 0 ORDER BY position, key";
+    let mut stmt = conn.prepare(sql)?;
+    let nodes: HashMap<i64, Node> = stmt
+        .query_map(params![milestone.id], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                Node {
+                    key: r.get(1)?,
+                    done: r.get::<_, String>(2)? == crate::schema::DONE_STATUS,
+                },
+            ))
+        })?
+        .collect::<rusqlite::Result<HashMap<_, _>>>()?;
+
+    let done: Vec<String> = nodes
+        .values()
+        .filter(|n| n.done)
+        .map(|n| n.key.clone())
+        .collect();
+
+    // Open blockers of every open node, split into edges inside the milestone
+    // and gates from outside it.
+    let mut intra: HashMap<i64, Vec<i64>> = HashMap::new();
+    let mut external: HashSet<i64> = HashSet::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT r.to_issue_id, b.id FROM issue_relation r \
+             JOIN issues b ON b.id = r.from_issue_id \
+             JOIN issues i ON i.id = r.to_issue_id \
+             WHERE r.type = 'blocks' AND i.milestone_id = ?1 AND i.archived = 0 \
+             AND b.archived = 0 AND b.status != 'done'",
+        )?;
+        let edges = stmt
+            .query_map(params![milestone.id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (to, blocker) in edges {
+            if nodes.get(&to).is_none_or(|n| n.done) {
+                continue;
+            }
+            if nodes.contains_key(&blocker) {
+                intra.entry(to).or_default().push(blocker);
+            } else {
+                external.insert(to);
+            }
+        }
+    }
+
+    // Layered Kahn over the open nodes. External-gated nodes never schedule;
+    // whatever else is left at the fixpoint is either transitively external
+    // or a genuine cycle.
+    let mut remaining: HashSet<i64> = nodes
+        .iter()
+        .filter(|(_, n)| !n.done)
+        .map(|(id, _)| *id)
+        .collect();
+    let mut scheduled: HashSet<i64> = HashSet::new();
+    let mut waves_out: Vec<Vec<String>> = Vec::new();
+    loop {
+        let mut wave: Vec<i64> = remaining
+            .iter()
+            .copied()
+            .filter(|id| !external.contains(id))
+            .filter(|id| {
+                intra
+                    .get(id)
+                    .is_none_or(|blockers| blockers.iter().all(|b| scheduled.contains(b)))
+            })
+            .collect();
+        if wave.is_empty() {
+            break;
+        }
+        wave.sort_by(|a, b| nodes[a].key.cmp(&nodes[b].key));
+        for id in &wave {
+            remaining.remove(id);
+            scheduled.insert(*id);
+        }
+        waves_out.push(wave.into_iter().map(|id| nodes[&id].key.clone()).collect());
+    }
+
+    // Drain the transitively-external tail: nodes whose unmet blockers are all
+    // external-blocked themselves. What survives is a cycle.
+    let mut external_blocked: HashSet<i64> = external
+        .iter()
+        .copied()
+        .filter(|id| remaining.contains(id))
+        .collect();
+    loop {
+        let grown: Vec<i64> = remaining
+            .iter()
+            .copied()
+            .filter(|id| !external_blocked.contains(id))
+            .filter(|id| {
+                intra.get(id).is_none_or(|blockers| {
+                    blockers
+                        .iter()
+                        .all(|b| scheduled.contains(b) || external_blocked.contains(b))
+                })
+            })
+            .collect();
+        if grown.is_empty() {
+            break;
+        }
+        external_blocked.extend(grown);
+    }
+    let cyclic: Vec<&i64> = remaining
+        .iter()
+        .filter(|id| !external_blocked.contains(id))
+        .collect();
+    if !cyclic.is_empty() {
+        let mut keys: Vec<String> = cyclic.iter().map(|id| nodes[id].key.clone()).collect();
+        keys.sort();
+        return Err(Error::validation(
+            "milestone",
+            &format!("dependency cycle among: {}", keys.join(", ")),
+        ));
+    }
+
+    let mut external_keys: Vec<String> = external_blocked
+        .iter()
+        .map(|id| nodes[id].key.clone())
+        .collect();
+    external_keys.sort();
+    let mut done_sorted = done;
+    done_sorted.sort();
+
+    Ok(Waves {
+        waves: waves_out,
+        done: done_sorted,
+        external_blocked: external_keys,
+    })
+}

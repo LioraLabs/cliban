@@ -145,6 +145,22 @@ const SCHEMA_DDL: &[&str] = &[
     r#"CREATE INDEX "issue_relation_to_index" ON "issue_relation" ("to_issue_id", "type")"#,
 ];
 
+/// `issue_claims` — which actor is holding an issue right now.
+///
+/// Same deal as [`REMOTE_LINKS_DDL`]: additive, `IF NOT EXISTS`, and NOT a
+/// `SCHEMA_VERSION` bump, because the ledger is shared with sibling forks (see
+/// the essay above). The fresh-database path in [`run`] applies it, and
+/// `contexts::claims::ensure` applies it lazily before every claims read or
+/// write — which is what guarantees the table on a database whose ledger a
+/// newer sibling owns, where [`run`] declines to migrate at all.
+pub const CLAIMS_DDL: &[&str] = &[
+    r#"CREATE TABLE IF NOT EXISTS "issue_claims" (
+        "issue_id" INTEGER PRIMARY KEY REFERENCES "issues"("id") ON DELETE CASCADE,
+        "claimed_by" TEXT NOT NULL,
+        "claimed_at" TEXT NOT NULL
+    )"#,
+];
+
 /// Create the schema on a fresh DB or migrate a recognized prior version.
 ///
 /// Returns `true` when the schema was created or migrated, `false` when the
@@ -152,7 +168,7 @@ const SCHEMA_DDL: &[&str] = &[
 pub fn run(conn: &Connection) -> crate::error::Result<bool> {
     if !has_ledger(conn)? {
         let tx = conn.unchecked_transaction()?;
-        for stmt in SCHEMA_DDL.iter().chain(REMOTE_LINKS_DDL) {
+        for stmt in SCHEMA_DDL.iter().chain(REMOTE_LINKS_DDL).chain(CLAIMS_DDL) {
             tx.execute_batch(stmt)?;
         }
         stamp(&tx)?;
@@ -210,7 +226,7 @@ pub fn run(conn: &Connection) -> crate::error::Result<bool> {
     }
     // Additive and idempotent, so it runs for every recognized prior version
     // without needing to know which one we came from.
-    for stmt in REMOTE_LINKS_DDL {
+    for stmt in REMOTE_LINKS_DDL.iter().chain(CLAIMS_DDL) {
         tx.execute_batch(stmt)?;
     }
     stamp(&tx)?;
