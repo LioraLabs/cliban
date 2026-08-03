@@ -102,7 +102,7 @@ fn the_skill_names_every_top_level_command() {
         .skip(1)
         .take_while(|l| l.starts_with("  ") && !l.trim().is_empty())
         .filter_map(|l| l.split_whitespace().next())
-        .filter(|c| !matches!(*c, "help" | "migrate-legacy"))
+        .filter(|c| !matches!(*c, "help"))
         .collect();
     assert!(!commands.is_empty(), "could not parse `cliban --help`");
 

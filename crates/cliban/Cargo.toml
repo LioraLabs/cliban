@@ -15,10 +15,6 @@ pkg-url = "{ repo }/releases/download/v{ version }/cliban-v{ version }-{ target 
 pkg-fmt = "tgz"
 bin-dir = "cliban-v{ version }-{ target }/{ bin }{ binary-ext }"
 
-[lib]
-name = "cliban"
-path = "src/lib.rs"
-
 [[bin]]
 name = "cliban"
 path = "src/main.rs"

@@ -376,15 +376,6 @@ Configuration is a handful of optional keys (`listen_addr`, `data_dir`,
 stderr, one fact per line. Backup, export, or delete of a tenant is a file
 operation on its `tenants/<id>.db`.
 
-## Migrating from the Go cliban
-
-The legacy Go build stored data in the same SQLite file under an older
-schema. Convert it once — the source is opened read-only:
-
-```bash
-cliban migrate-legacy --from /path/to/old/cliban.db --to /path/to/new/cliban.db
-```
-
 ## Workspace
 
 - `cliban-core`: storage + domain layer (rusqlite; owns the schema and migrations).

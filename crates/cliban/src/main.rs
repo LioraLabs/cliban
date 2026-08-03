@@ -2,7 +2,6 @@ use clap::Parser;
 
 mod cmd;
 mod descmd;
-use cliban::migrate;
 
 mod audit;
 mod errors;
@@ -11,16 +10,6 @@ mod output;
 mod search;
 mod since;
 mod store_open;
-
-#[derive(clap::Args)]
-struct MigrateLegacyArgs {
-    /// path to the legacy Go SQLite db to read (read-only)
-    #[arg(long)]
-    from: String,
-    /// path to the new cliban-core db to create (must not exist)
-    #[arg(long)]
-    to: String,
-}
 
 #[derive(Parser)]
 #[command(
@@ -61,8 +50,6 @@ enum Command {
     /// Refresh every linked issue from an external tracker in one call
     #[cfg(feature = "linear")]
     Sync(cmd::sync::SyncArgs),
-    /// Migrate a legacy Go cliban db into a fresh cliban-core db
-    MigrateLegacy(MigrateLegacyArgs),
 }
 
 fn main() {
@@ -104,18 +91,5 @@ async fn run(cli: Cli) -> errors::CliResult<()> {
         Some(Command::Push(args)) => cmd::sync::run_push(&cli.db, args).await,
         #[cfg(feature = "linear")]
         Some(Command::Sync(args)) => cmd::sync::run_sync(&cli.db, args).await,
-        Some(Command::MigrateLegacy(args)) => {
-            let report = migrate::migrate(
-                std::path::Path::new(&args.from),
-                std::path::Path::new(&args.to),
-            )
-            .map_err(errors::CliError::other)?;
-            println!(
-                "migrated: {} projects, {} milestones, {} issues, {} labels, {} issue_labels, {} relations",
-                report.projects, report.milestones, report.issues, report.labels,
-                report.issues_labels, report.relations,
-            );
-            Ok(())
-        }
     }
 }
