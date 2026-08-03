@@ -223,6 +223,107 @@ pub fn progress_comment(
     out
 }
 
+/// How many `issue log` findings the living digest keeps. Roughly "what
+/// happened lately", not a transcript — the full log lives on the board.
+const DIGEST_FINDINGS: usize = 3;
+
+/// The body of the *living* progress comment: one comment per linked issue,
+/// rewritten in place on every push, so it always describes now.
+///
+/// Unlike [`progress_comment`] — which appends what changed since the last
+/// sync — this is a snapshot: plan progress, the last few `issue log`
+/// findings, the latest test status a finding carried, and a footer telling
+/// a human why the comment keeps changing under them.
+pub fn progress_digest(
+    cliban_key: &str,
+    status: &str,
+    plan_body: Option<&str>,
+    activity: &[ActivityLogEntry],
+) -> String {
+    let mut out = format!("**cliban `{cliban_key}`** — status: `{status}`\n");
+
+    if let Some(plan) = plan_body {
+        let tasks = plan_progress(plan);
+        let done: usize = tasks.iter().map(|t| t.done).sum();
+        let total: usize = tasks.iter().map(|t| t.total).sum();
+        if total > 0 {
+            out.push_str(&format!("\n**Plan: {done}/{total} steps**\n\n"));
+            for task in &tasks {
+                let check = if task.total > 0 && task.done == task.total {
+                    "x"
+                } else {
+                    " "
+                };
+                out.push_str(&format!(
+                    "- [{check}] Task {}: {} — {}/{}\n",
+                    task.number, task.title, task.done, task.total
+                ));
+            }
+        }
+    }
+
+    // Findings are what an agent chose to say (`issue log`), not what the tool
+    // recorded about itself — status moves and ticks are already visible as
+    // plan progress and the state itself.
+    let findings: Vec<&ActivityLogEntry> = activity.iter().filter(|e| e.kind == "log").collect();
+
+    if let Some(status_line) = findings.iter().rev().find_map(|e| test_status(&e.message)) {
+        out.push_str(&format!("\n**Tests:** {status_line}\n"));
+    }
+
+    if !findings.is_empty() {
+        out.push_str("\n**Latest findings**\n\n");
+        let skip = findings.len().saturating_sub(DIGEST_FINDINGS);
+        for entry in &findings[skip..] {
+            out.push_str(&format!(
+                "- `{}` — {}\n",
+                time::format_usec(entry.ts),
+                entry.message.trim()
+            ));
+        }
+    }
+
+    out.push_str(
+        "\n---\n_This comment is maintained by cliban and updated in place on each push._\n",
+    );
+    out
+}
+
+/// Pull a test status like `447 passed / 0 failed` out of a log message, if it
+/// carries one. A count is a number immediately before the word `passed` or
+/// `failed`; punctuation around tokens is ignored. Heuristic on purpose — a
+/// miss only omits a digest line, it never corrupts anything.
+fn test_status(message: &str) -> Option<String> {
+    let mut passed: Option<u64> = None;
+    let mut failed: Option<u64> = None;
+    let tokens: Vec<&str> = message
+        .split_whitespace()
+        .map(|t| t.trim_matches(|c: char| !c.is_alphanumeric()))
+        .collect();
+    for pair in tokens.windows(2) {
+        let Ok(n) = pair[0].parse::<u64>() else {
+            continue;
+        };
+        match pair[1].to_ascii_lowercase().as_str() {
+            "passed" => passed = Some(n),
+            "failed" => failed = Some(n),
+            _ => {}
+        }
+    }
+    let mut parts = Vec::new();
+    if let Some(n) = passed {
+        parts.push(format!("{n} passed"));
+    }
+    if let Some(n) = failed {
+        parts.push(format!("{n} failed"));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" / "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,5 +489,89 @@ mod tests {
         let out = progress_comment("PROJ-42", "done", None, &[]);
         assert!(out.contains("status: `done`"));
         assert!(!out.contains("Plan:"));
+    }
+
+    // ---- the living digest ----
+
+    fn entry(ts: &str, kind: &str, message: &str) -> ActivityLogEntry {
+        ActivityLogEntry {
+            id: 0,
+            issue_id: 1,
+            ts: time::parse_ts(ts).unwrap(),
+            kind: kind.into(),
+            message: message.into(),
+            extra: "{}".into(),
+            inserted_at: time::parse_ts(ts).unwrap(),
+            updated_at: time::parse_ts(ts).unwrap(),
+        }
+    }
+
+    #[test]
+    fn digest_reports_plan_progress_and_the_footer() {
+        let plan = "\n### Task 1: setup\n\n- [x] **Step 1: a**\n- [ ] **Step 2: b**\n";
+        let out = progress_digest("PROJ-42", "in-progress", Some(plan), &[]);
+        assert!(out.contains("**cliban `PROJ-42`**"));
+        assert!(out.contains("Plan: 1/2 steps"));
+        assert!(
+            out.contains("maintained by cliban"),
+            "the footer tells a human why the comment keeps changing:\n{out}"
+        );
+    }
+
+    #[test]
+    fn digest_keeps_only_the_last_three_log_findings_and_skips_bookkeeping() {
+        let activity = vec![
+            entry("2026-08-01T10:00:00Z", "log", "finding one"),
+            entry("2026-08-01T10:01:00Z", "status", "backlog → in-progress"),
+            entry("2026-08-01T10:02:00Z", "log", "finding two"),
+            entry("2026-08-01T10:03:00Z", "tick", "ticked Task 1 Step 1"),
+            entry("2026-08-01T10:04:00Z", "log", "finding three"),
+            entry("2026-08-01T10:05:00Z", "log", "finding four"),
+        ];
+        let out = progress_digest("PROJ-42", "in-progress", None, &activity);
+        assert!(
+            !out.contains("finding one"),
+            "oldest finding must age out:\n{out}"
+        );
+        assert!(out.contains("finding two"));
+        assert!(out.contains("finding three"));
+        assert!(out.contains("finding four"));
+        assert!(
+            !out.contains("backlog → in-progress") && !out.contains("ticked Task 1"),
+            "bookkeeping entries are not findings:\n{out}"
+        );
+    }
+
+    #[test]
+    fn digest_surfaces_the_latest_test_status_a_log_entry_carries() {
+        let activity = vec![
+            entry("2026-08-01T10:00:00Z", "log", "suite red: 3 failed"),
+            entry(
+                "2026-08-01T11:00:00Z",
+                "log",
+                "green again: 447 passed / 0 failed",
+            ),
+        ];
+        let out = progress_digest("PROJ-42", "in-progress", None, &activity);
+        assert!(
+            out.contains("**Tests:** 447 passed / 0 failed"),
+            "the newest test status should be pulled out on its own line:\n{out}"
+        );
+    }
+
+    #[test]
+    fn digest_without_test_talk_has_no_tests_line() {
+        let activity = vec![entry("2026-08-01T10:00:00Z", "log", "wired the client")];
+        let out = progress_digest("PROJ-42", "in-progress", None, &activity);
+        assert!(!out.contains("**Tests:**"), "{out}");
+    }
+
+    #[test]
+    fn digest_of_a_bare_issue_is_still_valid_markdown_with_status_and_footer() {
+        let out = progress_digest("PROJ-42", "backlog", None, &[]);
+        assert!(out.contains("status: `backlog`"));
+        assert!(out.contains("maintained by cliban"));
+        assert!(!out.contains("Plan:"));
+        assert!(!out.contains("**Latest findings**"));
     }
 }

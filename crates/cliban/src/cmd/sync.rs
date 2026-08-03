@@ -512,16 +512,14 @@ async fn push_linear(db: &Option<String>, args: PushLinearArgs) -> CliResult<()>
     // Work out every write before performing any, so --dry-run reports exactly
     // what a real run would do.
     let plan_body = plan_section(&issue);
+    // The living comment is a snapshot, not a delta: the digest always renders
+    // from the full activity log, whatever was pushed before, because the
+    // comment it lands in replaces its own previous content.
     let activity = {
         let id = issue.id;
-        let since = link.as_ref().map(|l| l.last_synced_at);
-        let entries = store
+        store
             .call(move |conn| activity_log::list_for_issue(conn, id, 200))
-            .await?;
-        match since {
-            Some(since) => entries.into_iter().filter(|e| e.ts > since).collect(),
-            None => entries,
-        }
+            .await?
     };
 
     let mut patch = ops::IssuePatch::default();
@@ -548,7 +546,7 @@ async fn push_linear(db: &Option<String>, args: PushLinearArgs) -> CliResult<()>
     }
 
     let comment = writes.comment.then(|| {
-        render::progress_comment(&issue.key, &issue.status, plan_body.as_deref(), &activity)
+        render::progress_digest(&issue.key, &issue.status, plan_body.as_deref(), &activity)
     });
 
     if writes.description {
@@ -578,11 +576,31 @@ async fn push_linear(db: &Option<String>, args: PushLinearArgs) -> CliResult<()>
             .await
             .map_err(sync_err)?
     };
-    if let Some(body) = &comment {
-        ops::create_comment(&api, &remote.id, body)
-            .await
-            .map_err(sync_err)?;
-    }
+    // One living comment per link, edited in place. `push` never appends: the
+    // first push creates the comment, every later push rewrites it, and a
+    // comment someone deleted in Linear is recreated once rather than errored.
+    let comment_id = match &comment {
+        None => None,
+        Some(body) => {
+            let existing = link.as_ref().and_then(|l| l.progress_comment_id.clone());
+            match existing {
+                Some(id) => match ops::update_comment(&api, &id, body).await {
+                    Ok(()) => Some(id),
+                    Err(e) if ops::comment_not_found(&e) => Some(
+                        ops::create_comment(&api, &remote.id, body)
+                            .await
+                            .map_err(sync_err)?,
+                    ),
+                    Err(e) => return Err(sync_err(e)),
+                },
+                None => Some(
+                    ops::create_comment(&api, &remote.id, body)
+                        .await
+                        .map_err(sync_err)?,
+                ),
+            }
+        }
+    };
 
     // A push that just created the Linear issue is the one place a pairing is
     // born with origin `Pushed` — the spec lived on the board first.
@@ -591,6 +609,23 @@ async fn push_linear(db: &Option<String>, args: PushLinearArgs) -> CliResult<()>
         None => links::Origin::Pushed,
     };
     record_link(&store, &issue, &remote, origin).await?;
+    // After record_link, so the row exists even when this push just created
+    // the pairing (--create). Recorded whenever a comment landed — on a
+    // recreate this is exactly what swaps the dead id for the live one.
+    if let Some(id) = comment_id {
+        let local_id = issue.id;
+        store
+            .call(move |conn| {
+                links::set_progress_comment(
+                    conn,
+                    PROVIDER_LINEAR,
+                    ENTITY_ISSUE,
+                    local_id,
+                    Some(&id),
+                )
+            })
+            .await?;
+    }
     let verb = if created { "created" } else { "pushed" };
     audit(
         &store,

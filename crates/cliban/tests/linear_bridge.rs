@@ -27,8 +27,8 @@ type Replies = HashMap<String, String>;
 
 struct Stub {
     endpoint: String,
-    /// Operation names the stub was actually asked for, in order.
-    seen: Arc<Mutex<Vec<String>>>,
+    /// (operation name, raw request body) for every request, in order.
+    seen: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl Stub {
@@ -36,7 +36,7 @@ impl Stub {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub");
         let port = listener.local_addr().unwrap().port();
         let seen = Arc::new(Mutex::new(Vec::new()));
-        let seen_thread = Arc::clone(&seen);
+        let seen_thread: Arc<Mutex<Vec<(String, String)>>> = Arc::clone(&seen);
 
         std::thread::spawn(move || {
             for stream in listener.incoming() {
@@ -46,7 +46,7 @@ impl Stub {
                     None => continue,
                 };
                 let op = operation_name(&body).unwrap_or_default();
-                seen_thread.lock().unwrap().push(op.clone());
+                seen_thread.lock().unwrap().push((op.clone(), body.clone()));
                 let reply = replies
                     .get(&op)
                     .cloned()
@@ -73,7 +73,23 @@ impl Stub {
     }
 
     fn operations(&self) -> Vec<String> {
-        self.seen.lock().unwrap().clone()
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(op, _)| op.clone())
+            .collect()
+    }
+
+    /// Raw request bodies of every call to `op`, in order.
+    fn requests_for(&self, op: &str) -> Vec<String> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(o, _)| o == op)
+            .map(|(_, body)| body.clone())
+            .collect()
     }
 }
 
@@ -169,6 +185,17 @@ fn import_replies(title: &str, state: (&str, &str), updated_at: &str) -> Replies
         "IssueByKey".to_string(),
         issue_reply(title, state, updated_at),
     )])
+}
+
+fn comment_create_reply(comment_id: &str) -> String {
+    serde_json::json!({"data": {"commentCreate": {
+        "success": true, "comment": {"id": comment_id}
+    }}})
+    .to_string()
+}
+
+fn comment_update_ok_reply() -> String {
+    serde_json::json!({"data": {"commentUpdate": {"success": true}}}).to_string()
 }
 
 // ---------------------------------------------------------------- harness
@@ -489,7 +516,7 @@ fn push_moves_the_linear_state_and_posts_a_comment() {
         ),
         (
             "CommentCreate".to_string(),
-            serde_json::json!({"data": {"commentCreate": {"success": true}}}).to_string(),
+            comment_create_reply("comment-uuid-1"),
         ),
     ]));
 
@@ -551,7 +578,7 @@ fn push_refuses_when_linear_moved_since_the_last_sync() {
         ),
         (
             "CommentCreate".to_string(),
-            serde_json::json!({"data": {"commentCreate": {"success": true}}}).to_string(),
+            comment_create_reply("comment-uuid-1"),
         ),
     ]);
 
@@ -659,7 +686,7 @@ fn reimport_over_a_pushed_origin_link_keeps_the_local_spec() {
         ),
         (
             "CommentCreate".to_string(),
-            serde_json::json!({"data": {"commentCreate": {"success": true}}}).to_string(),
+            comment_create_reply("comment-uuid-1"),
         ),
     ]));
     board
@@ -750,7 +777,10 @@ fn reimport_over_an_imported_origin_link_still_refreshes_the_spec() {
         run.stderr
     );
 
-    let description = board.show(&key)["description"].as_str().unwrap().to_string();
+    let description = board.show(&key)["description"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert!(
         description.contains("The upstream spec text."),
         "imported-origin spec must refresh from Linear:\n{description}"
@@ -758,6 +788,196 @@ fn reimport_over_an_imported_origin_link_still_refreshes_the_spec() {
     assert!(
         !description.contains("LOCAL EDIT that must not survive"),
         "the local edit should have been overwritten:\n{description}"
+    );
+}
+
+// ---- the living progress comment: one comment, edited in place ----
+
+/// Replies for a push over an already-imported link whose upstream has not
+/// moved: issue lookup, team lookup, and both comment mutations.
+fn living_comment_replies(create_id: &str) -> Replies {
+    HashMap::from([
+        (
+            "IssueById".to_string(),
+            issue_by_id_reply(
+                "Work to do",
+                ("Todo", "unstarted"),
+                "2026-07-29T12:00:00.000Z",
+            ),
+        ),
+        ("TeamByKey".to_string(), team_reply()),
+        ("CommentCreate".to_string(), comment_create_reply(create_id)),
+        ("CommentUpdate".to_string(), comment_update_ok_reply()),
+    ])
+}
+
+/// Import ENG-412 into a fresh board and return the cliban key.
+fn import_eng412(board: &Board) -> String {
+    let stub = Stub::start(import_replies(
+        "Work to do",
+        ("Todo", "unstarted"),
+        "2026-07-29T12:00:00.000Z",
+    ));
+    let run = board.run(
+        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        Some(&stub),
+    );
+    run.assert_ok();
+    serde_json::from_str::<serde_json::Value>(&run.stdout).unwrap()["cliban"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn a_second_push_updates_the_comment_instead_of_appending_another() {
+    let board = Board::new("living");
+    let key = import_eng412(&board);
+
+    // First push: no comment exists yet, so it is created.
+    let stub1 = Stub::start(living_comment_replies("comment-uuid-1"));
+    board
+        .run(&["push", "linear", &key], Some(&stub1))
+        .assert_ok();
+    let ops = stub1.operations();
+    assert!(ops.contains(&"CommentCreate".to_string()), "{ops:?}");
+    assert!(
+        !ops.contains(&"CommentUpdate".to_string()),
+        "nothing to update yet: {ops:?}"
+    );
+
+    // Second push: the recorded comment is edited in place.
+    let stub2 = Stub::start(living_comment_replies("comment-uuid-never-used"));
+    board
+        .run(&["push", "linear", &key], Some(&stub2))
+        .assert_ok();
+    let ops = stub2.operations();
+    assert!(
+        ops.contains(&"CommentUpdate".to_string()),
+        "the second push must edit, not append: {ops:?}"
+    );
+    assert!(
+        !ops.contains(&"CommentCreate".to_string()),
+        "the second push must not create a second comment: {ops:?}"
+    );
+    let update = &stub2.requests_for("CommentUpdate")[0];
+    assert!(
+        update.contains("comment-uuid-1"),
+        "the update must address the comment the first push created: {update}"
+    );
+}
+
+#[test]
+fn the_digest_reflects_ticked_steps_logged_findings_and_test_status() {
+    let board = Board::new("digest");
+    let key = import_eng412(&board);
+
+    let plan = "## Spec\n\nThe upstream spec text.\n\n## Plan\n\n\
+                ### Task 1: wire it up\n\n\
+                - [ ] **Step 1: write the client**\n\
+                - [ ] **Step 2: write the tests**\n";
+    board
+        .run(&["issue", "edit", &key, "--description", plan], None)
+        .assert_ok();
+    board
+        .run(&["issue", "tick", &key, "--task", "1", "--step", "1"], None)
+        .assert_ok();
+    for finding in [
+        "an old finding that should age out",
+        "second finding",
+        "third finding",
+        "client wired; suite 12 passed / 0 failed",
+    ] {
+        board
+            .run(&["issue", "log", &key, finding], None)
+            .assert_ok();
+    }
+
+    let stub = Stub::start(living_comment_replies("comment-uuid-1"));
+    board
+        .run(&["push", "linear", &key], Some(&stub))
+        .assert_ok();
+
+    let body = stub.requests_for("CommentCreate").remove(0);
+    assert!(
+        body.contains("Plan: 1/2 steps"),
+        "plan progress missing from the digest: {body}"
+    );
+    assert!(
+        body.contains("client wired; suite 12 passed / 0 failed"),
+        "the newest finding is missing: {body}"
+    );
+    assert!(
+        body.contains("**Tests:** 12 passed / 0 failed"),
+        "the test status a finding carried should be pulled out: {body}"
+    );
+    assert!(
+        !body.contains("an old finding that should age out"),
+        "only the last few findings belong in the digest: {body}"
+    );
+    assert!(
+        body.contains("maintained by cliban"),
+        "the footer is the reader's explanation for the edits: {body}"
+    );
+}
+
+#[test]
+fn a_deleted_comment_is_recreated_once_and_the_new_id_sticks() {
+    let board = Board::new("recreate");
+    let key = import_eng412(&board);
+
+    // Push 1 creates comment-uuid-1.
+    let stub1 = Stub::start(living_comment_replies("comment-uuid-1"));
+    board
+        .run(&["push", "linear", &key], Some(&stub1))
+        .assert_ok();
+
+    // Push 2: someone deleted the comment in Linear. The update resolves to
+    // not-found, and the push recovers by creating a fresh comment.
+    let stub2 = Stub::start(HashMap::from([
+        (
+            "IssueById".to_string(),
+            issue_by_id_reply(
+                "Work to do",
+                ("Todo", "unstarted"),
+                "2026-07-29T12:00:00.000Z",
+            ),
+        ),
+        ("TeamByKey".to_string(), team_reply()),
+        (
+            "CommentUpdate".to_string(),
+            r#"{"errors":[{"message":"Entity not found: Comment"}]}"#.to_string(),
+        ),
+        (
+            "CommentCreate".to_string(),
+            comment_create_reply("comment-uuid-2"),
+        ),
+    ]));
+    board
+        .run(&["push", "linear", &key], Some(&stub2))
+        .assert_ok();
+    let ops = stub2.operations();
+    let update_pos = ops.iter().position(|o| o == "CommentUpdate");
+    let create_pos = ops.iter().position(|o| o == "CommentCreate");
+    assert!(
+        update_pos.is_some() && create_pos.is_some() && update_pos < create_pos,
+        "recovery is try-update, then create: {ops:?}"
+    );
+
+    // Push 3 proves the recreated id was stored: the update addresses it.
+    let stub3 = Stub::start(living_comment_replies("comment-uuid-never-used"));
+    board
+        .run(&["push", "linear", &key], Some(&stub3))
+        .assert_ok();
+    assert!(
+        !stub3.operations().contains(&"CommentCreate".to_string()),
+        "the recreated comment must be reused, not recreated again: {:?}",
+        stub3.operations()
+    );
+    let update = &stub3.requests_for("CommentUpdate")[0];
+    assert!(
+        update.contains("comment-uuid-2"),
+        "the stored id should be the recreated one: {update}"
     );
 }
 
