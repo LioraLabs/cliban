@@ -28,7 +28,8 @@ use cliban_core::{Error, Result};
 pub use cliban_core::migrations::REMOTE_LINKS_DDL as DDL;
 
 const COLS: &str = "id, provider, entity, local_id, remote_id, remote_key, \
-                    remote_updated_at, base_hash, last_synced_at, origin";
+                    remote_updated_at, base_hash, last_synced_at, origin, \
+                    progress_comment_id";
 
 /// Who created a pairing. Recorded once, when the link row is first inserted,
 /// and never rewritten by later syncs — it answers "whose spec was this
@@ -85,6 +86,10 @@ pub struct RemoteLink {
     pub last_synced_at: DateTime<Utc>,
     /// Who created the pairing. Fixed at insert; see [`Origin`].
     pub origin: Origin,
+    /// The Linear id of the living progress comment `push` maintains, once one
+    /// exists. Written only through [`set_progress_comment`]; the upsert never
+    /// touches it, so every sync of either direction leaves it alone.
+    pub progress_comment_id: Option<String>,
 }
 
 /// The fields a caller supplies; the rest are bookkeeping.
@@ -119,6 +124,12 @@ pub fn ensure_table(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "ALTER TABLE remote_links ADD COLUMN origin TEXT NOT NULL DEFAULT 'imported'",
         )?;
+    }
+    // Same story one ticket later: the living progress comment's id (CLI-43)
+    // is additive too. NULL means "no comment created yet", which is exactly
+    // right for every pre-column row.
+    if !has_column(conn, "remote_links", "progress_comment_id")? {
+        conn.execute_batch("ALTER TABLE remote_links ADD COLUMN progress_comment_id TEXT")?;
     }
     Ok(())
 }
@@ -209,6 +220,35 @@ pub fn upsert(conn: &Connection, new: NewLink) -> Result<RemoteLink> {
     by_local(conn, &new.provider, &new.entity, new.local_id)?.ok_or(Error::NotFound)
 }
 
+/// Record (or clear) the id of the living progress comment on a pairing.
+///
+/// Separate from [`upsert`] on purpose: the comment id has a different
+/// lifecycle from the sync bookkeeping — it is written when `push` creates or
+/// recreates the comment, and must survive every other sync untouched.
+pub fn set_progress_comment(
+    conn: &Connection,
+    provider: &str,
+    entity: &str,
+    local_id: i64,
+    comment_id: Option<&str>,
+) -> Result<()> {
+    let n = conn.execute(
+        "UPDATE remote_links SET progress_comment_id = ?4, updated_at = ?5 \
+         WHERE provider = ?1 AND entity = ?2 AND local_id = ?3",
+        params![
+            provider,
+            entity,
+            local_id,
+            comment_id,
+            time::format_usec(time::now_usec()),
+        ],
+    )?;
+    if n == 0 {
+        return Err(Error::NotFound);
+    }
+    Ok(())
+}
+
 /// Every link for a provider, oldest first.
 pub fn list(conn: &Connection, provider: &str) -> Result<Vec<RemoteLink>> {
     let sql = format!("SELECT {COLS} FROM remote_links WHERE provider = ?1 ORDER BY id");
@@ -236,6 +276,7 @@ fn read(row: &Row) -> Result<RemoteLink> {
         base_hash: row.get(7)?,
         last_synced_at: time::parse_ts(&last_synced_at).unwrap_or_else(time::now_usec),
         origin: Origin::from_db(&origin),
+        progress_comment_id: row.get(10)?,
     })
 }
 
@@ -374,6 +415,94 @@ mod tests {
         // *created* it, not who synced last, so it must survive unchanged.
         let again = upsert(&c, new_link(7, "uuid-1", "ENG-412")).unwrap();
         assert_eq!(again.origin, Origin::Pushed);
+    }
+
+    #[test]
+    fn ensure_table_adds_progress_comment_id_to_a_pre_column_table() {
+        let c = Connection::open_in_memory().unwrap();
+        // The table as CLI-41 left it: origin present, no comment id yet.
+        c.execute_batch(
+            r#"CREATE TABLE "remote_links" (
+                "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+                "provider" TEXT NOT NULL,
+                "entity" TEXT NOT NULL,
+                "local_id" INTEGER NOT NULL,
+                "remote_id" TEXT NOT NULL,
+                "remote_key" TEXT NOT NULL,
+                "remote_updated_at" TEXT,
+                "base_hash" TEXT,
+                "last_synced_at" TEXT NOT NULL,
+                "inserted_at" TEXT NOT NULL,
+                "updated_at" TEXT NOT NULL,
+                "origin" TEXT NOT NULL DEFAULT 'imported'
+            )"#,
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO remote_links \
+               (provider, entity, local_id, remote_id, remote_key, last_synced_at, \
+                inserted_at, updated_at) \
+             VALUES ('linear', 'issue', 7, 'uuid-1', 'ENG-412', '2026-01-01T00:00:00Z', \
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        ensure_table(&c).unwrap();
+        // Repeatable, like every other ensure_table upgrade.
+        ensure_table(&c).unwrap();
+
+        let link = by_local(&c, crate::PROVIDER_LINEAR, crate::ENTITY_ISSUE, 7)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            link.progress_comment_id, None,
+            "a pre-column row has no living comment yet"
+        );
+    }
+
+    #[test]
+    fn set_progress_comment_persists_and_reads_back() {
+        let c = conn();
+        upsert(&c, new_link(7, "uuid-1", "ENG-412")).unwrap();
+        set_progress_comment(
+            &c,
+            crate::PROVIDER_LINEAR,
+            crate::ENTITY_ISSUE,
+            7,
+            Some("comment-uuid-1"),
+        )
+        .unwrap();
+        let link = by_local(&c, crate::PROVIDER_LINEAR, crate::ENTITY_ISSUE, 7)
+            .unwrap()
+            .unwrap();
+        assert_eq!(link.progress_comment_id.as_deref(), Some("comment-uuid-1"));
+
+        // Clearing is how a caller forgets a comment it could not resolve.
+        set_progress_comment(&c, crate::PROVIDER_LINEAR, crate::ENTITY_ISSUE, 7, None).unwrap();
+        let link = by_local(&c, crate::PROVIDER_LINEAR, crate::ENTITY_ISSUE, 7)
+            .unwrap()
+            .unwrap();
+        assert_eq!(link.progress_comment_id, None);
+    }
+
+    #[test]
+    fn upsert_never_clobbers_a_stored_comment_id() {
+        let c = conn();
+        upsert(&c, new_link(7, "uuid-1", "ENG-412")).unwrap();
+        set_progress_comment(
+            &c,
+            crate::PROVIDER_LINEAR,
+            crate::ENTITY_ISSUE,
+            7,
+            Some("comment-uuid-1"),
+        )
+        .unwrap();
+
+        // Every later sync (import or push) upserts the same pairing; the
+        // living comment must survive all of them.
+        let again = upsert(&c, new_link(7, "uuid-1", "ENG-412")).unwrap();
+        assert_eq!(again.progress_comment_id.as_deref(), Some("comment-uuid-1"));
     }
 
     #[test]
