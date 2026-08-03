@@ -33,16 +33,8 @@ $ cliban activity --since 1d                 # what happened while nobody was lo
 $ cliban issue tick PROJ-42 --task 2 --step 1   # and back to work
 ```
 
-<table>
-  <tr>
-    <td width="50%"><img src="assets/milestones.png" alt="milestone tracking"></td>
-    <td width="50%"><img src="assets/activity.png" alt="the activity timeline"></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>milestones: progress, targets, what moved last</sub></td>
-    <td align="center"><sub>the timeline: every event recorded, attributed, filterable</sub></td>
-  </tr>
-</table>
+<p align="center"><img src="assets/tour.gif" width="880" alt="a lap around the board: scope a project, move a card, check the milestone, read the timeline"></p>
+<p align="center"><sub>one lap: scope a project · move a card · milestone progress · the attributed timeline</sub></p>
 
 One board, three front doors:
 
