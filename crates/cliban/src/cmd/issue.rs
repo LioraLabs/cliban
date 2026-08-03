@@ -2172,17 +2172,27 @@ async fn mv(
 ) -> CliResult<()> {
     let key = parse_issue_key(&key)?;
     let status = parse_status(&status)?;
+    #[cfg(feature = "linear")]
+    let (push_key, push_status) = (key.clone(), status.clone());
     let store = store_open::open(db).await?;
-    store
+    let from = store
         .call(move |conn| {
             let issue = issues::get_by_key(conn, &key)?.ok_or(cliban_core::Error::NotFound)?;
             let from = issue.status.clone();
             issues::move_issue(conn, &issue, &status)?;
             // The move is the event worth recording; `--note` carries the why.
             crate::audit::record_move(conn, &issue, &from, &status, note.as_deref());
-            Ok(())
+            Ok(from)
         })
         .await?;
+    // The move has committed; push_on_move (opt-in via linear.toml) may now
+    // mirror it to a linked Linear issue. Best-effort: it never fails the mv.
+    #[cfg(feature = "linear")]
+    if from != push_status {
+        crate::cmd::sync::push_on_move(db, &push_key).await;
+    }
+    #[cfg(not(feature = "linear"))]
+    let _ = from;
     Ok(())
 }
 

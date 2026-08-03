@@ -8,10 +8,12 @@
 //! remote one.
 //!
 //! What makes that tractable is declared field ownership rather than
-//! reconciliation. The remote owns title, priority, labels, due date, workflow
-//! state, and the `## Spec` prose. cliban owns `## Plan`, `## Activity Log`,
-//! and `## Notes` — the parts that have no counterpart upstream and are the
-//! whole reason the board exists. Neither side ever merges the other's fields,
+//! reconciliation. The remote owns title, priority, labels, due date, and
+//! workflow state. The `## Spec` prose follows the link's recorded
+//! [`links::Origin`] — whoever created the pairing wrote the spec first and
+//! owns it. cliban owns `## Plan`, `## Activity Log`, and `## Notes` — the
+//! parts that have no counterpart upstream and are the whole reason the board
+//! exists. Neither side ever merges the other's fields,
 //! so the only conflict left is "the remote moved since we last looked", which
 //! is a timestamp comparison (see `linear::push`).
 

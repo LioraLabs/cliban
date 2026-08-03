@@ -83,6 +83,80 @@ pub async fn team_by_key<G: GraphQl>(api: &G, key: &str) -> Result<Team> {
         .ok_or_else(|| Error::NotFound(format!("Linear team {key}")))
 }
 
+/// An issue assigned to the viewer, with just enough cycle context to decide
+/// whether `import --mine` should bring it in.
+#[derive(Debug, Clone)]
+pub struct AssignedIssue {
+    pub issue: Issue,
+    /// The cycle the issue sits in, if any.
+    pub cycle_id: Option<String>,
+    /// The team's currently active cycle. `None` means the team does not use
+    /// cycles (or has none running), which changes what "mine, now" means.
+    pub team_active_cycle_id: Option<String>,
+}
+
+impl AssignedIssue {
+    /// Whether `--mine` should import this issue. A team with no active cycle
+    /// puts every open assigned issue in scope; a team running a cycle scopes
+    /// "mine, now" to that cycle — anything outside it is backlog.
+    pub fn in_active_scope(&self) -> bool {
+        match &self.team_active_cycle_id {
+            None => true,
+            Some(active) => self.cycle_id.as_deref() == Some(active.as_str()),
+        }
+    }
+}
+
+/// Every open issue assigned to the token's viewer, with cycle context.
+///
+/// The completed/canceled exclusion is server-side: finished work must never
+/// flood in through `--mine`, however long the assignee list has grown. The
+/// cycle scoping is deliberately client-side instead — whether a team uses
+/// cycles is per-issue data, and the caller wants to *count* the out-of-cycle
+/// skips rather than have them silently absent.
+pub async fn assigned_to_viewer<G: GraphQl>(api: &G) -> Result<Vec<AssignedIssue>> {
+    let doc = format!(
+        r#"query ViewerAssignedIssues {{
+            viewer {{
+                assignedIssues(
+                    filter: {{ state: {{ type: {{ nin: ["completed", "canceled"] }} }} }},
+                    first: 100
+                ) {{
+                    nodes {{ {ISSUE_FIELDS} cycle {{ id }} team {{ activeCycle {{ id }} }} }}
+                }}
+            }}
+        }}"#
+    );
+    let data = api.query(&doc, json!({})).await?;
+    let nodes = data
+        .pointer("/viewer/assignedIssues/nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| {
+            Error::Unexpected("response had no `viewer.assignedIssues.nodes` field".into())
+        })?;
+    nodes.into_iter().map(parse_assigned).collect()
+}
+
+/// The cycle fields ride alongside [`ISSUE_FIELDS`] in the same node; peel
+/// them off before handing the rest to the shared [`Issue`] shape.
+fn parse_assigned(node: Value) -> Result<AssignedIssue> {
+    let cycle_id = node
+        .pointer("/cycle/id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let team_active_cycle_id = node
+        .pointer("/team/activeCycle/id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let issue: Issue = serde_json::from_value(node)?;
+    Ok(AssignedIssue {
+        issue,
+        cycle_id,
+        team_active_cycle_id,
+    })
+}
+
 /// Fields for a new Linear issue. Only what `push --create` sets.
 #[derive(Debug, Clone)]
 pub struct NewIssue {
@@ -149,10 +223,11 @@ pub async fn update_issue<G: GraphQl>(api: &G, id: &str, patch: IssuePatch) -> R
     payload_issue(data, "issueUpdate")
 }
 
-/// Post a comment. Returns nothing useful — a comment either lands or errors.
-pub async fn create_comment<G: GraphQl>(api: &G, issue_id: &str, body: &str) -> Result<()> {
+/// Post a comment and return its Linear id — the id is what lets a later push
+/// edit the same comment in place rather than append a new one.
+pub async fn create_comment<G: GraphQl>(api: &G, issue_id: &str, body: &str) -> Result<String> {
     let doc = r#"mutation CommentCreate($input: CommentCreateInput!) {
-        commentCreate(input: $input) { success }
+        commentCreate(input: $input) { success comment { id } }
     }"#;
     let data = api
         .query(
@@ -160,7 +235,43 @@ pub async fn create_comment<G: GraphQl>(api: &G, issue_id: &str, body: &str) -> 
             json!({ "input": { "issueId": issue_id, "body": body } }),
         )
         .await?;
-    require_success(&data, "commentCreate")
+    require_success(&data, "commentCreate")?;
+    data.get("commentCreate")
+        .and_then(|p| p.get("comment"))
+        .and_then(|c| c.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            Error::Unexpected("commentCreate reported success but returned no comment id".into())
+        })
+}
+
+/// Rewrite an existing comment's body in place.
+///
+/// A comment someone deleted surfaces as a GraphQL error, not `success: false`
+/// — use [`comment_not_found`] on the returned error to tell "recreate it"
+/// apart from "the API refused".
+pub async fn update_comment<G: GraphQl>(api: &G, comment_id: &str, body: &str) -> Result<()> {
+    let doc = r#"mutation CommentUpdate($id: String!, $input: CommentUpdateInput!) {
+        commentUpdate(id: $id, input: $input) { success }
+    }"#;
+    let data = api
+        .query(doc, json!({ "id": comment_id, "input": { "body": body } }))
+        .await?;
+    require_success(&data, "commentUpdate")
+}
+
+/// Whether an error from [`update_comment`] means the comment no longer exists
+/// — i.e. someone deleted it in Linear, and the right move is to create a
+/// fresh one rather than fail the push.
+pub fn comment_not_found(err: &Error) -> bool {
+    match err {
+        Error::NotFound(_) => true,
+        Error::Api(messages) => messages
+            .iter()
+            .any(|m| m.to_ascii_lowercase().contains("not found")),
+        _ => false,
+    }
 }
 
 /// Split `ENG-412` into `("ENG", 412)`.
@@ -404,12 +515,121 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_comment_checks_success() {
-        let fake = Fake::new(vec![json!({"commentCreate": {"success": true}})]);
-        create_comment(&fake, "uuid-1", "hello").await.unwrap();
+    async fn create_comment_checks_success_and_returns_the_comment_id() {
+        let fake = Fake::new(vec![json!({"commentCreate": {
+            "success": true, "comment": {"id": "comment-uuid-1"}
+        }})]);
+        let id = create_comment(&fake, "uuid-1", "hello").await.unwrap();
+        assert_eq!(id, "comment-uuid-1");
         assert_eq!(fake.last_vars()["input"]["issueId"], "uuid-1");
         assert_eq!(fake.last_vars()["input"]["body"], "hello");
         assert!(fake.last_doc().contains("commentCreate"));
+    }
+
+    #[tokio::test]
+    async fn create_comment_success_without_an_id_is_reported() {
+        let fake = Fake::new(vec![
+            json!({"commentCreate": {"success": true, "comment": null}}),
+        ]);
+        let err = create_comment(&fake, "uuid-1", "hello").await.unwrap_err();
+        assert!(err.to_string().contains("no comment"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn update_comment_sends_the_id_and_body_and_checks_success() {
+        let fake = Fake::new(vec![json!({"commentUpdate": {"success": true}})]);
+        update_comment(&fake, "comment-uuid-1", "new body")
+            .await
+            .unwrap();
+        assert_eq!(fake.last_vars()["id"], "comment-uuid-1");
+        assert_eq!(fake.last_vars()["input"]["body"], "new body");
+        assert!(fake.last_doc().contains("commentUpdate"));
+    }
+
+    #[tokio::test]
+    async fn a_deleted_comment_is_detectable_by_the_caller() {
+        // Linear reports a vanished entity as a GraphQL error, which the
+        // transport surfaces as Error::Api. The push path needs to tell that
+        // apart from "the API refused" to recreate rather than fail.
+        let err = Error::Api(vec!["Entity not found: Comment".into()]);
+        assert!(comment_not_found(&err));
+        assert!(!comment_not_found(&Error::Api(vec!["rate limited".into()])));
+        assert!(comment_not_found(&Error::NotFound("comment x".into())));
+    }
+
+    fn assigned_node(identifier: &str, cycle: Option<&str>, active: Option<&str>) -> Value {
+        let mut node = issue_json();
+        node["identifier"] = json!(identifier);
+        node["cycle"] = match cycle {
+            Some(id) => json!({ "id": id }),
+            None => Value::Null,
+        };
+        node["team"]["activeCycle"] = match active {
+            Some(id) => json!({ "id": id }),
+            None => Value::Null,
+        };
+        node
+    }
+
+    #[tokio::test]
+    async fn assigned_to_viewer_parses_issues_with_their_cycle_context() {
+        let fake = Fake::new(vec![json!({"viewer": {"assignedIssues": {"nodes": [
+            assigned_node("ENG-1", Some("cyc-9"), Some("cyc-9")),
+            assigned_node("ENG-2", None, None),
+        ]}}})]);
+        let assigned = assigned_to_viewer(&fake).await.unwrap();
+        assert_eq!(assigned.len(), 2);
+        assert_eq!(assigned[0].issue.identifier, "ENG-1");
+        assert_eq!(assigned[0].cycle_id.as_deref(), Some("cyc-9"));
+        assert_eq!(assigned[0].team_active_cycle_id.as_deref(), Some("cyc-9"));
+        assert_eq!(assigned[1].cycle_id, None);
+        assert_eq!(assigned[1].team_active_cycle_id, None);
+    }
+
+    #[tokio::test]
+    async fn assigned_to_viewer_asks_only_for_open_states() {
+        // The server-side filter is the contract: completed and canceled work
+        // must never flood in through --mine.
+        let fake = Fake::new(vec![json!({"viewer": {"assignedIssues": {"nodes": []}}})]);
+        assigned_to_viewer(&fake).await.unwrap();
+        let doc = fake.last_doc();
+        assert!(doc.contains("assignedIssues"), "{doc}");
+        assert!(doc.contains("completed"), "{doc}");
+        assert!(doc.contains("canceled"), "{doc}");
+        assert!(doc.contains("nin"), "{doc}");
+    }
+
+    #[tokio::test]
+    async fn assigned_to_viewer_reports_a_missing_viewer_rather_than_panicking() {
+        let fake = Fake::new(vec![json!({"nonsense": 1})]);
+        let err = assigned_to_viewer(&fake).await.unwrap_err();
+        assert!(err.to_string().contains("viewer"), "{err}");
+    }
+
+    #[test]
+    fn in_active_scope_is_everything_when_the_team_has_no_active_cycle() {
+        // A team that does not use cycles reports no active cycle; every open
+        // assigned issue is then in scope.
+        for cycle in [None, Some("cyc-1".to_string())] {
+            let a = AssignedIssue {
+                issue: serde_json::from_value(issue_json()).unwrap(),
+                cycle_id: cycle,
+                team_active_cycle_id: None,
+            };
+            assert!(a.in_active_scope());
+        }
+    }
+
+    #[test]
+    fn in_active_scope_requires_the_active_cycle_when_the_team_uses_cycles() {
+        let make = |cycle: Option<&str>| AssignedIssue {
+            issue: serde_json::from_value(issue_json()).unwrap(),
+            cycle_id: cycle.map(str::to_string),
+            team_active_cycle_id: Some("cyc-active".into()),
+        };
+        assert!(make(Some("cyc-active")).in_active_scope());
+        assert!(!make(Some("cyc-old")).in_active_scope(), "a past cycle is backlog, not now");
+        assert!(!make(None).in_active_scope(), "no cycle at all means backlog on a cycle team");
     }
 
     #[test]
