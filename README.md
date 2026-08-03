@@ -18,9 +18,10 @@
 
 Your agent wrote a five-task plan, finished two tasks, compacted its context,
 and greeted the next session with a cheerful blank stare? cliban is a
-self-hosted kanban board built for exactly that agent. The spec and the plan
-live in the issue, steps get ticked as they land, every mutation is recorded
-on a timeline automatically, and durable lessons persist as searchable
+self-hosted kanban board built for exactly that agent — and for the fleet of
+them you'll run next. The spec and the plan live in the issue, steps get
+ticked as they land, every mutation is recorded on a timeline and attributed
+to the session that made it, and durable lessons persist as searchable
 project memory. All of it sits in SQLite behind atomic CLI commands, so the
 plan outlives the context window that wrote it.
 
@@ -61,12 +62,18 @@ cargo install cliban                # from source
 ```
 
 The cargo lines install the `cliban` CLI alone; the daemon is a second crate,
-`cargo install cliban-server`. Every other route ships both.
-
-Prebuilt archives (static musl for Linux x86_64/aarch64, macOS Intel and Apple
-Silicon, each carrying both binaries) and their `SHA256SUMS` are on the
-[releases page](https://github.com/LioraLabs/cliban/releases). An AUR
+`cargo install cliban-server`. Every other route ships both. Prebuilt archives
+and `SHA256SUMS` are on the
+[releases page](https://github.com/LioraLabs/cliban/releases); an AUR
 `PKGBUILD` lives in [`packaging/aur`](packaging/aur).
+
+Then:
+
+```bash
+cliban project add PROJ --name "My project"
+cliban issue add --project PROJ --title "First issue" --priority high
+cliban             # opens the TUI
+```
 
 ## Why not ___?
 
@@ -85,18 +92,47 @@ them through rate-limited APIs with auth tokens, and your plans live on
 someone else's server. cliban is a local SQLite file with a flat CLI:
 nothing leaves your machine unless you run `cliband`, and then it goes only
 where your SSH keys say. That said, when the team's source of truth is
-Linear anyway, cliban can borrow an issue and hand the outcome back — see
+Linear anyway, cliban can borrow an issue and report back beautifully — see
 [Linear](#linear) below.
 
 **Your agent's own memory?** That's the thing that keeps getting compacted.
 
+## Built for fleets, not just sessions
+
+One agent forgetting is a nuisance. Five agents working the same board in
+parallel is a coordination problem, and cliban treats it as one:
+
+```console
+$ cliban issue ready --project PROJ --json     # the frontier: unblocked, unclaimed, takeable
+$ cliban issue claim PROJ-42                   # claimed by session:ea8a9c5e — others skip it
+$ cliban milestone waves --project PROJ "v0.4" --json
+{"waves":[["PROJ-40"],["PROJ-41","PROJ-42"],["PROJ-43"]],"done":[],"external_blocked":[]}
+```
+
+- **Attribution is automatic.** Every recorded event is tagged with
+  `$CLIBAN_ACTOR` when set, else the ambient Claude Code session id — so a
+  shared timeline stays readable with zero setup.
+- **Claims are ownership, not status.** `issue claim` marks a ticket as one
+  session's before the first status move lands; `issue ready` stops offering
+  it to everyone else; `--force` takes over a dead session's claim.
+- **`milestone waves`** partitions a milestone's open issues into dependency
+  layers from its `blocks` edges: wave N is safe to dispatch when waves
+  1..N-1 are done. Cycles are an error naming the issues; work gated from
+  outside the milestone is called out separately.
+- **Racy edits have a guard.** `issue edit --if-updated-at <ts>` fails with
+  exit 2 when the row changed since you read it, instead of silently
+  clobbering a concurrent session's write.
+
 ## Agents
 
-The [Claude Code plugin](plugin/) ships the full workflow: the `cliban` CLI
-skill, a convention layer for brainstorm, plan, execute, and finish, `/bugs`
-and `/status` commands, ticket capture, and `complete-milestone`, an
-orchestrator that runs every issue in a milestone through its own agent in
-dependency order, each in an isolated git worktree.
+The [Claude Code plugin](plugin/) ships the full workflow as four skills:
+the `cliban` CLI skill, `cliban-workflow` (the contract for where specs,
+plans, and lessons live), `setup-cliban` (binds a repo to its board and
+craft stack — superpowers, mattpocock-skills, or plain plan mode), and
+`complete-milestone`, an orchestrator that runs every issue in a milestone
+through its own agent in dependency order, each in an isolated git worktree.
+A SessionStart hook injects live board state into every session opened in a
+bound repo.
 
 ```bash
 claude plugin marketplace add LioraLabs/claude-plugins
@@ -119,52 +155,182 @@ Agent Skills format and documents the complete command surface. A test keeps
 it honest: name a command in the skill that the CLI doesn't have, and the
 build fails.
 
-## Workspace
+## The description contract
 
-- `cliban-core`: storage + domain layer (rusqlite; owns the schema and migrations).
-- `cliban-tui`: the kanban board, priority-colored cards over cliban's five columns.
-- `cliban`: the CLI binary. `cliban <subcommand>` for scripting, `cliban`
-  (no args) or `cliban tui` for the board.
-- `cliban-sync`: the Linear bridge — a GraphQL client, the status map, and the
-  `remote_links` table pairing a local issue with a remote one. Optional
-  (`--no-default-features` drops it and its TLS stack).
-- `cliban-tenancy`: multi-tenant storage for the daemon, a `registry.db`
-  (users, pubkeys, memberships, invites) routing to one cliban-core database
-  per tenant under `tenants/<id>.db`.
-- `cliban-server`: the `cliband` binary, a russh-based SSH daemon serving the
-  TUI to authenticated clients with live cross-session updates.
+An issue's `description` is structured markdown, not free text. Four H2
+anchors are reserved and matched exactly — `## Spec`, `## Plan`,
+`## Activity Log`, `## Notes` — and any other H2 you add is preserved and
+addressable. Within `## Plan`, tasks are `### Task N:` headings and steps
+are GFM checkboxes at column zero:
 
-## Quickstart
+```markdown
+## Plan
 
-```bash
-cliban project add PROJ --name "My project"
-cliban issue add --project PROJ --title "First issue" --priority high
-cliban             # opens the TUI
+### Task 1: short title
+
+- [ ] **Step 1: ...**
+- [ ] **Step 2: ...** → PROJ-18   ← promoted into its own issue
 ```
 
-### Board keys
+The commands that honor the contract:
 
-`hjkl` move the cursor · `H/L` move the focused issue across columns · `J/K` reorder it
-within a column · `Enter` detail · `e` edit ($EDITOR) · `E` edit project/milestone ·
-`n` new issue · `N` new milestone · `t` cycle milestone tag · `a` archive ·
-`m` milestone page · `M` cycle milestone filter · `/` fuzzy find · `r` refresh ·
-`?` help · `q` quit.
+```bash
+cliban issue edit PROJ-42 --section spec --description-file -   # replace ONE section
+cliban issue append-section PROJ-42 --section "Decisions" "- chose sqlite"
+cliban issue tick PROJ-42 --task 1 --step 2                     # [ ] → [x]
+cliban issue log PROJ-42 "found it: positions collapse after ~50 reorders"
+cliban issue promote PROJ-42 --task 1 --step 3 --title "CSRF middleware"
+cliban issue lint PROJ-42                                       # does it parse?
+cliban issue show PROJ-42 --section plan
+```
 
-### Milestone page (`m`)
+Section writes replace exactly one section and leave every other byte alone.
+Writing to a section that doesn't exist is exit 2 listing the sections that
+do (a typo can't silently append a junk section — `--create-section` is the
+deliberate escape hatch), a payload restating its own heading is cleaned up,
+and a payload smuggling a *different* H2 is refused, because it would
+terminate the section and silently orphan what follows. `lint` catches the
+rest before it bites: malformed checkboxes, steps outside any task heading,
+activity lines nothing can parse. When structure is violated the workflow
+commands exit 2 naming the problem — no best-effort recovery.
 
-A full-screen view of every milestone (across all projects when the board is
-unscoped), ordered by *recent activity*: the newest activity-log entry on any
-of the milestone's issues. Shows done/total progress, target date, and a
-detail pane for the focused row.
+## The timeline
 
-Type to filter by name or project key · `j/k` move · `Enter` scopes the board
-to the milestone (and to its project) · `Tab` cycles the status bucket
-(open / completed / cancelled / all) · `S` cycles the sort (activity / name /
-target) · `C` cycles the focused milestone's own status · `E` edit ($EDITOR) ·
-`N` new · `Esc` back to the board.
+Every mutation writes to the issue's timeline without being asked: moves,
+archives, field edits, label and relation changes, plan ticks, promotions,
+claims, and `issue log` notes — each attributed to its session
+automatically. The history is complete even when nobody remembers to
+narrate it:
 
-Cancelled is the archived state for a milestone: there is no separate archive
-flag.
+```bash
+cliban issue mv PROJ-42 blocked --note "upstream fix needed"
+cliban issue show PROJ-42 --section activity
+#   - 15:10Z — [session:ea8a9c5e] found it: positions collapse after ~50 reorders
+#   - 15:12Z — [session:ea8a9c5e] in-progress → blocked: upstream fix needed
+cliban activity --since 3d --project PROJ --json   # the whole board's feed, NDJSON
+```
+
+`--since` takes `45s`, `4h`, `3d`, `2w`, `today`, `yesterday`, a bare date,
+or RFC3339 — all UTC. `issue log` writes both the markdown line and a
+durable record, so a note survives a later description rewrite (and the
+rewrite itself is recorded: `description rewritten, dropped ## Activity
+Log`).
+
+Nothing is ever deleted. A deleted row would take its timeline with it, so
+`issue rm` and `project rm` archive, `milestone rm` cancels, and each
+reports what it really did and how to undo it. (`label rm` still deletes: a
+label is a tag, not a work item.)
+
+## Persistent agent memory
+
+Durable lessons live under `## Notes` in the *project* description, one
+`###` subsection per independently useful lesson:
+
+```bash
+cliban project note add PROJ --title "cargo test needs --test-threads=1" --body - <<'EOF'
+The fixtures share a tempdir; parallel runs corrupt it and the failures look
+like flaky assertions, not contention.
+EOF
+cliban project search PROJ "flaky tempdir" --json   # retrieval is progressive:
+cliban project show PROJ --section notes            # search first, load later
+```
+
+`note add` appends one subsection and touches nothing else. `search`
+fuzzy-matches every query term against each heading and body and returns
+only matching subsections, ranked — so the next session finds the lesson
+without loading the whole archive.
+
+## Finding things
+
+Three surfaces share one matcher (title ×3.0, key ×2.5, labels ×2.0,
+description ×1.0):
+
+- `cliban issue ls --search QUERY` — pipeable, adds a `score` field, respects
+  every other `ls` filter.
+- `cliban fff [QUERY]` — prints the selected key to stdout:
+  `cliban issue show $(cliban fff)`. Batch NDJSON when stdin isn't a TTY.
+- `/` inside the TUI — fuzzy overlay that snaps the cursor to the match.
+
+## The TUI
+
+For the human in the loop: `cliban` (no args) opens the board. `hjkl` moves,
+`H/L` moves the focused issue across columns, `J/K` reorders, `Enter` for
+detail, `e` edits the issue as frontmatter + markdown in `$EDITOR`, `n` new
+issue, `/` fuzzy find, `?` for everything else.
+
+Three full-screen pages, each type-to-filter, ordered by recent activity:
+
+- **`m` milestones** — done/total progress, target dates, `Enter` scopes the
+  board to one milestone, `S` cycles the sort (activity / name / target).
+- **`p` projects** — issue and milestone rollups, `Enter` scopes, `A`
+  archives (and unarchives from the archived bucket).
+- **`a` activity** — the board's mailbox: every recorded event newest-first,
+  chips to filter by kind, `Enter` jumps to the issue.
+
+<p align="center"><img src="assets/activity.png" width="880" alt="the activity page"></p>
+
+The palette is built for dark terminals; every named slot can be re-colored
+from `~/.config/cliban/theme.toml` —
+[`assets/themes/light.toml`](assets/themes/light.toml) is a ready-made
+starting point.
+
+## Linear
+
+For the engineer whose team lives in Linear while they'd rather work here:
+cliban borrows the ticket, your agents work it locally, and Linear watches
+legible progress arrive. Nothing crosses the boundary except assigned work
+coming in and reported progress going out.
+
+```sh
+export LINEAR_API_KEY=lin_api_...
+
+cliban import linear --mine --project PROJ     # everything assigned to you
+cliban import linear ENG-412 --project PROJ    # or borrow one ticket
+cliban issue tick PROJ-42 --task 1 --step 1    # work it (plans stay local)
+cliban push linear PROJ-42                     # state + the living progress comment
+cliban sync linear                             # refresh every borrowed issue at once
+```
+
+`push` maintains **one living progress comment** per issue and edits it in
+place — plan progress, recent findings from `issue log`, test status — so
+your log discipline is exactly what the Linear thread shows, without
+notification spam. Set `push_on_move = true` in `linear.toml` and every
+status move of a linked issue broadcasts automatically: best-effort, never
+failing the move, zero Linear traffic for unlinked issues.
+
+There is no daemon, no polling, no webhook, and no merge algorithm — the
+only time anything crosses the boundary is when a command runs. It stays
+comprehensible because **field ownership is declared rather than
+negotiated**:
+
+| Field | Owner | What that means |
+|---|---|---|
+| title, priority, labels, due date, workflow state | Linear | a re-import overwrites local edits (and warns first) |
+| `## Spec` | whoever created the pairing | `import` made the link → Linear owns it; `push --create` made it → cliban owns it and re-import leaves it alone |
+| `## Plan`, `## Activity Log`, `## Notes` | cliban | a re-import never touches them |
+| Linear description outside cliban's fence, Linear comments | humans | never modified |
+
+So `import` and `sync` are safe to re-run: the half-ticked plan an agent has
+been working survives every refresh. That is the one property the whole
+design is built around, and there is a test named after it.
+
+cliban's five statuses map onto a team's workflow states by name first,
+falling back to Linear's state *type*. `backlog` / `in-progress` / `done`
+round-trip cleanly; `blocked` and `in-review` need a matching column name,
+which is what the optional config is for:
+
+```toml
+# ~/.config/cliban/linear.toml
+[linear]
+team = "ENG"                 # default team for `push --create`
+push_on_move = true          # broadcast every status move of a linked issue
+
+[linear.states]
+in-review = "Code Review"    # cliban status -> exact Linear state name
+```
+
+The API token is read from `$LINEAR_API_KEY` and nowhere else — deliberately
+not a config field, so there is no cliban-owned file on disk worth stealing.
 
 ## Hosting shared boards over SSH (cliband)
 
@@ -173,8 +339,6 @@ the only transport: no browser, no TLS certificates, no reverse proxy. Auth is
 SSH public keys; every tenant gets its own SQLite database, so isolation is
 physical. Boards are live: a card moved in one session appears in every other
 session on that tenant within a tick.
-
-### Five-minute VPS setup
 
 ```bash
 # on the server
@@ -187,336 +351,38 @@ sudo cp deploy/cliband.service /etc/systemd/system/
 sudo systemctl enable --now cliband
 ```
 
-First boot generates an ed25519 host key under the data dir. Point a DNS name
-at the box, then from anywhere:
+First boot generates an ed25519 host key. Point a DNS name at the box, then:
 
 ```bash
 ssh -p 2222 boards.example.com signup myteam <signup-token>   # create a tenant
 ssh -p 2222 boards.example.com                                # open the board
+ssh -p 2222 boards.example.com invite                         # owner: one-time code
+ssh -p 2222 boards.example.com accept <code>                  # teammate: joins
 ```
 
-Teammates join with their own keys:
-
-```bash
-ssh -p 2222 boards.example.com invite          # you (owner): prints a one-time code
-ssh -p 2222 boards.example.com accept <code>   # them: joins as member
-```
-
-Other control commands: `whoami`, `members`. A key with several tenants gets a
-picker on connect. Running the daemon ad hoc (no systemd) also works:
-`cliband --config config.toml`, or plain `cliband` for pure defaults.
-
-### Configuration
-
-All keys optional; defaults in parentheses. See `deploy/config.example.toml`.
-
-| Key | Meaning |
-|---|---|
-| `listen_addr` | bind address for the SSH listener (`0.0.0.0:2222`) |
-| `data_dir` | host key + registry.db + tenants/*.db (`$XDG_DATA_HOME/cliband`) |
-| `signup_policy` | `open` \| `token` \| `closed` (`token`) |
-| `signup_token` | shared token for `signup_policy = "token"` (unset means signup denied) |
-| `max_tenants_per_key` | tenants one public key may create, 0 = unlimited (`5`) |
-| `max_tenants` | global tenant cap, 0 = unlimited (`0`) |
-
-Logs go to stderr, one fact per line: `journalctl -u cliband` shows them
-stamped and indexed. Backup, export, or delete of a tenant is a file
+Configuration is a handful of optional keys (`listen_addr`, `data_dir`,
+`signup_policy` open/token/closed, per-key and global tenant caps) — see
+[`deploy/config.example.toml`](deploy/config.example.toml). Logs go to
+stderr, one fact per line. Backup, export, or delete of a tenant is a file
 operation on its `tenants/<id>.db`.
 
 ## Migrating from the Go cliban
 
 The legacy Go build stored data in the same SQLite file under an older
-schema. Convert it once:
+schema. Convert it once — the source is opened read-only:
 
 ```bash
 cliban migrate-legacy --from /path/to/old/cliban.db --to /path/to/new/cliban.db
 ```
 
-It opens the source read-only and writes a fresh `cliban-core` database,
-preserving projects, milestones, issues, labels, relations, and
-done-timestamps.
-
-## Editor integration
-
-By default `cliban issue add` and `cliban issue edit` never open an editor:
-they fail fast if no content flags are supplied, which is the right behavior
-for agents. Inside the TUI, select a card and press `e` for the frontmatter
-+ markdown buffer in `$EDITOR` (`$VISUAL` first, falls back to `vi`):
-
-<p align="center"><img src="assets/editor.png" width="880" alt="editing an issue in nvim"></p>
-
-## The description contract
-
-Some cliban commands (`issue tick`, `issue promote`, `issue log`,
-`issue show --section`) parse the markdown structure of an issue's
-`description` field. They expect a small, well-defined contract.
-
-### Top-level sections
-
-Four H2 anchors are reserved and matched exactly:
-
-- `## Spec`: the design/brainstorm output for this issue
-- `## Plan`: the implementation plan
-- `## Activity Log`: chronological events
-- `## Notes`: long-lived notes (mostly for project-level descriptions)
-
-Anything else in the description is preserved untouched.
-
-### Plan tasks and steps
-
-Within `## Plan`, tasks are numbered H3 headings:
-
-```markdown
-## Plan
-
-### Task 1: short title
-
-- [ ] **Step 1: ...**
-- [ ] **Step 2: ...**
-
-### Task 2: another short title
-
-- [ ] **Step 1: ...**
-```
-
-Tasks are numbered (`### Task <N>:`), unique within the section. Steps are
-GFM checkbox lines at column zero: `- [ ] ...` or `- [x] ...`. Indented
-child bullets are not parsed as steps.
-
-### Promotion suffix
-
-A step that has been split into its own issue is suffixed with ` → KEY`:
-
-```markdown
-- [ ] **Step 3: CSRF middleware** → PROJ-18
-```
-
-Produced by `cliban issue promote`, consumed by readers: humans, and any
-tooling that walks plans.
-
-### Failure mode
-
-If the structure is violated (missing `## Plan` anchor, renamed
-`### Task N`, and so on), the workflow commands exit with code 2 and a clear
-error naming the structural problem. No best-effort recovery: fix the
-description and retry.
-
-## Fuzzy-find tickets
-
-Three coordinated surfaces share one matcher:
-
-- `cliban issue ls --search QUERY`: pipeable. Adds a `score` field in
-  `--json` output and respects every existing `ls` filter (`--project`,
-  `--label`, `--milestone`, `--status`, `--priority`, `--archived`,
-  `--no-subs`, `--parent`). `--limit N` caps results (default 50 when
-  `--search` is set).
-- `cliban fff [QUERY]`: prints the selected key to stdout so you can
-  compose: `cliban issue show $(cliban fff)`. Same filter flags as `ls`.
-  Batch NDJSON mode when stdin is not a TTY (great for `cliban fff foo | jq`).
-- `/` inside `cliban tui`: fuzzy filter overlay; selecting a card snaps the
-  board cursor onto it.
-
-The matcher weights matches across title (×3.0), key (×2.5), labels (×2.0),
-and description (×1.0). Default scope is all non-archived issues across all
-projects; narrow with `--project`, `--label`, and friends.
-
-## What changed recently
-
-The TUI's activity page (`a`) is a mailbox for the board: every recorded
-event newest-first, with chips to filter by kind — `closed` answers "what
-shipped recently" — type-to-filter across keys, titles, messages, and
-actors, and `Enter` to jump to the issue on the board:
-
-<p align="center"><img src="assets/activity.png" width="880" alt="the activity page"></p>
-
-From the CLI:
-
-```bash
-cliban activity                                   # last 24h, every project
-cliban activity --since yesterday --json
-cliban activity --since 3d --project PROJ --limit 200 --json
-```
-
-A merged, newest-first feed: `created` / `completed` when an issue opened or
-finished in the window, `updated` for any other change neither of those
-explains, `status` / `archive` for the transitions cliban recorded itself,
-and one `log` event per `## Activity Log` line written in the window.
-`--json` emits NDJSON of `ts`, `key`, `project`, `kind`, `issue_status`,
-`title`, `message`, `actor`, `milestone` (`issue_status` is the issue's
-status *now*, not at the time of the event).
-
-### Recorded automatically
-
-Every mutation writes to the issue's timeline without being asked: moves,
-archives, field edits, label and relation changes, plan ticks, promotions,
-and `issue log` notes. The history is complete even when nobody remembers to
-narrate it:
-
-```bash
-export CLIBAN_ACTOR=claude                # attribute what you do
-cliban issue mv PROJ-42 blocked --note "upstream fix needed"
-cliban issue edit PROJ-42 --priority urgent --label regression
-cliban issue show PROJ-42 --section activity
-#   - 15:10Z — [claude] found it: positions collapse after ~50 reorders
-#   - 15:12Z — [claude] in-progress → blocked: upstream fix needed
-#   - 15:13Z — [claude] priority: high → urgent, +label regression
-```
-
-Nothing is ever deleted. A deleted row would take its timeline with it, so
-`issue rm` and `project rm` archive, and `milestone rm` cancels. Each
-reports what it really did and how to undo it:
-
-```console
-$ cliban issue rm PROJ-12
-archived PROJ-12 — cliban archives instead of deleting (undo: cliban issue unarchive PROJ-12)
-```
-
-(`label rm` still deletes: a label is a tag, not a work item.)
-
-Two sources feed that view: the entries cliban records
-(`activity_log_entries`, attributed and durable) and the `## Activity Log`
-markdown an author writes with `cliban issue log`. `issue log` writes both,
-so a note survives a later `--description` rewrite that erases the markdown,
-and the rewrite itself is recorded as `description rewritten, dropped ##
-Activity Log`. Reads merge the two chronologically and de-duplicate, so
-nothing appears twice.
-
-`--since` (and `issue ls --updated-since`, which shares the same parser)
-accepts a duration (`45s`, `90m`, `4h`, `3d`, `2w`), `today`, `yesterday`, a
-bare date (`2026-07-25`), or a full RFC3339 timestamp. All UTC.
-
-## Projects
-
-The TUI's project page (`p`) is where projects live: every project with
-issue and milestone rollups, ordered by recent activity. Type to filter,
-`Enter` scopes the board, `N` creates (including your very first project on
-an empty database), `E` edits in `$EDITOR`, and `A` archives — `Tab` flips
-to the archived bucket, where `A` unarchives:
-
-<p align="center"><img src="assets/projects.png" width="880" alt="the project page"></p>
-
-From the CLI:
-
-```bash
-cliban project ls                    # key, name
-cliban project show PROJ             # + description
-cliban project archive PROJ          # recoverable: unarchive brings it back
-```
-
-## Milestones
-
-The TUI's milestone page (`m`) shows every milestone across projects,
-ordered by recent activity, with progress and a detail pane:
-
-<p align="center"><img src="assets/milestones.png" width="880" alt="the milestone page"></p>
-
-From the CLI:
-
-```bash
-cliban milestone ls --project PROJ                     # name, status, target
-cliban milestone ls                                    # every project
-cliban milestone ls --sort activity --stats            # + done/total and recency
-cliban milestone ls --status open --sort target        # what's due next
-cliban milestone edit --project PROJ --name v0.1 --status completed
-```
-
-`--sort` takes `activity` (most recently worked on first), `name` (the
-default) or `target` (soonest first, undated last). `--stats` adds a
-`done/total` column and a last-activity column, and, with `--json`, the
-`done_count`, `last_activity` and `last_activity_human` keys.
-
-## Persistent agent memory
-
-Durable agent context lives in the project's existing Markdown description,
-under `## Notes`. Give each independently useful lesson its own `###`
-heading so cliban can retrieve it without loading the whole section.
-
-```bash
-cliban project add PROJ --name "My project" --description-file project.md
-cliban project show PROJ --section notes
-cliban project search PROJ "sqlte canonical" --section notes --json
-cliban project edit PROJ --description-file updated-project.md
-# stdin works too:
-cliban project edit PROJ --description-file - < updated-project.md
-```
-
-`project search` fuzzy-matches every whitespace-separated query term against
-each `###` heading and body. It returns only matching subsections as NDJSON,
-ranked by score and capped by `--limit` (default 20). Retrieval is
-progressive: search first, load the full `## Notes` section only when
-needed. `--section all` searches every `###` subsection in the description.
-
-## Theming
-
-The TUI's palette is built for dark terminals, but every named slot can be
-re-colored from `~/.config/cliban/theme.toml` (`$XDG_CONFIG_HOME`
-respected; `CLIBAN_THEME_FILE` overrides the path). One `slot = color` per
-line — named colors, 256-color indexes, or `#rrggbb` — and anything unset
-keeps its default, so a light theme only overrides what hurts.
-[`assets/themes/light.toml`](assets/themes/light.toml) is a ready-made
-starting point; the full slot list is documented in
-`crates/cliban-tui/src/ui/theme.rs`.
-
-## Linear
-
-If the work already lives in Linear, cliban can borrow an issue, give it a plan
-your agent can tick, and hand the outcome back.
-
-```sh
-export LINEAR_API_KEY=lin_api_...
-
-cliban import linear ENG-412 --project PROJ    # borrow it
-cliban issue tick PROJ-42 --task 1 --step 1    # work it
-cliban push linear PROJ-42                     # hand it back
-
-cliban import linear --mine --project PROJ     # borrow everything assigned to you
-cliban sync linear                             # refresh every borrowed issue at once
-```
-
-`--mine` imports every open issue assigned to your token's viewer — scoped to
-the team's active cycle where cycles are in use — and `sync linear` re-imports
-every linked issue in one call; both report created/refreshed/skipped counts.
-
-That is the entire feature. There is no daemon, no polling, no webhook, and no
-merge algorithm — the only time anything crosses the boundary is when you run
-one of these commands. It stays comprehensible because **field ownership is
-declared rather than negotiated**:
-
-| Field | Owner | What that means |
-|---|---|---|
-| title, priority, labels, due date, workflow state | Linear | a re-import overwrites local edits (and warns first) |
-| `## Spec` | whoever created the pairing | `import` made the link → Linear owns it and a re-import refreshes it; `push --create` made the link → cliban owns it and a re-import leaves it alone. `push --description` may always mirror it outward |
-| `## Plan`, `## Activity Log`, `## Notes` | cliban | a re-import never touches them |
-| Linear description outside cliban's fence, Linear comments | humans | never modified |
-
-So `import` is safe to re-run: the half-ticked plan an agent has been working
-survives every refresh. That is the one property the whole design is built
-around, and there is a test named after it.
-
-`push` writes the workflow state and a progress comment by default. Both are
-additive — a comment cannot destroy anything. Mirroring into the Linear
-description is opt-in (`--description`) and confined to a fenced region
-delimited by HTML comments, so prose outside it is left byte-identical. If
-Linear changed since your last sync, `push` refuses (exit 2) rather than
-clobbering it; re-import, or `--force` if you are the authority.
-
-cliban's five statuses map onto a team's workflow states by name first, falling
-back to Linear's state *type*. `backlog` / `in-progress` / `done` round-trip
-cleanly. `blocked` and `in-review` only survive if the team has a column named
-for them, because Linear types both as "started" — which is what the optional
-config file is for:
-
-```toml
-# ~/.config/cliban/linear.toml
-[linear]
-team = "ENG"                 # default team for `push --create`
-
-[linear.states]
-in-review = "Code Review"    # cliban status -> exact Linear state name
-```
-
-The API token is read from `$LINEAR_API_KEY` and nowhere else — deliberately not
-a config field, so there is no cliban-owned file on disk worth stealing.
+## Workspace
+
+- `cliban-core`: storage + domain layer (rusqlite; owns the schema and migrations).
+- `cliban`: the CLI binary. `cliban <subcommand>` for scripting, bare `cliban` for the board.
+- `cliban-tui`: the kanban board.
+- `cliban-sync`: the Linear bridge. Optional (`--no-default-features` drops it and its TLS stack).
+- `cliban-tenancy`: multi-tenant storage for the daemon.
+- `cliban-server`: the `cliband` SSH daemon.
 
 ## Roadmap
 
@@ -525,7 +391,8 @@ it snapshots a milestone, freezes a validated execution manifest (dependency
 waves, roles, restart policies), and drives the whole thing to completion
 restart-safely, with cliban remaining the source of truth for the work items
 themselves. The `complete-milestone` skill in the plugin is the manual
-version of that loop today.
+version of that loop today — and `milestone waves` is its arithmetic,
+available to everyone.
 
 ## A note on stability
 
