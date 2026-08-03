@@ -33,6 +33,17 @@ $ cliban activity --since 1d                 # what happened while nobody was lo
 $ cliban issue tick PROJ-42 --task 2 --step 1   # and back to work
 ```
 
+<table>
+  <tr>
+    <td width="50%"><img src="assets/milestones.png" alt="milestone tracking"></td>
+    <td width="50%"><img src="assets/activity.png" alt="the activity timeline"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>milestones: progress, targets, what moved last</sub></td>
+    <td align="center"><sub>the timeline: every event recorded, attributed, filterable</sub></td>
+  </tr>
+</table>
+
 One board, three front doors:
 
 - **A flat CLI** built for agents: every read has a `--json` form, no command
@@ -267,7 +278,7 @@ Three full-screen pages, each type-to-filter, ordered by recent activity:
 - **`a` activity** — the board's mailbox: every recorded event newest-first,
   chips to filter by kind, `Enter` jumps to the issue.
 
-<p align="center"><img src="assets/activity.png" width="880" alt="the activity page"></p>
+<p align="center"><img src="assets/editor.png" width="880" alt="editing an issue in nvim"></p>
 
 The palette is built for dark terminals; every named slot can be re-colored
 from `~/.config/cliban/theme.toml` —
