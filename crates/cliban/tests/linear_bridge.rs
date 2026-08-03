@@ -47,9 +47,11 @@ impl Stub {
                 };
                 let op = operation_name(&body).unwrap_or_default();
                 seen_thread.lock().unwrap().push(op.clone());
-                let reply = replies
-                    .get(&op)
-                    .cloned()
+                // A reply keyed `"Op:<variables.id>"` wins over one keyed by
+                // the bare operation, so one stub can serve several issues.
+                let reply = request_id(&body)
+                    .and_then(|id| replies.get(&format!("{op}:{id}")).cloned())
+                    .or_else(|| replies.get(&op).cloned())
                     // An unexpected operation must fail loudly as a GraphQL
                     // error, not hang or return something plausible.
                     .unwrap_or_else(|| {
@@ -99,6 +101,15 @@ fn read_request_body(stream: &mut TcpStream) -> Option<String> {
     Some(String::from_utf8_lossy(&body).to_string())
 }
 
+/// `variables.id` when the request has one, for per-issue reply keys.
+fn request_id(body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    v.get("variables")?
+        .get("id")?
+        .as_str()
+        .map(str::to_string)
+}
+
 /// `{"query":"query IssueByKey($team..."}` → `IssueByKey`.
 fn operation_name(body: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
@@ -134,12 +145,22 @@ fn issue_by_id_reply(title: &str, state: (&str, &str), updated_at: &str) -> Stri
 }
 
 fn linear_issue(title: &str, state: (&str, &str), updated_at: &str) -> serde_json::Value {
+    linear_issue_with("linear-uuid-1", "ENG-412", title, state, updated_at)
+}
+
+fn linear_issue_with(
+    id: &str,
+    identifier: &str,
+    title: &str,
+    state: (&str, &str),
+    updated_at: &str,
+) -> serde_json::Value {
     serde_json::json!({
-        "id": "linear-uuid-1",
-        "identifier": "ENG-412",
+        "id": id,
+        "identifier": identifier,
         "title": title,
         "description": "The upstream spec text.",
-        "url": "https://linear.app/acme/issue/ENG-412",
+        "url": format!("https://linear.app/acme/issue/{identifier}"),
         "updatedAt": updated_at,
         "priority": 2,
         "dueDate": "2026-08-15",
@@ -169,6 +190,30 @@ fn import_replies(title: &str, state: (&str, &str), updated_at: &str) -> Replies
         "IssueByKey".to_string(),
         issue_reply(title, state, updated_at),
     )])
+}
+
+/// One node of the `--mine` query: an issue plus its cycle context.
+fn assigned_node(
+    mut issue: serde_json::Value,
+    cycle: Option<&str>,
+    active_cycle: Option<&str>,
+) -> serde_json::Value {
+    issue["cycle"] = match cycle {
+        Some(id) => serde_json::json!({ "id": id }),
+        None => serde_json::Value::Null,
+    };
+    issue["team"]["activeCycle"] = match active_cycle {
+        Some(id) => serde_json::json!({ "id": id }),
+        None => serde_json::Value::Null,
+    };
+    issue
+}
+
+fn viewer_reply(nodes: Vec<serde_json::Value>) -> String {
+    serde_json::json!({
+        "data": { "viewer": { "assignedIssues": { "nodes": nodes } } }
+    })
+    .to_string()
 }
 
 // ---------------------------------------------------------------- harness
@@ -759,6 +804,548 @@ fn reimport_over_an_imported_origin_link_still_refreshes_the_spec() {
         !description.contains("LOCAL EDIT that must not survive"),
         "the local edit should have been overwritten:\n{description}"
     );
+}
+
+// ---- sync linear: refresh every linked issue in one call ----
+
+fn import_replies_for(issue: serde_json::Value) -> Replies {
+    HashMap::from([(
+        "IssueByKey".to_string(),
+        serde_json::json!({"data": {"issues": {"nodes": [issue]}}}).to_string(),
+    )])
+}
+
+fn issue_by_id_reply_for(issue: serde_json::Value) -> String {
+    serde_json::json!({"data": {"issue": issue}}).to_string()
+}
+
+/// Import ENG-412 (uuid-1) and ENG-9 (uuid-9) into PROJ as PROJ-1 / PROJ-2.
+fn board_with_two_linked_issues(tag: &str) -> Board {
+    let board = Board::new(tag);
+    let stub = Stub::start(import_replies(
+        "First issue",
+        ("Todo", "unstarted"),
+        "2026-07-29T12:00:00.000Z",
+    ));
+    board
+        .run(
+            &["import", "linear", "ENG-412", "--project", "PROJ"],
+            Some(&stub),
+        )
+        .assert_ok();
+    let stub = Stub::start(import_replies_for(linear_issue_with(
+        "linear-uuid-9",
+        "ENG-9",
+        "Second issue",
+        ("Todo", "unstarted"),
+        "2026-07-29T12:00:00.000Z",
+    )));
+    board
+        .run(
+            &["import", "linear", "ENG-9", "--project", "PROJ"],
+            Some(&stub),
+        )
+        .assert_ok();
+    board
+}
+
+#[test]
+fn sync_linear_refreshes_every_linked_issue_and_keeps_plans() {
+    let board = board_with_two_linked_issues("syncall");
+
+    // An agent's half-ticked plan on PROJ-1 — the state that must survive.
+    let plan = "## Spec\n\nThe upstream spec text.\n\n## Plan\n\n\
+                ### Task 1: wire it up\n\n\
+                - [ ] **Step 1: write the client**\n\
+                - [ ] **Step 2: write the tests**\n";
+    board
+        .run(&["issue", "edit", "PROJ-1", "--description", plan], None)
+        .assert_ok();
+    board
+        .run(&["issue", "tick", "PROJ-1", "--task", "1", "--step", "1"], None)
+        .assert_ok();
+
+    let stub = Stub::start(HashMap::from([
+        (
+            "IssueById:linear-uuid-1".to_string(),
+            issue_by_id_reply_for(linear_issue_with(
+                "linear-uuid-1",
+                "ENG-412",
+                "First renamed",
+                ("In Progress", "started"),
+                "2026-07-30T12:00:00.000Z",
+            )),
+        ),
+        (
+            "IssueById:linear-uuid-9".to_string(),
+            issue_by_id_reply_for(linear_issue_with(
+                "linear-uuid-9",
+                "ENG-9",
+                "Second renamed",
+                ("In Review", "started"),
+                "2026-07-30T12:00:00.000Z",
+            )),
+        ),
+    ]));
+
+    let run = board.run(&["sync", "linear", "--json"], Some(&stub));
+    run.assert_ok();
+    let out: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(out["action"], "sync");
+    assert_eq!(out["refreshed"], 2, "{out}");
+    assert_eq!(out["skipped"], 0, "{out}");
+
+    let first = board.show("PROJ-1");
+    assert_eq!(first["title"], "First renamed");
+    assert_eq!(first["status"], "in-progress");
+    let description = first["description"].as_str().unwrap();
+    assert!(
+        description.contains("- [x] **Step 1: write the client**"),
+        "the ticked plan must survive a whole-board sync:\n{description}"
+    );
+
+    let second = board.show("PROJ-2");
+    assert_eq!(second["title"], "Second renamed");
+    assert_eq!(second["status"], "in-review");
+}
+
+#[test]
+fn sync_linear_honors_per_link_origin() {
+    let board = Board::new("syncorigin");
+
+    // PROJ-1 is born on the board and pushed out: pushed origin, local spec.
+    board
+        .run(
+            &["issue", "add", "--project", "PROJ", "--title", "Local work"],
+            None,
+        )
+        .assert_ok();
+    board
+        .run(
+            &[
+                "issue",
+                "edit",
+                "PROJ-1",
+                "--description",
+                "## Spec\n\nThe LOCAL spec, written on the board.\n",
+            ],
+            None,
+        )
+        .assert_ok();
+    let create_stub = Stub::start(HashMap::from([
+        ("TeamByKey".to_string(), team_reply()),
+        (
+            "IssueCreate".to_string(),
+            serde_json::json!({"data": {"issueCreate": {"success": true,
+                "issue": linear_issue("Local work", ("Todo", "unstarted"),
+                                      "2026-07-29T12:00:00.000Z")}}})
+            .to_string(),
+        ),
+        (
+            "CommentCreate".to_string(),
+            serde_json::json!({"data": {"commentCreate": {"success": true}}}).to_string(),
+        ),
+    ]));
+    board
+        .run(
+            &["push", "linear", "PROJ-1", "--create", "--team", "ENG"],
+            Some(&create_stub),
+        )
+        .assert_ok();
+
+    // PROJ-2 arrives by import: imported origin, Linear's spec.
+    let import_stub = Stub::start(import_replies_for(linear_issue_with(
+        "linear-uuid-9",
+        "ENG-9",
+        "Imported work",
+        ("Todo", "unstarted"),
+        "2026-07-29T12:00:00.000Z",
+    )));
+    board
+        .run(
+            &["import", "linear", "ENG-9", "--project", "PROJ"],
+            Some(&import_stub),
+        )
+        .assert_ok();
+
+    let stub = Stub::start(HashMap::from([
+        (
+            "IssueById:linear-uuid-1".to_string(),
+            issue_by_id_reply_for(linear_issue_with(
+                "linear-uuid-1",
+                "ENG-412",
+                "Local work renamed",
+                ("In Progress", "started"),
+                "2026-07-30T12:00:00.000Z",
+            )),
+        ),
+        (
+            "IssueById:linear-uuid-9".to_string(),
+            issue_by_id_reply_for(linear_issue_with(
+                "linear-uuid-9",
+                "ENG-9",
+                "Imported work renamed",
+                ("In Progress", "started"),
+                "2026-07-30T12:00:00.000Z",
+            )),
+        ),
+    ]));
+    board.run(&["sync", "linear"], Some(&stub)).assert_ok();
+
+    let pushed = board.show("PROJ-1");
+    assert_eq!(
+        pushed["title"], "Local work renamed",
+        "Linear owns the title whatever the origin"
+    );
+    let description = pushed["description"].as_str().unwrap();
+    assert!(
+        description.contains("The LOCAL spec, written on the board."),
+        "a pushed-origin link keeps its board-authored spec through sync:\n{description}"
+    );
+    assert!(
+        !description.contains("The upstream spec text."),
+        "sync must not install the upstream spec over a pushed-origin one:\n{description}"
+    );
+
+    let imported = board.show("PROJ-2");
+    let description = imported["description"].as_str().unwrap();
+    assert!(
+        description.contains("The upstream spec text."),
+        "an imported-origin link refreshes its spec from Linear:\n{description}"
+    );
+}
+
+#[test]
+fn sync_linear_scopes_to_a_project() {
+    let board = Board::new("syncproj");
+    board
+        .run(&["project", "add", "OTHER", "--name", "Elsewhere"], None)
+        .assert_ok();
+
+    let stub = Stub::start(import_replies(
+        "In scope",
+        ("Todo", "unstarted"),
+        "2026-07-29T12:00:00.000Z",
+    ));
+    board
+        .run(
+            &["import", "linear", "ENG-412", "--project", "PROJ"],
+            Some(&stub),
+        )
+        .assert_ok();
+    let stub = Stub::start(import_replies_for(linear_issue_with(
+        "linear-uuid-9",
+        "ENG-9",
+        "Out of scope",
+        ("Todo", "unstarted"),
+        "2026-07-29T12:00:00.000Z",
+    )));
+    board
+        .run(
+            &["import", "linear", "ENG-9", "--project", "OTHER"],
+            Some(&stub),
+        )
+        .assert_ok();
+
+    // Only PROJ's issue has a reply: touching the other one would error loudly.
+    let sync_stub = Stub::start(HashMap::from([(
+        "IssueById:linear-uuid-1".to_string(),
+        issue_by_id_reply_for(linear_issue_with(
+            "linear-uuid-1",
+            "ENG-412",
+            "In scope renamed",
+            ("Todo", "unstarted"),
+            "2026-07-30T12:00:00.000Z",
+        )),
+    )]));
+    let run = board.run(
+        &["sync", "linear", "--project", "PROJ", "--json"],
+        Some(&sync_stub),
+    );
+    run.assert_ok();
+    let out: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(out["refreshed"], 1, "{out}");
+    assert_eq!(board.show("PROJ-1")["title"], "In scope renamed");
+    assert_eq!(
+        board.show("OTHER-1")["title"],
+        "Out of scope",
+        "--project must fence the sync"
+    );
+}
+
+#[test]
+fn sync_linear_skips_an_issue_gone_upstream() {
+    let board = board_with_two_linked_issues("syncgone");
+    let stub = Stub::start(HashMap::from([
+        (
+            // Deleted in Linear: the API returns a null issue.
+            "IssueById:linear-uuid-1".to_string(),
+            serde_json::json!({"data": {"issue": null}}).to_string(),
+        ),
+        (
+            "IssueById:linear-uuid-9".to_string(),
+            issue_by_id_reply_for(linear_issue_with(
+                "linear-uuid-9",
+                "ENG-9",
+                "Still here",
+                ("Todo", "unstarted"),
+                "2026-07-30T12:00:00.000Z",
+            )),
+        ),
+    ]));
+    let run = board.run(&["sync", "linear", "--json"], Some(&stub));
+    run.assert_ok();
+    let out: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(out["refreshed"], 1, "{out}");
+    assert_eq!(out["skipped"], 1, "{out}");
+    assert!(
+        run.stderr.contains("ENG-412"),
+        "the skip should be announced with the remote key: {}",
+        run.stderr
+    );
+    assert_eq!(board.show("PROJ-2")["title"], "Still here");
+}
+
+#[test]
+fn sync_linear_dry_run_writes_nothing() {
+    let board = board_with_two_linked_issues("syncdry");
+    let stub = Stub::start(HashMap::from([
+        (
+            "IssueById:linear-uuid-1".to_string(),
+            issue_by_id_reply_for(linear_issue_with(
+                "linear-uuid-1",
+                "ENG-412",
+                "Renamed upstream",
+                ("In Progress", "started"),
+                "2026-07-30T12:00:00.000Z",
+            )),
+        ),
+        (
+            "IssueById:linear-uuid-9".to_string(),
+            issue_by_id_reply_for(linear_issue_with(
+                "linear-uuid-9",
+                "ENG-9",
+                "Also renamed",
+                ("In Progress", "started"),
+                "2026-07-30T12:00:00.000Z",
+            )),
+        ),
+    ]));
+    let run = board.run(&["sync", "linear", "--dry-run"], Some(&stub));
+    run.assert_ok();
+    assert!(run.stdout.contains("dry run"), "{}", run.stdout);
+    assert_eq!(
+        board.show("PROJ-1")["title"],
+        "First issue",
+        "dry run must not write"
+    );
+}
+
+#[test]
+fn sync_linear_with_no_links_needs_no_token() {
+    let board = Board::new("syncempty");
+    // No stub, so no LINEAR_API_KEY: an empty board is knowable without one.
+    let run = board.run(&["sync", "linear"], None);
+    run.assert_ok();
+    assert!(
+        run.stdout.contains("nothing linked"),
+        "{}",
+        run.stdout
+    );
+}
+
+// ---- import --mine: the inbound queue ----
+
+#[test]
+fn import_mine_creates_refreshes_and_skips_out_of_cycle_work() {
+    let board = Board::new("mine");
+
+    // ENG-412 is already on the board, so --mine must refresh it, not clone it.
+    let stub = Stub::start(import_replies(
+        "Original title",
+        ("Todo", "unstarted"),
+        "2026-07-29T12:00:00.000Z",
+    ));
+    board
+        .run(
+            &["import", "linear", "ENG-412", "--project", "PROJ"],
+            Some(&stub),
+        )
+        .assert_ok();
+
+    let mine_stub = Stub::start(HashMap::from([(
+        "ViewerAssignedIssues".to_string(),
+        viewer_reply(vec![
+            // Unlinked, team without cycles: created.
+            assigned_node(
+                linear_issue_with(
+                    "linear-uuid-2",
+                    "ENG-2",
+                    "Fresh work",
+                    ("Todo", "unstarted"),
+                    "2026-07-30T12:00:00.000Z",
+                ),
+                None,
+                None,
+            ),
+            // Already linked: refreshed, with the upstream rename applied.
+            assigned_node(
+                linear_issue_with(
+                    "linear-uuid-1",
+                    "ENG-412",
+                    "Renamed upstream",
+                    ("In Progress", "started"),
+                    "2026-07-30T12:00:00.000Z",
+                ),
+                None,
+                None,
+            ),
+            // The team runs a cycle and this issue is not in it: backlog, skipped.
+            assigned_node(
+                linear_issue_with(
+                    "linear-uuid-3",
+                    "ENG-3",
+                    "Someday work",
+                    ("Todo", "unstarted"),
+                    "2026-07-30T12:00:00.000Z",
+                ),
+                None,
+                Some("cyc-active"),
+            ),
+        ]),
+    )]));
+
+    let run = board.run(
+        &["import", "linear", "--mine", "--project", "PROJ", "--json"],
+        Some(&mine_stub),
+    );
+    run.assert_ok();
+    let out: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(out["action"], "import-mine");
+    assert_eq!(out["created"], 1, "{out}");
+    assert_eq!(out["refreshed"], 1, "{out}");
+    assert_eq!(out["skipped"], 1, "{out}");
+
+    let ls = board.run(&["issue", "ls", "--project", "PROJ", "--json"], None);
+    ls.assert_ok();
+    let count = ls.stdout.lines().filter(|l| !l.trim().is_empty()).count();
+    assert_eq!(count, 2, "created + refreshed, never the skipped one: {}", ls.stdout);
+
+    let issue = board.show("PROJ-1");
+    assert_eq!(
+        issue["title"], "Renamed upstream",
+        "the linked issue should have been refreshed in place"
+    );
+    assert_eq!(issue["status"], "in-progress");
+}
+
+#[test]
+fn import_mine_in_an_active_cycle_is_in_scope() {
+    let board = Board::new("minecycle");
+    let mine_stub = Stub::start(HashMap::from([(
+        "ViewerAssignedIssues".to_string(),
+        viewer_reply(vec![assigned_node(
+            linear_issue_with(
+                "linear-uuid-4",
+                "ENG-4",
+                "This sprint's work",
+                ("Todo", "unstarted"),
+                "2026-07-30T12:00:00.000Z",
+            ),
+            Some("cyc-active"),
+            Some("cyc-active"),
+        )]),
+    )]));
+    let run = board.run(
+        &["import", "linear", "--mine", "--project", "PROJ", "--json"],
+        Some(&mine_stub),
+    );
+    run.assert_ok();
+    let out: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(out["created"], 1, "{out}");
+    assert_eq!(out["skipped"], 0, "{out}");
+}
+
+#[test]
+fn import_mine_dry_run_writes_nothing() {
+    let board = Board::new("minedry");
+    let mine_stub = Stub::start(HashMap::from([(
+        "ViewerAssignedIssues".to_string(),
+        viewer_reply(vec![assigned_node(
+            linear_issue_with(
+                "linear-uuid-2",
+                "ENG-2",
+                "Fresh work",
+                ("Todo", "unstarted"),
+                "2026-07-30T12:00:00.000Z",
+            ),
+            None,
+            None,
+        )]),
+    )]));
+    let run = board.run(
+        &["import", "linear", "--mine", "--project", "PROJ", "--dry-run"],
+        Some(&mine_stub),
+    );
+    run.assert_ok();
+    assert!(run.stdout.contains("dry run"), "{}", run.stdout);
+    assert!(run.stdout.contains("ENG-2"), "{}", run.stdout);
+
+    let ls = board.run(&["issue", "ls", "--project", "PROJ", "--json"], None);
+    ls.assert_ok();
+    assert!(
+        ls.stdout.trim().is_empty(),
+        "dry run created an issue: {}",
+        ls.stdout
+    );
+}
+
+#[test]
+fn import_mine_into_a_missing_project_fails_before_writing() {
+    let board = Board::new("minenoproj");
+    let mine_stub = Stub::start(HashMap::from([(
+        "ViewerAssignedIssues".to_string(),
+        viewer_reply(vec![assigned_node(
+            linear_issue_with(
+                "linear-uuid-2",
+                "ENG-2",
+                "Fresh work",
+                ("Todo", "unstarted"),
+                "2026-07-30T12:00:00.000Z",
+            ),
+            None,
+            None,
+        )]),
+    )]));
+    let run = board.run(
+        &["import", "linear", "--mine", "--project", "NOPE"],
+        Some(&mine_stub),
+    );
+    assert_eq!(run.code, 1, "{run:?}");
+    assert!(run.stderr.contains("NOPE"), "{}", run.stderr);
+}
+
+#[test]
+fn import_linear_needs_exactly_one_of_key_and_mine() {
+    let board = Board::new("minearg");
+    // Both: clap rejects the conflict before anything runs.
+    let run = board.run(
+        &["import", "linear", "ENG-412", "--mine", "--project", "PROJ"],
+        None,
+    );
+    assert_ne!(run.code, 0, "{run:?}");
+    // Neither: the error should name both ways forward.
+    let run = board.run(&["import", "linear", "--project", "PROJ"], None);
+    assert_eq!(run.code, 2, "{run:?}");
+    assert!(run.stderr.contains("--mine"), "{}", run.stderr);
+    // --mine adopts by link, never by --link-to.
+    let run = board.run(
+        &[
+            "import", "linear", "--mine", "--project", "PROJ", "--link-to", "PROJ-1",
+        ],
+        None,
+    );
+    assert_ne!(run.code, 0, "{run:?}");
 }
 
 // ---- failure paths that need no network at all ----

@@ -40,8 +40,13 @@ pub enum ImportProvider {
 
 #[derive(clap::Args)]
 pub struct ImportLinearArgs {
-    /// Linear issue key, e.g. ENG-412
-    pub key: String,
+    /// Linear issue key, e.g. ENG-412 (omit when using --mine)
+    pub key: Option<String>,
+    /// Import every open Linear issue assigned to the token's viewer: the
+    /// active cycle where the team runs cycles, all open issues where it
+    /// does not
+    #[arg(long, conflicts_with_all = ["key", "link_to"])]
+    pub mine: bool,
     /// cliban project KEY the issue lands in
     #[arg(long)]
     pub project: String,
@@ -94,6 +99,30 @@ pub struct PushLinearArgs {
     #[arg(long)]
     pub force: bool,
     /// Report what would be written and write nothing
+    #[arg(long)]
+    pub dry_run: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(clap::Args)]
+pub struct SyncArgs {
+    #[command(subcommand)]
+    pub cmd: SyncProvider,
+}
+
+#[derive(clap::Subcommand)]
+pub enum SyncProvider {
+    /// Refresh every Linear-linked issue on the board in one call
+    Linear(SyncLinearArgs),
+}
+
+#[derive(clap::Args)]
+pub struct SyncLinearArgs {
+    /// Only refresh issues in this cliban project
+    #[arg(long)]
+    pub project: Option<String>,
+    /// Report what would change and write nothing
     #[arg(long)]
     pub dry_run: bool,
     #[arg(long)]
@@ -154,10 +183,25 @@ pub async fn run_push(db: &Option<String>, args: PushArgs) -> CliResult<()> {
     }
 }
 
+pub async fn run_sync(db: &Option<String>, args: SyncArgs) -> CliResult<()> {
+    match args.cmd {
+        SyncProvider::Linear(a) => sync_linear(db, a).await,
+    }
+}
+
 // ---------------------------------------------------------------- import
 
 async fn import_linear(db: &Option<String>, args: ImportLinearArgs) -> CliResult<()> {
-    let (team_key, number) = ops::parse_issue_key(&args.key).map_err(sync_err)?;
+    if args.mine {
+        return import_mine(db, args).await;
+    }
+    let Some(key) = args.key.as_deref() else {
+        return Err(CliError::validation(
+            "pass a Linear issue key (e.g. ENG-412), or --mine to import everything \
+             assigned to you",
+        ));
+    };
+    let (team_key, number) = ops::parse_issue_key(key).map_err(sync_err)?;
     let project = args.project.to_uppercase();
 
     let api = cliban_sync::linear::Client::from_env().map_err(sync_err)?;
@@ -169,49 +213,21 @@ async fn import_linear(db: &Option<String>, args: ImportLinearArgs) -> CliResult
     ensure_links_table(&store).await?;
 
     let mapped = states::to_cliban(&remote.state);
-    let target = resolve_import_target(&store, &remote, args.link_to.as_deref()).await?;
 
     if args.dry_run {
+        let target = resolve_import_target(&store, &remote, args.link_to.as_deref()).await?;
         report_import_plan(&args, &remote, &mapped, &target);
         return Ok(());
     }
 
-    let (issue, action, origin) = match target {
-        ImportTarget::Existing(existing, origin) => {
-            let refreshed = refresh_existing(&store, existing, &remote, &mapped, origin).await?;
-            (refreshed, "refreshed", origin)
-        }
-        // Adopting creates the pairing right now, via import — so its origin
-        // is `Imported`, and this refresh installs Linear's spec.
-        ImportTarget::Adopt(existing) => {
-            let origin = links::Origin::Imported;
-            let refreshed = refresh_existing(&store, existing, &remote, &mapped, origin).await?;
-            (refreshed, "adopted", origin)
-        }
-        ImportTarget::Create => {
-            let created = create_from_remote(&store, &project, &remote, &mapped, &args).await?;
-            (created, "imported", links::Origin::Imported)
-        }
-    };
-
-    let labels = remote.label_names();
-    let issue = if labels.is_empty() {
-        issue
-    } else {
-        let issue_for_labels = issue.clone();
-        store
-            .call(move |conn| issues::set_labels(conn, &issue_for_labels, &labels))
-            .await?
-    };
-
-    record_link(&store, &issue, &remote, origin).await?;
-    audit(
+    let (issue, action) = import_one(
         &store,
-        &issue,
-        "sync",
-        &format!("imported from {}", remote.identifier),
+        &project,
+        args.milestone.clone(),
+        args.link_to.as_deref(),
+        &remote,
     )
-    .await;
+    .await?;
 
     if args.json {
         println!(
@@ -233,6 +249,170 @@ async fn import_linear(db: &Option<String>, args: ImportLinearArgs) -> CliResult
                 remote.identifier
             );
         }
+    }
+    Ok(())
+}
+
+/// One issue crossing the boundary inbound — the write path single-key
+/// import, `--mine`, and `sync linear` all share. Resolves where the remote
+/// lands, refreshes or creates honoring the link's origin, mirrors labels,
+/// records the link, audits.
+async fn import_one(
+    store: &Store,
+    project: &str,
+    milestone: Option<String>,
+    link_to: Option<&str>,
+    remote: &model::Issue,
+) -> CliResult<(Issue, &'static str)> {
+    let mapped = states::to_cliban(&remote.state);
+    let target = resolve_import_target(store, remote, link_to).await?;
+
+    let (issue, action, origin) = match target {
+        ImportTarget::Existing(existing, origin) => {
+            let refreshed = refresh_existing(store, existing, remote, &mapped, origin).await?;
+            (refreshed, "refreshed", origin)
+        }
+        // Adopting creates the pairing right now, via import — so its origin
+        // is `Imported`, and this refresh installs Linear's spec.
+        ImportTarget::Adopt(existing) => {
+            let origin = links::Origin::Imported;
+            let refreshed = refresh_existing(store, existing, remote, &mapped, origin).await?;
+            (refreshed, "adopted", origin)
+        }
+        ImportTarget::Create => {
+            let created = create_from_remote(store, project, remote, &mapped, milestone).await?;
+            (created, "imported", links::Origin::Imported)
+        }
+    };
+
+    let issue = apply_labels_and_link(store, issue, remote, origin).await?;
+    audit(
+        store,
+        &issue,
+        "sync",
+        &format!("imported from {}", remote.identifier),
+    )
+    .await;
+    Ok((issue, action))
+}
+
+/// The bookkeeping every inbound write ends with: mirror Linear's labels,
+/// then record the link under the same origin the refresh honored.
+async fn apply_labels_and_link(
+    store: &Store,
+    issue: Issue,
+    remote: &model::Issue,
+    origin: links::Origin,
+) -> CliResult<Issue> {
+    let labels = remote.label_names();
+    let issue = if labels.is_empty() {
+        issue
+    } else {
+        let issue_for_labels = issue.clone();
+        store
+            .call(move |conn| issues::set_labels(conn, &issue_for_labels, &labels))
+            .await?
+    };
+    record_link(store, &issue, remote, origin).await?;
+    Ok(issue)
+}
+
+/// `import linear --mine` — the inbound queue. Everything Linear says is
+/// yours-and-current comes through [`import_one`], so a re-run refreshes what
+/// the last run created and the whole verb is safe to run on a loop.
+async fn import_mine(db: &Option<String>, args: ImportLinearArgs) -> CliResult<()> {
+    let project = args.project.to_uppercase();
+
+    let api = cliban_sync::linear::Client::from_env().map_err(sync_err)?;
+    let assigned = ops::assigned_to_viewer(&api).await.map_err(sync_err)?;
+
+    let store = store_open::open(db).await?;
+    ensure_links_table(&store).await?;
+
+    // A batch lands in one project; a typo'd key should fail before the first
+    // write, not after the third.
+    {
+        let wanted = project.clone();
+        store
+            .call(move |conn| cliban_core::contexts::projects::get_by_key(conn, &wanted))
+            .await?
+            .ok_or_else(|| CliError::not_found(format!("not found: project {project}")))?;
+    }
+
+    let (mut created, mut refreshed, mut skipped) = (0u32, 0u32, 0u32);
+    let mut rows = Vec::new();
+
+    for a in &assigned {
+        if !a.in_active_scope() {
+            skipped += 1;
+            rows.push(serde_json::json!({
+                "action": "skipped",
+                "linear": a.issue.identifier,
+                "reason": "outside the team's active cycle",
+            }));
+            if !args.json {
+                println!(
+                    "skipped {} (outside the team's active cycle)",
+                    a.issue.identifier
+                );
+            }
+            continue;
+        }
+
+        if args.dry_run {
+            let target = resolve_import_target(&store, &a.issue, None).await?;
+            let would = match &target {
+                ImportTarget::Existing(i, _) => format!("refresh {}", i.key),
+                ImportTarget::Adopt(i) => format!("adopt {}", i.key),
+                ImportTarget::Create => format!("create in {project}"),
+            };
+            match &target {
+                ImportTarget::Create => created += 1,
+                _ => refreshed += 1,
+            }
+            rows.push(serde_json::json!({
+                "action": "dry-run",
+                "linear": a.issue.identifier,
+                "would": would,
+            }));
+            if !args.json {
+                println!("dry run: would {} from {}", would, a.issue.identifier);
+            }
+            continue;
+        }
+
+        let (issue, action) =
+            import_one(&store, &project, args.milestone.clone(), None, &a.issue).await?;
+        match action {
+            "imported" => created += 1,
+            _ => refreshed += 1,
+        }
+        rows.push(serde_json::json!({
+            "action": action,
+            "cliban": issue.key,
+            "linear": a.issue.identifier,
+            "status": issue.status,
+        }));
+        if !args.json {
+            println!("{action} {} → {}", a.issue.identifier, issue.key);
+        }
+    }
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "action": "import-mine",
+                "dry_run": args.dry_run,
+                "created": created,
+                "refreshed": refreshed,
+                "skipped": skipped,
+                "issues": rows,
+            })
+        );
+    } else {
+        let prefix = if args.dry_run { "dry run: mine" } else { "mine" };
+        println!("{prefix}: {created} created, {refreshed} refreshed, {skipped} skipped");
     }
     Ok(())
 }
@@ -300,7 +480,7 @@ async fn create_from_remote(
     project: &str,
     remote: &model::Issue,
     mapped: &states::Mapped,
-    args: &ImportLinearArgs,
+    milestone: Option<String>,
 ) -> CliResult<Issue> {
     let project_owned = project.to_string();
     let attrs = issues::CreateIssue {
@@ -308,7 +488,7 @@ async fn create_from_remote(
         description: Some(render::initial_description(remote)),
         status: Some(mapped.status.to_string()),
         priority: Some(model::priority_to_cliban(remote.priority).to_string()),
-        milestone: args.milestone.clone(),
+        milestone,
         parent_key: None,
         due_date: remote.due_date,
         position: None,
@@ -433,6 +613,169 @@ fn local_fingerprint(issue: &Issue, labels: &[String], origin: links::Origin) ->
         &labels.join(","),
         spec.trim(),
     ])
+}
+
+// ---------------------------------------------------------------- sync
+
+/// `cliban sync linear` — re-import every linked issue in one call.
+///
+/// Each link goes through exactly the semantics its origin recorded: an
+/// imported pairing refreshes `## Spec` from Linear, a pushed pairing keeps
+/// the board's spec; `## Plan`, `## Activity Log` and `## Notes` survive
+/// unconditionally, which is what makes this safe to run on a loop.
+async fn sync_linear(db: &Option<String>, args: SyncLinearArgs) -> CliResult<()> {
+    let store = store_open::open(db).await?;
+    ensure_links_table(&store).await?;
+
+    // Resolve the project fence before touching anything remote.
+    let project_id = match &args.project {
+        Some(key) => {
+            let key = key.to_uppercase();
+            let wanted = key.clone();
+            let project = store
+                .call(move |conn| cliban_core::contexts::projects::get_by_key(conn, &wanted))
+                .await?
+                .ok_or_else(|| CliError::not_found(format!("not found: project {key}")))?;
+            Some(project.id)
+        }
+        None => None,
+    };
+
+    let all_links = store
+        .call(|conn| links::list(conn, PROVIDER_LINEAR))
+        .await?;
+
+    // Pair links with their local issues first: a board with nothing in scope
+    // needs no token, and a dangling link should warn rather than abort.
+    let mut skipped = 0u32;
+    let mut rows = Vec::new();
+    let mut work = Vec::new();
+    for link in all_links {
+        let local_id = link.local_id;
+        let issue = store
+            .call(move |conn| issues::get_by_id(conn, local_id))
+            .await?;
+        let Some(issue) = issue else {
+            eprintln!(
+                "warning: {} is linked to a cliban issue that no longer exists \
+                 (local id {}); skipping",
+                link.remote_key, link.local_id
+            );
+            skipped += 1;
+            rows.push(serde_json::json!({
+                "action": "skipped",
+                "linear": link.remote_key,
+                "reason": "local issue missing",
+            }));
+            continue;
+        };
+        if let Some(project_id) = project_id {
+            if issue.project_id != project_id {
+                continue;
+            }
+        }
+        work.push((link, issue));
+    }
+
+    if work.is_empty() && skipped == 0 {
+        if args.json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "action": "sync",
+                    "dry_run": args.dry_run,
+                    "refreshed": 0,
+                    "skipped": 0,
+                    "issues": [],
+                })
+            );
+        } else {
+            match &args.project {
+                Some(p) => println!("nothing linked to Linear in {}", p.to_uppercase()),
+                None => println!("nothing linked to Linear"),
+            }
+        }
+        return Ok(());
+    }
+
+    let api = cliban_sync::linear::Client::from_env().map_err(sync_err)?;
+    let mut refreshed = 0u32;
+
+    for (link, issue) in work {
+        let remote = match ops::issue_by_id(&api, &link.remote_id).await {
+            Ok(remote) => remote,
+            // Gone upstream. Deleting the local issue is not this command's
+            // call to make — cliban never deletes — so say so and move on.
+            Err(cliban_sync::Error::NotFound(_)) => {
+                eprintln!(
+                    "warning: {} ({}) no longer exists in Linear; skipping",
+                    link.remote_key, issue.key
+                );
+                skipped += 1;
+                rows.push(serde_json::json!({
+                    "action": "skipped",
+                    "cliban": issue.key,
+                    "linear": link.remote_key,
+                    "reason": "gone upstream",
+                }));
+                continue;
+            }
+            // Anything else (auth, network, API refusal) would fail for every
+            // remaining link too: abort rather than warn N times.
+            Err(e) => return Err(sync_err(e)),
+        };
+
+        if args.dry_run {
+            refreshed += 1;
+            rows.push(serde_json::json!({
+                "action": "dry-run",
+                "cliban": issue.key,
+                "linear": remote.identifier,
+            }));
+            if !args.json {
+                println!("dry run: would refresh {} ← {}", issue.key, remote.identifier);
+            }
+            continue;
+        }
+
+        let mapped = states::to_cliban(&remote.state);
+        let issue = refresh_existing(&store, issue, &remote, &mapped, link.origin).await?;
+        let issue = apply_labels_and_link(&store, issue, &remote, link.origin).await?;
+        audit(
+            &store,
+            &issue,
+            "sync",
+            &format!("refreshed from {}", remote.identifier),
+        )
+        .await;
+        refreshed += 1;
+        rows.push(serde_json::json!({
+            "action": "refreshed",
+            "cliban": issue.key,
+            "linear": remote.identifier,
+            "status": issue.status,
+        }));
+        if !args.json {
+            println!("refreshed {} ← {}", issue.key, remote.identifier);
+        }
+    }
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "action": "sync",
+                "dry_run": args.dry_run,
+                "refreshed": refreshed,
+                "skipped": skipped,
+                "issues": rows,
+            })
+        );
+    } else {
+        let prefix = if args.dry_run { "dry run: sync" } else { "sync" };
+        println!("{prefix}: {refreshed} refreshed, {skipped} skipped");
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- push

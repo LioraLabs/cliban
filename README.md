@@ -468,11 +468,18 @@ export LINEAR_API_KEY=lin_api_...
 cliban import linear ENG-412 --project PROJ    # borrow it
 cliban issue tick PROJ-42 --task 1 --step 1    # work it
 cliban push linear PROJ-42                     # hand it back
+
+cliban import linear --mine --project PROJ     # borrow everything assigned to you
+cliban sync linear                             # refresh every borrowed issue at once
 ```
+
+`--mine` imports every open issue assigned to your token's viewer — scoped to
+the team's active cycle where cycles are in use — and `sync linear` re-imports
+every linked issue in one call; both report created/refreshed/skipped counts.
 
 That is the entire feature. There is no daemon, no polling, no webhook, and no
 merge algorithm — the only time anything crosses the boundary is when you run
-one of those two commands. It stays comprehensible because **field ownership is
+one of these commands. It stays comprehensible because **field ownership is
 declared rather than negotiated**:
 
 | Field | Owner | What that means |
