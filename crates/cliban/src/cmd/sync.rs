@@ -1009,6 +1009,83 @@ async fn push_linear(db: &Option<String>, args: PushLinearArgs) -> CliResult<()>
     Ok(())
 }
 
+// ---------------------------------------------------------------- push on move
+
+/// `push_on_move = true` in linear.toml: after `issue mv` commits a status
+/// change on a linked issue, push state + the living progress comment through
+/// the same path as a manual `cliban push linear KEY` — stale-write guard,
+/// status-mapping caveats, one-shot comment recreation and link bookkeeping
+/// included, because it *is* that path with default writes.
+///
+/// Best-effort by design: the move has already committed, and nothing here may
+/// take it back or fail the command. A push that cannot happen prints one
+/// warning line and records a board activity entry, so nothing silently
+/// drifts without anything becoming fatal.
+///
+/// Ordering is deliberate: the link is checked before the config is read, so a
+/// move on an unlinked issue costs no config parse, no client, and no HTTP —
+/// which is what most moves on most boards are.
+pub async fn push_on_move(db: &Option<String>, key: &str) {
+    let Ok(store) = store_open::open(db).await else {
+        return;
+    };
+    if store.call(links::ensure_table).await.is_err() {
+        return;
+    }
+    let wanted = key.to_string();
+    let Ok(Some(issue)) = store
+        .call(move |conn| issues::get_by_key(conn, &wanted))
+        .await
+    else {
+        return;
+    };
+    let local_id = issue.id;
+    let Ok(Some(_)) = store
+        .call(move |conn| links::by_local(conn, PROVIDER_LINEAR, ENTITY_ISSUE, local_id))
+        .await
+    else {
+        // Unlinked (or unknowable): nothing to push, and nothing further.
+        return;
+    };
+
+    let attempt = async {
+        let cfg = config::Config::load_default().map_err(sync_err)?;
+        if !cfg.linear.push_on_move {
+            return Ok(());
+        }
+        push_linear(
+            db,
+            PushLinearArgs {
+                key: issue.key.clone(),
+                create: false,
+                team: None,
+                state: false,
+                comment: false,
+                description: false,
+                force: false,
+                dry_run: false,
+                json: false,
+            },
+        )
+        .await
+    };
+    if let Err(e) = attempt.await {
+        // One line however long the underlying message wants to be.
+        let msg = e.message().split_whitespace().collect::<Vec<_>>().join(" ");
+        eprintln!(
+            "warning: push_on_move: {} moved locally but the push failed: {msg}",
+            issue.key
+        );
+        audit(
+            &store,
+            &issue,
+            "sync",
+            &format!("push_on_move failed: {msg}"),
+        )
+        .await;
+    }
+}
+
 /// Refuse a push that would overwrite a Linear change we have not seen.
 ///
 /// The comparison is against `remote_updated_at` recorded at the last sync, not

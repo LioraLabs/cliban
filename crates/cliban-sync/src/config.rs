@@ -40,6 +40,11 @@ pub struct LinearConfig {
     /// name-then-type inference for the statuses listed; anything absent still
     /// infers.
     pub states: BTreeMap<String, String>,
+    /// When true, `issue mv` on a Linear-linked issue pushes state + the
+    /// living progress comment after the move commits locally. Opt-in and
+    /// best-effort: a failed push warns and records board activity, never
+    /// fails the move.
+    pub push_on_move: bool,
 }
 
 impl Config {
@@ -129,6 +134,25 @@ mod tests {
             cfg.linear.states.get("in-review").map(String::as_str),
             Some("Code Review")
         );
+    }
+
+    #[test]
+    fn push_on_move_defaults_to_off() {
+        // The flag is opt-in: a config file that predates it (or no file at
+        // all) must never start pushing on every move.
+        assert!(!Config::parse("").unwrap().linear.push_on_move);
+        assert!(
+            !Config::parse("[linear]\nteam = \"ENG\"\n")
+                .unwrap()
+                .linear
+                .push_on_move
+        );
+    }
+
+    #[test]
+    fn parses_push_on_move() {
+        let cfg = Config::parse("[linear]\npush_on_move = true\n").unwrap();
+        assert!(cfg.linear.push_on_move);
     }
 
     #[test]
