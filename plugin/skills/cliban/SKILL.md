@@ -581,8 +581,17 @@ refreshed, not duplicated. `sync linear` re-imports every linked issue in one
 call, each under its own link's origin semantics. Both report
 created/refreshed/skipped counts and take `--dry-run` / `--json`.
 
+**The living progress comment.** `push` maintains ONE comment per linked
+issue and edits it in place (plan ticked/total, recent `issue log` findings,
+latest test status) — so your log discipline is exactly what the Linear
+thread shows, without notification spam. A comment someone deleted upstream
+is recreated once, silently.
+
 Needs `$LINEAR_API_KEY`. Optional `~/.config/cliban/linear.toml` sets the
-default team and any state-name overrides; never put the token in it.
+default team and any state-name overrides; never put the token in it. Set
+`push_on_move = true` there and every `issue mv` of a linked issue auto-pushes
+state + the living comment after the move lands locally — a failed push warns
+on one line and records board activity, but never fails the move.
 
 **Who owns what.** This is the rule that makes the bridge safe to re-run:
 
