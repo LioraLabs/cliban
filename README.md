@@ -152,6 +152,9 @@ cliban activity --since 1d --json             # the timeline since yesterday
 cliban project search PROJ "wal mode" --json  # durable lessons, fuzzy-searched
 ```
 
+<p align="center"><img src="assets/agent.gif" width="880" alt="the agent loop: read the plan, tick a step, log a finding, read the attributed timeline"></p>
+<p align="center"><sub>the loop an agent lives: read the plan · tick · log · the attributed feed</sub></p>
+
 Other harnesses can use the same skill file directly:
 [`plugin/skills/cliban/SKILL.md`](plugin/skills/cliban/SKILL.md) follows the
 Agent Skills format and documents the complete command surface. A test keeps
@@ -258,8 +261,14 @@ description ×1.0):
 
 For the human in the loop: `cliban` (no args) opens the board. `hjkl` moves,
 `H/L` moves the focused issue across columns, `J/K` reorders, `Enter` for
-detail, `e` edits the issue as frontmatter + markdown in `$EDITOR`, `n` new
-issue, `/` fuzzy find, `?` for everything else.
+detail, `n` new issue, `/` fuzzy find, `?` for everything else.
+
+And the good part: `e` drops the issue into `$EDITOR` as frontmatter +
+markdown — change `status:` in vim, `:wq`, and the card is in a different
+column when you land back on the board:
+
+<p align="center"><img src="assets/edit.gif" width="880" alt="press e, edit the issue in vim, save, and the card moves columns"></p>
+<p align="center"><sub>`e` → vim → `:wq` → the board caught up</sub></p>
 
 Three full-screen pages, each type-to-filter, ordered by recent activity:
 
@@ -269,8 +278,6 @@ Three full-screen pages, each type-to-filter, ordered by recent activity:
   archives (and unarchives from the archived bucket).
 - **`a` activity** — the board's mailbox: every recorded event newest-first,
   chips to filter by kind, `Enter` jumps to the issue.
-
-<p align="center"><img src="assets/editor.png" width="880" alt="editing an issue in nvim"></p>
 
 The palette is built for dark terminals; every named slot can be re-colored
 from `~/.config/cliban/theme.toml` —
