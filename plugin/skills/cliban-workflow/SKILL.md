@@ -1,101 +1,59 @@
 ---
 name: cliban-workflow
-description: "Convention layer for cliban-based workflow management. Loaded by workflow skills via requires_skills to provide cliban command vocabulary, status mapping, and the parseable-description contract."
+description: "The cliban workflow contract: per-repo adapter binding, status mapping, where work artifacts live vs the repo, and how craft stacks (superpowers, mattpocock-skills, plan mode) publish to the board. Loaded by workflow skills via requires_skills. CLI mechanics live in the cliban skill, not here."
+requires_skills: [cliban]
 ---
 
-# Cliban Workflow — Convention Layer
+# Cliban Workflow — The Contract
 
-This skill is loaded automatically by workflow skills that declare `requires_skills: [cliban-workflow]`. It teaches when and how to use the cliban CLI for the brainstorm → plan → execute → finish workflow.
+This skill is policy, not mechanics. Every command, flag, JSON shape, trap, and the parseable-description grammar is specified once, in the `cliban` skill — consult it there; nothing below restates it. What lives here is the contract that workflow skills share: which repo binds to which board, what each workflow event means in board terms, and which artifacts belong on the board versus in git.
 
-## Detection and Graceful Degradation
+## Per-Repo Binding (the adapter)
 
-Before performing ANY cliban action, check availability:
+A repo that has run `setup-cliban` carries `docs/agents/issue-tracker.md` — the adapter. It binds four things and is authoritative over the defaults below. Read it once per session before the first cliban action.
 
-1. **Probe `cliban --help`.** If the command is not on `$PATH` (non-zero exit / "command not found"), skip all cliban actions silently for this session. Do not warn, do not suggest install, do not block the workflow.
-2. **If the probe succeeds, attempt the first real cliban call.** If it fails (DB missing, schema mismatch, exit 3), surface the error once with `"cliban error: <message> — try 'cliban init' or check $CLIBAN_DB"` and then skip remaining cliban actions this session. Do not retry.
+| Binding | Meaning | Default when no adapter |
+|---|---|---|
+| Project key | which board | basename of `git rev-parse --show-toplevel`, matched case-insensitively against `project ls` keys and names; ask on miss |
+| Craft stack | who owns the craft of spec/plan/execute/finish | none — perform stages directly |
+| Key policy | where issue keys may appear in git artifacts | branches and commit messages yes; source code, comments, docs never |
+| Branch convention | what starting an issue does | switch to the issue's `git_branch_name` |
 
-<IMPORTANT>
-Cliban integration is REQUIRED for the new workflow but the SKILLS must still function for users who haven't installed cliban yet. Workflow skills fall back to local-file behavior only if explicitly directed; otherwise they error clearly with the cliban setup instruction above.
-</IMPORTANT>
-
-## Vocabulary
-
-Cliban's primitives are:
-
-- **Project** — top-level scope. Identified by uppercase key (e.g. `ACME`, `BLOG`).
-- **Milestone** — bundle of issues. Named per project, optional target date.
-- **Issue** — body of work. Key shape: `{PROJECT}-{N}` (e.g. `PROJ-12`).
-- **Sub-issue** — depth-limited to 2. Use `--parent KEY` on `issue add`.
-- **Labels** — free-form per project (auto-created on first use).
-- **Relations** — `blocks`, `blocked_by`, `related_to` (symmetric).
-- **Project memory** — lifecycle-free durable knowledge stored as `###` subsections under the project description's `## Notes`.
-
-## Project Notes — Progressive Memory
-
-The project description's `## Notes` is the store for reusable lessons that should survive a ticket: repository conventions, non-obvious tool behavior, recurring hazards, and decisions whose rationale will matter again. It is not a second activity log, a status feed, or a dump of the current session. Store one independently useful lesson per descriptive `###` subsection.
-
-Probe memory support once with `cliban project search --help`. If it is unavailable, skip project-memory search and recording for the session while continuing all project, milestone, and issue workflows normally. This means the installed CLI predates progressive project memory; it is not a general cliban failure.
-
-At the start of non-trivial work, derive a few task-specific keywords and fuzzy-search project memory before planning or implementation:
-
-```bash
-cliban project search <KEY> "<specific terms>" --section notes --json
-```
-
-The search requires every whitespace-separated term to fuzzy-match within a subsection and returns only matching `###` blocks, ranked and bounded. Read and surface only relevant hits. Do not load the whole notes section or add an always-loaded memory hook. Use `cliban project show <KEY> --section notes` only for deliberate inventory or editing.
-
-Record memory only after discovering a durable, reusable lesson. Search before updating to avoid duplicate or contradictory subsections. Project descriptions update as a whole, so round-trip the current description and preserve every existing section:
-
-```bash
-cliban project search <KEY> "<lesson keywords>" --section notes --json
-cliban project show <KEY> --json | jq -r '.description' > /tmp/project.md
-# Add or update one `### <concise topic>` under `## Notes` in /tmp/project.md.
-cliban project edit <KEY> --description-file /tmp/project.md
-```
-
-If an existing subsection covers the lesson, update it instead of creating a near-duplicate. Remove obsolete knowledge; when a decision changes, preserve the current truth rather than accumulating a chronology.
+If the user is wiring up a new repo, point them at `setup-cliban`; don't improvise a binding. If `cliban` itself is missing from `$PATH`, skip all board actions silently for the session.
 
 ## Status Mapping
 
-| Workflow event | Cliban status |
+| Workflow event | Board action |
 |---|---|
-| Plan written | `backlog` |
-| First step picked up | `in-progress` |
-| Stuck on dependency | `blocked` |
-| PR opened | `in-review` |
-| PR merged / local merge | `done` |
-| Discarded / abandoned | keep current status, append log entry |
+| Spec/plan written | issue stays `backlog` |
+| First step picked up | `mv KEY in-progress` |
+| Stuck on a dependency | `mv KEY blocked --note "<why>"` |
+| PR opened | `mv KEY in-review --note "PR <url>"` |
+| PR merged / local merge | `mv KEY done --note "merged as <sha>"` |
+| Discarded / abandoned | keep status, `issue log KEY "work discarded: <why>"` |
 
-## Active-Project Resolution
+Move the ticket when the work moves, in the same breath — a board that lags reality is worse than no board. Linear-linked issues additionally get `cliban push linear KEY` after the `in-review` and `done` moves (linkage detection and field ownership: `cliban` skill, Linear bridge section).
 
-When a workflow skill needs a project context:
+## Where Artifacts Live
 
-1. Try `basename $(git rev-parse --show-toplevel)` and match (case-insensitive) against `cliban project ls --json` results (both `key` and `name`).
-2. If no match, list projects and ask the user which one — or whether to create a new project.
+Work-lifecycle artifacts go on the board; knowledge that outlives the work goes in the repo. This supersedes any file-based storage a craft stack describes (superpowers' `docs/plans/`, mattpocock's `.scratch/`).
 
-```bash
-REPO=$(basename "$(git rev-parse --show-toplevel)" 2>/dev/null | tr '[:lower:]' '[:upper:]')
-cliban project ls --json | jq --arg r "$REPO" 'select(.key==$r or (.name|ascii_upcase)==$r)'
-```
+| Artifact | Home |
+|---|---|
+| Spec / PRD | issue `## Spec` |
+| Implementation plan | issue `## Plan` |
+| Progress, findings, dead ends | issue `## Activity Log` via `issue log` |
+| Durable reusable lessons | project `## Notes`, search-first |
+| Blocking relationships | relations via `--blocks`/`--blocked-by` — never `Blocked by:` text lines in repo files |
+| ADRs, `CONTEXT.md`, domain docs | **the repo**, plaintext, git-tracked — never the board |
 
-## Active-Issue Resolution
+Issue keys follow the adapter's key policy; under every policy they stay out of source code, comments, and docs, because a key in code rots the moment the board archives the issue.
 
-When a workflow skill needs the current issue:
+## What a Good Plan Contains
 
-1. Try `cliban issue current --json` (reads current git branch, parses the cliban-style prefix).
-2. If exit code 1, ask the user for the issue KEY.
-
-## Parseable-Description Contract
-
-Issue (and milestone/project) descriptions follow a strict markdown contract that several cliban commands parse:
+The `cliban` skill defines what *parses* (`### Task N:` headings, column-zero checkboxes). The contract for what a plan *says*, per task:
 
 ```markdown
-## Spec
-
-[brainstorming output — free-form markdown]
-
-## Plan
-
 ### Task 1: short name
 
 **Files:** exact paths
@@ -108,155 +66,21 @@ Issue (and milestone/project) descriptions follow a strict markdown contract tha
 - [ ] Implement the behavior within the listed boundaries.
 - [ ] Run focused and broader verification.
 - [ ] Commit the coherent change.
-
-### Task 2: short name
-...
-
-### Review Checkpoint: scope of the group above
-
-### Task 3: short name
-...
-
-## Activity Log
-
-- 2026-05-20T13:42Z — chronological entry
-- 2026-05-21T09:15Z — another entry
-
-## Notes
-
-[for projects: durable reusable lessons, one per descriptive H3 subsection; for issues and milestones: node-local context]
 ```
 
-Binding conventions:
+Insert `### Review Checkpoint: <scope>` markers between task groups; executors pause there for a fresh-context review.
 
-1. Top-level anchors: `## Spec`, `## Plan`, `## Activity Log`, `## Notes`. Exact-match.
-2. Plan tasks: H3 `### Task <N>: <name>`. Numbered uniquely.
-3. Plan steps: GFM checkbox lines at column zero (`- [ ] ...` or `- [x] ...`). Indented child bullets are NOT steps.
-4. Review checkpoints: H3 `### Review Checkpoint: <scope>`. No steps, no number — a marker between task groups telling the executor where to batch its review. `tick`/`promote` ignore them.
-5. Promotion suffix: a step pointing to a separate issue is rewritten as `- [ ] Step 3: CSRF middleware → PROJ-18`.
-6. Strict failure: structural violations exit with code 2 — fix the description and retry, no best-effort recovery.
+## Stage Mapping by Craft Stack
 
-## Mutation Commands (atomic via SQLite)
+The bound stack owns the *craft* of each stage; this contract owns where its artifacts land.
 
-```bash
-# Read one section without round-tripping the whole description:
-cliban issue show KEY --section spec|plan|activity|notes
+- **superpowers** — `brainstorming` → `## Spec`; `writing-plans` → `## Plan`; `subagent-driven-development` executes with `tick`/`log`; `finishing-a-development-branch` drives the status moves.
+- **mattpocock-skills** — reach a design any way (grilling, plan mode, conversation); `to-spec` publishes to `## Spec`; `to-tickets` creates issues with `--blocks` edges; `implement` reads the ticket, writes `## Plan`, drives TDD with `tick`/`log`; `triage` labels are ordinary cliban labels.
+- **none** — plan mode or plain conversation for design; publish and execute directly: create the issue with its `## Spec`, round-trip the plan in via `issue edit --description-file -`, then `mv` → `tick` → `log` as the table above dictates.
 
-# Atomically flip a plan step's checkbox:
-cliban issue tick KEY --task N --step M --json
+## Shared Conventions
 
-# Atomically append a timestamped Activity Log entry:
-cliban issue log KEY "<message>" --json
-cliban issue log KEY --message-file - --json  # stdin
-
-# Promote a step into its own issue and rewrite the step line:
-cliban issue promote KEY --task N --step M --title "..." --as sub-issue|related --json
-```
-
-Each of these runs in a single SQL transaction. Concurrent calls are serialized.
-
-## Cross-Project Conventions
-
-- **Canonical labels** for `--label`: `bug`, `feature`, `refactor`, `chore`. Cliban auto-creates labels on `issue add --label`; do not pre-create. Orphan labels are not garbage-collected, so prefer the canonical set.
-- **Default priority** on issue creation: `medium`. Use `high` / `urgent` only when explicitly indicated.
-- **Relations:** use `--blocks` / `--blocked-by` for hard dependencies, `--related-to` for soft references.
-- **Promotion-mirror responsibility:** when a promoted child issue moves to `done`, the workflow skill that did the move is responsible for also calling `cliban issue tick` on the referencing step in the parent. Cliban core does NOT auto-mirror — this is the skill's job, deliberately kept out of cliban to avoid coupling the core to the description-parsing contract.
-
-## Linear-Linked Issues
-
-Some issues are borrowed from Linear and are expected to be handed back:
-
-```bash
-cliban import linear ENG-412 --project KEY   # borrow (or refresh) it
-cliban push linear KEY-42                    # hand back state + a progress comment
-```
-
-Probe bridge support once with `cliban push --help`. If it fails, the installed
-CLI predates the bridge or was built without it — skip all Linear actions for
-the session while continuing every other workflow normally, exactly like the
-project-memory probe above.
-
-**Detecting a linked issue.** An imported or pushed issue carries `sync`
-entries in its `## Activity Log` ("imported from ENG-412", "pushed to
-ENG-412"). If the log shows one, treat the issue as Linear-linked. To confirm
-without side effects, `cliban push linear KEY --dry-run` exits 1 when unlinked.
-
-**Field ownership is declared, not merged.** Linear owns title, priority,
-labels, due date, workflow state, and `## Spec` — never edit these locally on a
-linked issue; change them in Linear and re-run the import (a re-import
-overwrites local edits to Linear-owned fields). cliban owns `## Plan`,
-`## Activity Log`, and `## Notes` — work them exactly as on any other issue; a
-re-import never touches them, so a half-ticked plan survives every refresh.
-
-**When to push.** Only on linked issues, and only when `$LINEAR_API_KEY` is
-set (push exits 2 without it — surface once, then skip for the session):
-
-- After `issue mv KEY in-review` (PR opened) and after `issue mv KEY done`,
-  run `cliban push linear KEY`. It writes the workflow state and a progress
-  comment; both are additive and cannot destroy anything.
-- Exit 2 means Linear moved since the last sync: re-import, then push again.
-  Pass `--force` only when the user has said cliban is the authority.
-- Exit 1 means the issue is not linked after all: skip silently. Use
-  `push linear KEY --create --team X` only when the user explicitly asks for a
-  Linear counterpart.
-- `--description` (mirror the plan into the Linear description's fenced block)
-  is opt-in — use it only on user request.
-
-**Status caveat.** `backlog` / `in-progress` / `done` round-trip cleanly.
-`blocked` and `in-review` collapse into Linear's "started" type unless the
-team has a matching state name (the user can map names in
-`~/.config/cliban/linear.toml`). Push anyway; mention the collapse only if the
-user asks why Linear shows in-progress.
-
-The token comes from `$LINEAR_API_KEY` and nowhere else. Never write it into
-`linear.toml`, an issue description, or a log entry.
-
-## Workflow Actions by Stage
-
-Stages map onto the [superpowers](https://github.com/obra/superpowers) plugin's skills when it is installed (`superpowers:brainstorming`, `superpowers:writing-plans`, `superpowers:executing-plans`, `superpowers:subagent-driven-development`, `superpowers:finishing-a-development-branch`). Use those skills for the *craft* of each stage; this contract governs *where the artifacts live* — sections of the cliban node description — and supersedes any file-based storage those skills describe. Without superpowers, perform the stage directly with the actions below.
-
-### Brainstorming / spec
-- Detect active project (above)
-- Ask scope: project / milestone / issue
-- Create the appropriate node with the `## Spec` section in its description
-
-### Planning
-- Take or infer an Issue key
-- Read spec: `cliban issue show KEY --section spec`
-- Write plan via `cliban issue edit KEY --description-file -` (round-trips full description preserving Spec + Activity Log)
-
-### Executing
-- `cliban issue mv KEY in-progress`
-- For each step: execute → `cliban issue tick KEY --task N --step M`
-- For bugs: `cliban issue add --label bug --blocks KEY` + `cliban issue log KEY "bug surfaced: NEWKEY"`
-- For oversized steps: `cliban issue promote KEY --task N --step M --title "..." --as sub-issue`
-
-### Ticket
-- `cliban issue add --project KEY --title "..." --priority ...`
-
-### Bugs
-- Add: `cliban issue add --label bug --priority ...`
-- List: `cliban issue ls --label bug --json`
-- Resolve: `cliban issue mv KEY done`
-
-### Status
-- `cliban project ls --json`
-- `cliban issue ls --status in-progress --json`
-- `cliban issue blocked --json`
-
-### Finishing a branch
-- PR opened: `cliban issue mv KEY in-review` + `cliban issue log KEY "PR opened: <url>"`
-- Local merge: `cliban issue mv KEY done`
-- Discard: `cliban issue log KEY "work discarded"` (keep current status)
-- If the issue is Linear-linked (see above): `cliban push linear KEY` after the move
-
-## What NOT to Do
-
-- Don't parse the human table output of `ls`/`show`. Always use `--json`.
-- Don't nest sub-issues three levels deep — cliban exits 2 (use `related_to` instead).
-- Don't mutate the structured sections (`## Plan`, `## Activity Log`) outside of `tick`/`promote`/`log`. Hand-editing breaks the contract and the next mutation command exits 2.
-- Don't pre-create labels — `issue add --label X` auto-creates.
-- Don't pass `--editor` in an agent context — exits 2 without a TTY.
-- Don't edit Linear-owned fields (title, priority, labels, due date, `## Spec`) on a Linear-linked issue — change them in Linear and re-import, or the next re-import silently wins.
-- Don't write spec or plan content to plan/spec files in project repos (e.g. superpowers' `docs/` locations). Under this workflow, specs and plans live in the cliban node description.
-- **Never write a cliban issue key into source code, comments, commit messages, or any committed artifact.** A cliban key (e.g. `PROJ-42`) is private local tracking metadata — meaningless to anyone reading the repo. Track the work *in cliban* (`tick`/`log`); the key stays out of the code. (A global pre-commit hook enforces this and will block such commits.)
+- **Labels:** prefer the canonical set `bug`, `feature`, `refactor`, `chore` (auto-created on first `--label` use; orphans are never garbage-collected).
+- **Priority:** default `medium`; `high`/`urgent` only when explicitly indicated.
+- **Scope discovery:** promote oversized steps (`issue promote`) or file a linked issue; never silently widen a ticket.
+- **Promotion mirror:** when a promoted child reaches `done`, the skill that moved it also ticks the referencing step in the parent — cliban core deliberately does not auto-mirror.

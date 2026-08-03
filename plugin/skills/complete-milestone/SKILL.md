@@ -10,7 +10,7 @@ requires_skills: [cliban-workflow]
 
 Orchestrate every issue in a cliban milestone to completion: one agent per ticket, run in dependency order, each isolated in its own worktree, each driven through a planning stage then a test-first execution stage. The orchestrator owns integration and merges; agents never merge.
 
-**Workflow-skill dependencies:** this skill hands the planning and execution stages to the [superpowers](https://github.com/obra/superpowers) plugin when it is installed — `superpowers:writing-plans`, `superpowers:subagent-driven-development`, `superpowers:using-git-worktrees`, `superpowers:finishing-a-development-branch`. If superpowers is not installed, use the generic fallback given inline at each stage instead; the cliban-workflow contract (where specs, plans, and logs live) applies either way and supersedes any file-based artifact locations those skills describe.
+**Craft-stack dependencies:** the planning and execution stages inside each ticket agent run on the craft stack bound in the repo adapter (`docs/agents/issue-tracker.md`, see cliban-workflow's Per-Repo Binding) — the milestone uses the same operating rhythm as solo work in the repo, just one instance per ticket. Known mappings: **superpowers** (`writing-plans`, `subagent-driven-development`, `using-git-worktrees`, `finishing-a-development-branch`) and **mattpocock-skills** (`implement`, which plans and executes with TDD in one skill). No adapter or no stack: use the generic fallback given inline at each stage. The cliban-workflow contract (where specs, plans, and logs live) applies under every stack and supersedes any file-based artifact locations those skills describe.
 
 **Core principle:** The orchestrator is a conductor, not a coder. It computes the dependency order, dispatches one agent per ticket, gates each ticket on its dependencies, and integrates finished work onto a milestone branch — never `main` — until the user finalizes.
 
@@ -24,13 +24,13 @@ Requirement levels below: **MUST** = hard invariant; breaking it corrupts the mi
 - A milestone has multiple issues with `blocked_by` relations forming an execution order
 - You want each ticket planned and implemented independently, then integrated safely
 
-**When NOT to use:** a single issue (plan and execute it directly — via `superpowers:writing-plans` + `superpowers:subagent-driven-development` when installed); issues with no shared integration target; exploratory work without a plan.
+**When NOT to use:** a single issue (plan and execute it directly with the bound craft stack); issues with no shared integration target; exploratory work without a plan.
 
 ## The Integration Branch Rule (read first)
 
 Ticket branches **MUST** merge into a milestone integration branch, never `main`.
 
-Merging half-finished phases straight to `main` breaks whatever currently builds from `main` — often the very tool you are using to track the work. `main` stays shippable; the milestone branch absorbs the in-progress phases; the user lands it as one atomic switch at the end (via `superpowers:finishing-a-development-branch` when installed; otherwise present the user with merge/PR/discard options — never land it yourself).
+Merging half-finished phases straight to `main` breaks whatever currently builds from `main` — often the very tool you are using to track the work. `main` stays shippable; the milestone branch absorbs the in-progress phases; the user lands it as one atomic switch at the end (via the bound stack's finishing skill when it has one; otherwise present the user with merge/PR/discard options — never land it yourself).
 
 ```
 main ──────────────────────────────────────●  (untouched until final cutover)
@@ -49,24 +49,24 @@ digraph complete_milestone {
     "Create milestone/<slug> off main" [shape=box];
     "Wave has ready tickets?" [shape=diamond];
     "Per ready ticket: worktree off milestone branch + dispatch agent" [shape=box];
-    "Agent: writing-plans -> subagent-driven-development -> commit on ticket branch" [shape=box];
+    "Agent: plan stage -> execute stage -> commit on ticket branch" [shape=box];
     "Agent reports done?" [shape=diamond];
     "Orchestrator: verify + build + test + merge ticket->milestone branch" [shape=box];
     "Move issue to done, remove worktree, unblock dependents" [shape=box];
     "All issues done?" [shape=diamond];
-    "Hand milestone branch to user (finishing-a-development-branch)" [shape=doublecircle];
+    "Sweep lessons -> project Notes; hand milestone branch to user" [shape=doublecircle];
 
     "Load milestone issues + blocked_by graph" -> "Compute waves (topological order)";
     "Compute waves (topological order)" -> "Create milestone/<slug> off main";
     "Create milestone/<slug> off main" -> "Wave has ready tickets?";
     "Wave has ready tickets?" -> "Per ready ticket: worktree off milestone branch + dispatch agent" [label="yes"];
-    "Per ready ticket: worktree off milestone branch + dispatch agent" -> "Agent: writing-plans -> subagent-driven-development -> commit on ticket branch";
-    "Agent: writing-plans -> subagent-driven-development -> commit on ticket branch" -> "Agent reports done?";
+    "Per ready ticket: worktree off milestone branch + dispatch agent" -> "Agent: plan stage -> execute stage -> commit on ticket branch";
+    "Agent: plan stage -> execute stage -> commit on ticket branch" -> "Agent reports done?";
     "Agent reports done?" -> "Orchestrator: verify + build + test + merge ticket->milestone branch" [label="yes"];
     "Orchestrator: verify + build + test + merge ticket->milestone branch" -> "Move issue to done, remove worktree, unblock dependents";
     "Move issue to done, remove worktree, unblock dependents" -> "All issues done?";
     "All issues done?" -> "Wave has ready tickets?" [label="no - next ready tickets"];
-    "All issues done?" -> "Hand milestone branch to user (finishing-a-development-branch)" [label="yes"];
+    "All issues done?" -> "Sweep lessons -> project Notes; hand milestone branch to user" [label="yes"];
 }
 ```
 
@@ -98,7 +98,7 @@ All ticket worktrees branch **off `milestone/$SLUG`**, not `main`.
 
 ### Step 4: Per ready ticket — worktree + one agent
 
-For each ticket in the current wave, create a worktree branching off the milestone branch (`superpowers:using-git-worktrees` covers worktree hygiene when installed):
+For each ticket in the current wave, create a worktree branching off the milestone branch (a stack's worktree-hygiene skill, e.g. `superpowers:using-git-worktrees`, applies when bound):
 
 ```bash
 git worktree add "$ROOT/.worktrees/<ticket-branch>" -b "<ticket-branch>" "milestone/$SLUG"
@@ -107,8 +107,8 @@ git worktree add "$ROOT/.worktrees/<ticket-branch>" -b "<ticket-branch>" "milest
 Use the issue's `git_branch_name` as `<ticket-branch>`. Then dispatch **one agent per ticket** (parallel within a wave). Each ticket agent **MUST** be dispatched as `general-purpose` — it has to spawn its own implementer/reviewer subagents during execution, which tool-restricted agent types (`Explore`, `Plan`) cannot do. The agent's brief **MUST**:
 
 1. `cd` into its worktree and confirm isolation.
-2. Plan the issue → fills the issue's `## Plan` per the cliban-workflow contract. Use `superpowers:writing-plans` when installed; fallback: write a behavioral, task-by-task plan (files, behaviors, test intent, checkbox steps) directly into the issue's `## Plan` section.
-3. Execute the plan for the same key, task-by-task with review at the plan's checkpoints. Use `superpowers:subagent-driven-development` when installed; fallback: execute each task test-first, ticking steps as they land and pausing at each `### Review Checkpoint` for a fresh-context review. The ticket agent is the **capable executor**: it fans out its own implementer and reviewer subagents.
+2. Plan the issue → fills the issue's `## Plan` per the cliban-workflow contract. Use the bound craft stack's planning skill (`superpowers:writing-plans`; mattpocock's `implement` plans as its first act); fallback: write a behavioral, task-by-task plan (files, behaviors, test intent, checkbox steps) directly into the issue's `## Plan` section.
+3. Execute the plan for the same key, task-by-task with review at the plan's checkpoints. Use the bound stack's execution skill (`superpowers:subagent-driven-development`; mattpocock's `implement` continues into TDD); fallback: execute each task test-first, ticking steps as they land and pausing at each `### Review Checkpoint` for a fresh-context review. The ticket agent is the **capable executor**: it fans out its own implementer and reviewer subagents.
 4. Commit all work on `<ticket-branch>`. **MUST NOT** merge, touch `main`, or touch the milestone branch.
 5. Report back **only after every commit has landed** (commit-then-report; never report with staged-but-uncommitted work, never commit after reporting): final commit SHA, branch name, test status, one-line summary, and merge-risk notes.
 
@@ -116,7 +116,7 @@ The agent runs the planning AND execution stages itself — the orchestrator **M
 
 ### Step 5: Integrate as each agent finishes
 
-When an agent reports done, the **orchestrator** (not the agent) integrates — a local merge targeting the milestone branch (the `superpowers:finishing-a-development-branch` local-merge option, when installed). A "done" notification is a claim to verify, not a fact.
+When an agent reports done, the **orchestrator** (not the agent) integrates — a local merge targeting the milestone branch (the bound stack's finishing skill in local-merge mode, when it has one). A "done" notification is a claim to verify, not a fact.
 
 ```bash
 cd "$ROOT"
@@ -148,9 +148,17 @@ If the build or tests fail on the merge result, the ticket is not done — fix i
 
 **Refresh dependents:** a ticket's worktree **MUST** branch off the *current* milestone branch, so create each worktree at wave time (after upstream merges), never all up front. Step 4 already does this.
 
-### Step 6: Finalize
+### Step 6: Sweep lessons, then finalize
 
-When every issue is `done` and `milestone/$SLUG` is green, STOP and hand off to the user (via `superpowers:finishing-a-development-branch` when installed, base = `main`; otherwise present merge/PR/discard options). Landing the milestone branch on `main` is the user's call — especially when a phase is a cutover that deletes or replaces existing code.
+When every issue is `done` and `milestone/$SLUG` is green, first **sweep the milestone for durable lessons** — this is the moment the knowledge exists and is about to be forgotten:
+
+1. Re-read what the tickets recorded: `cliban issue show <KEY> --section activity` (and `--section notes` where present) for each issue, plus your own integration experience — cross-ticket conflicts, hazards that fired, invariants you had to enforce by hand.
+2. Keep only what outlives this milestone: repo conventions discovered the hard way, non-obvious tool behavior, recurring hazards, decisions whose rationale will matter again. Drop narration and anything scoped to a single ticket.
+3. Promote each survivor to the *project's* `## Notes` per the cliban-workflow round-trip: search first (`cliban project search <KEY> "<terms>" --json`), update an existing `###` subsection when one covers it, add a new one otherwise.
+
+Milestone and issue notes are node-local scratch; project `## Notes` is what the next session actually reads. A milestone that taught nothing durable sweeps to zero promotions — that's a valid outcome, not a failure.
+
+Then STOP and hand off to the user (via the bound stack's finishing skill, base = `main`, when it has one; otherwise present merge/PR/discard options). Landing the milestone branch on `main` is the user's call — especially when a phase is a cutover that deletes or replaces existing code.
 
 ## Parallel-integration hazards
 
@@ -181,10 +189,11 @@ The whole skill, graded. Each rule appears once.
 | **MUST** | Treat "done" as a claim: verify real commits + ticked plan + `<branch>` == merge `HEAD^2` before cleanup; cherry-pick stragglers | Integrating a half-done branch / deleting a branch whose late commits never merged (hazard 2) |
 | **MUST** | The orchestrator owns every shared sequence (changelog IDs, version files, shared enums); renumber at merge, in order, gapless | Guaranteed collisions when each agent mints against a stale base (hazard 3) |
 | **MUST** | Hand the final milestone-branch → `main` decision to the user | An agent or orchestrator silently shipping a cutover the user hasn't approved |
-| **MUST NOT** | Pre-plan a ticket for its agent — the agent runs writing-plans then subagent-driven-development itself | Losing the per-ticket plan + review checkpoints that happen inside the agent |
+| **MUST NOT** | Pre-plan a ticket for its agent — the agent runs the plan and execute stages itself, on the bound craft stack | Losing the per-ticket plan + review checkpoints that happen inside the agent |
 | **SHOULD** | Create each worktree at wave time, off the current milestone branch | Dependent tickets branching off code that lacks their dependency's work |
 | **SHOULD** | Dispatch each ticket agent as `general-purpose` | A tool-restricted agent that cannot spawn its own implementer/reviewer subagents |
 | **SHOULD** | Brief every agent: commit everything first, THEN report — no dangling commits | The integrator silently missing a commit that arrives after the report (hazard 2) |
 | **SHOULD** | Check the both-halves invariant when a path-based hook could pass on a half-done paired change | A completeness gap a per-file hook can't catch (hazard 4) |
 | **SHOULD** | Re-scan `git worktree list` for stragglers before finalizing; never remove a live agent's worktree | A late rebase resurrecting a branch/worktree you already cleaned up (hazard 6) |
+| **SHOULD** | Sweep issue activity/notes for durable lessons at finalize and promote them to project `## Notes` (search-first) | Milestone knowledge evaporating when its tickets archive |
 | **MAY** | `cliban push linear <KEY>` after a Linear-imported ticket moves to done (never fatal to the milestone) | Linear drifting behind the board that mirrors it |
