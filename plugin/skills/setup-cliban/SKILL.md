@@ -34,13 +34,13 @@ Cliban is for work-lifecycle artifacts; the repo is for knowledge that outlives 
 Read whatever exists; don't assume:
 
 - **Cliban availability** — probe `cliban --help`. If missing, stop; there is nothing to bind. Point the user at https://github.com/LioraLabs/cliban for install (GitHub release binaries, or AUR on Arch), and offer to re-run once it's on `$PATH`.
-- **Existing binding** — `docs/agents/issue-tracker.md` already present? Then this is a re-run: load it, present current values, and only ask about what the user wants changed.
+- **Existing binding** — `docs/agents/issue-tracker.md` already present? Then this is a re-run: load it, present current values, and only ask about what the user wants changed. Re-runs regenerate the adapter, so diff the existing file against the template first and carry every hand-added section or edit forward into the draft unless the user is deliberately changing it — flag anything you carried (or couldn't place) in the draft rather than silently dropping it. Direct edits to the adapter are a blessed workflow, not drift to correct.
 - **Board state** — `cliban project ls --json`; match repo basename (case-insensitive) against `key` and `name`.
 - **Doc anchors** — `CLAUDE.md` and `AGENTS.md` at the repo root; an existing `## Agent skills` section in either.
-- **Installed craft stacks** — check the available-skills list for:
-  - `superpowers:*` (brainstorming, writing-plans, subagent-driven-development, using-git-worktrees, finishing-a-development-branch)
-  - the mattpocock engineering skills (`to-spec`, `to-tickets`, `implement`, `triage`, `wayfinder`)
-  - neither → the stack is "none" (plan mode + the inline stage actions in `cliban-workflow`)
+- **Installed craft stacks** — a stack is installed if *any* skill with its plugin prefix appears in the available-skills list. Do not conclude a specific member skill is missing just because it's not listed: user-invocable-only skills (`disable-model-invocation: true`) never appear in the model-visible list. In particular, the mattpocock workflow skills (`to-spec`, `to-tickets`, `implement`, `triage`, `wayfinder`) are all invocable only by the user — if you can see `mattpocock-skills:tdd` or `mattpocock-skills:grilling`, the whole suite including `to-spec` is installed.
+  - `superpowers:*` → superpowers (brainstorming, writing-plans, subagent-driven-development, using-git-worktrees, finishing-a-development-branch)
+  - `mattpocock-skills:*` → the mattpocock suite
+  - neither prefix anywhere → the stack is "none" (plan mode + the inline stage actions in `cliban-workflow`)
 - **Monorepo signals** — workspace manifests, populated `packages/*`. Only relevant to Section A.
 
 ### 2. Present findings and ask
@@ -66,7 +66,7 @@ Monorepo with genuinely independent packages: offer one project per package only
 Propose the detected stack. This decides the adapter's stage mapping — which skills own the *craft* of spec/plan/execute/finish, while the cliban contract owns *where the artifacts live*:
 
 - **superpowers** — brainstorming → `## Spec`; writing-plans → `## Plan`; subagent-driven-development executes with `tick`/`log`; finishing-a-development-branch drives the status moves.
-- **mattpocock-skills** — reach a design however you like (grilling, plan mode, plain conversation); `to-spec` publishes to `## Spec`; `to-tickets` creates issues with `--blocks` edges; `implement` reads the ticket from cliban, writes `## Plan`, and drives TDD with `tick`/`log`. Their `triage` labels are ordinary cliban labels.
+- **mattpocock-skills** — reach a design however you like (grilling, plan mode, plain conversation); `to-spec` publishes to `## Spec`; `to-tickets` creates issues with `--blocks` edges; `implement` reads the ticket from cliban, writes `## Plan`, and drives TDD with `tick`/`log`. Their `triage` labels are ordinary cliban labels, and their `/wayfinder` charts big fuzzy efforts as a map issue with decision sub-issues on the board (the adapter's "Wayfinding operations" section, written below, is what wires it up).
 - **none** — plan mode for design; the inline stage actions in `cliban-workflow` for everything else.
 
 If both stacks are installed, ask which one owns the rhythm; don't blend them.
@@ -165,7 +165,32 @@ board — never as `Blocked by:` text lines in repo files.
 <the craft-stack paragraph from Section B, expanded with the stack's actual skill names>
 ```
 
-For the **mattpocock-skills** stack, this file doubles as the `docs/agents/issue-tracker.md` their `setup-matt-pocock-skills` skill would have written for an "other" tracker — do not run their setup's Section A on top of it.
+For the **mattpocock-skills** stack, this file doubles as the `docs/agents/issue-tracker.md` their `setup-matt-pocock-skills` skill would have written for an "other" tracker — do not run their setup's Section A on top of it. Their `/wayfinder` skill consults this doc's "Wayfinding operations" section to learn how the repo's tracker expresses maps, tickets, blocking, and claims — without it, wayfinder falls back to a local-markdown tracker and bypasses the board. So for this stack, **also append**:
+
+```markdown
+## Wayfinding operations
+
+Used by `/wayfinder`. The **map** is a cliban issue; its tickets are native sub-issues.
+
+- **Map**: an issue labelled `wayfinder:map`, holding the Destination / Notes /
+  Decisions-so-far / Not-yet-specified / Out-of-scope body:
+  `cliban issue add --project <KEY> --label wayfinder:map --title "<map name>" ...`
+- **Child ticket**: `cliban issue add --project <KEY> --parent <MAP-KEY> --label wayfinder:<type>`
+  (`research` / `prototype` / `grilling` / `task`). List them:
+  `cliban issue ls --parent <MAP-KEY> --json`.
+- **Blocking**: native edges — `--blocks` / `--blocked-by` on `issue add` / `issue edit`,
+  visible on the board. A ticket is unblocked when every blocker is done;
+  `cliban issue blocked --project <KEY> --json` lists those still gated.
+- **Frontier query**: one call — `cliban issue ready --parent <MAP-KEY> --json`
+  (backlog + unblocked + unclaimed IS the frontier).
+- **Claim**: `cliban issue claim <TICKET>`, the session's first write (the actor
+  defaults to the ambient Claude session, so claims are per-session automatically);
+  then `cliban issue mv <TICKET> in-progress`. Release with `cliban issue release`
+  if you stop without resolving.
+- **Resolve**: post the answer with `cliban issue log <TICKET> "<answer>"`, move it to
+  done with a `--note` gist, then index it on the map in one atomic call:
+  `cliban issue append-section <MAP-KEY> --section "Decisions so far" "- <name> (<TICKET>) — <gist>"`.
+```
 
 ### 4. Done
 

@@ -40,10 +40,10 @@ Work-lifecycle artifacts go on the board; knowledge that outlives the work goes 
 
 | Artifact | Home |
 |---|---|
-| Spec / PRD | issue `## Spec` |
-| Implementation plan | issue `## Plan` |
+| Spec / PRD | issue `## Spec` via `issue edit KEY --section spec` |
+| Implementation plan | issue `## Plan` via `issue edit KEY --section plan`, then `issue lint KEY` |
 | Progress, findings, dead ends | issue `## Activity Log` via `issue log` |
-| Durable reusable lessons | project `## Notes`, search-first |
+| Durable reusable lessons | project `## Notes` via `project note add`, search-first |
 | Blocking relationships | relations via `--blocks`/`--blocked-by` — never `Blocked by:` text lines in repo files |
 | ADRs, `CONTEXT.md`, domain docs | **the repo**, plaintext, git-tracked — never the board |
 
@@ -76,11 +76,14 @@ The bound stack owns the *craft* of each stage; this contract owns where its art
 
 - **superpowers** — `brainstorming` → `## Spec`; `writing-plans` → `## Plan`; `subagent-driven-development` executes with `tick`/`log`; `finishing-a-development-branch` drives the status moves.
 - **mattpocock-skills** — reach a design any way (grilling, plan mode, conversation); `to-spec` publishes to `## Spec`; `to-tickets` creates issues with `--blocks` edges; `implement` reads the ticket, writes `## Plan`, drives TDD with `tick`/`log`; `triage` labels are ordinary cliban labels.
-- **none** — plan mode or plain conversation for design; publish and execute directly: create the issue with its `## Spec`, round-trip the plan in via `issue edit --description-file -`, then `mv` → `tick` → `log` as the table above dictates.
+- **none** — plan mode or plain conversation for design; publish and execute directly: create the issue with its `## Spec`, write the plan via `issue edit KEY --section plan --description-file -` (never a whole-description rewrite), `issue lint KEY` to confirm it parses, then `mv` → `tick` → `log` as the table above dictates.
 
 ## Shared Conventions
 
 - **Labels:** prefer the canonical set `bug`, `feature`, `refactor`, `chore` (auto-created on first `--label` use; orphans are never garbage-collected).
 - **Priority:** default `medium`; `high`/`urgent` only when explicitly indicated.
 - **Scope discovery:** promote oversized steps (`issue promote`) or file a linked issue; never silently widen a ticket.
+- **Take work via the frontier:** `issue ready` answers "what can I start"; `issue claim` before starting anything another session might also see (attribution is automatic per session).
+- **Racy edits:** any read-modify-write of a description carries `--if-updated-at` from the read — but prefer the atomic tools (`--section`, `append-section`, `log`, `tick`, `note add`), which need no round-trip at all.
+- **Custom sections:** the four contract H2s are reserved, but any other H2 is fair game and addressable by verbatim anchor (`--section "Decisions so far"`).
 - **Promotion mirror:** when a promoted child reaches `done`, the skill that moved it also ticks the referencing step in the parent — cliban core deliberately does not auto-mirror.

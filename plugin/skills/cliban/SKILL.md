@@ -13,11 +13,13 @@ unless you ask, and mutations are safe to run unattended.
 
 1. **`--description` / `--description-file` REPLACES the whole description.**
    It destroys `## Activity Log`, `## Plan` and everything else already there.
-   To record progress use `cliban issue log`; to tick a plan step use `cliban
-   issue tick`. If you really must rewrite, read the current description first
-   (`issue show KEY --json`) and include the sections you want to keep. The
-   timeline records the destruction (`"description rewritten, dropped ##
-   Plan"`) and logged notes survive it, but the markdown is gone.
+   Almost always you want a narrower tool: `issue edit KEY --section
+   spec|plan|notes --description-file -` replaces ONE section and leaves the
+   rest byte-identical; `issue log` appends progress; `issue tick` ticks a
+   step; `project note add` appends a project lesson. A bare `--description`
+   on `edit` is for genuinely starting over. The timeline records the
+   destruction (`"description rewritten, dropped ## Plan"`) and logged notes
+   survive it, but the markdown is gone.
 2. **Always pass `--json` for reads.** The table format is for humans and will
    change. `ls` emits NDJSON (one compact object per line), `show` emits one
    pretty object.
@@ -43,11 +45,24 @@ notes. You never have to remember to record *what* happened.
 It cannot record **why**, and why is the part the next agent (or the human)
 actually needs. That is your job.
 
-**Identify yourself once per session**, so a shared board stays readable when
-several agents work it:
+**Attribution is automatic.** Every entry cliban records is attributed to
+`$CLIBAN_ACTOR` when set, else to the ambient Claude Code session
+(`session:<first-8>` of `$CLAUDE_CODE_SESSION_ID`) — so concurrent agent
+sessions are distinguishable with zero setup. Export `CLIBAN_ACTOR` only when
+you want a human-meaningful name instead:
 
 ```bash
-export CLIBAN_ACTOR=claude       # tags everything cliban records for you
+export CLIBAN_ACTOR=claude       # optional: override the session-id default
+```
+
+**Claim what you take.** On a board several sessions share, a claim marks a
+ticket as yours before the first status move lands, and `issue ready` stops
+offering it to others:
+
+```bash
+cliban issue claim PROJ-42            # claims as the resolved actor
+cliban issue release PROJ-42          # when you stop without finishing
+cliban issue claim PROJ-42 --force    # take over a dead session's claim
 ```
 
 **Move the ticket when the work moves.** A board that lags reality is worse
@@ -101,10 +116,16 @@ read and most writes.
 | `issue add\|ls\|show\|edit\|mv` | the core loop |
 | `issue archive\|unarchive\|archive-done` | keep the board clean |
 | `issue log\|tick\|promote` | plan + activity-log mechanics (see below) |
+| `issue append-section` | atomic append to the end of one H2 section |
+| `issue lint` | validate the description contract before tick bites |
 | `issue import` | bulk create from NDJSON |
-| `issue blocked\|current` | what's stuck / what branch am I on |
+| `issue blocked\|ready` | what's stuck / **what can I take right now** |
+| `issue claim\|release` | session-scoped ownership on a shared board |
+| `issue current` | what branch am I on |
 | `activity` | **what changed since \<time\>** |
+| `project note add` | append one `###` lesson under project `## Notes` |
 | `milestone add\|ls\|show\|edit` | milestones |
+| `milestone waves` | dependency-wave partition for orchestration |
 | `label add\|ls\|rm` | labels |
 | `fff` | fuzzy-find, prints the selected key |
 | `import linear` | pull a Linear issue onto the board (see below) |
@@ -164,7 +185,8 @@ JSON echoed by `add` / `edit` / `mv` / `import`.
   "git_branch_name":"proj-42-fix-column-ordering",
   "created_at":     "2026-...Z",
   "updated_at":     "2026-...Z",
-  "completed_at":   "2026-...Z" | (absent when not done)
+  "completed_at":   "2026-...Z" | (absent when not done),
+  "claimed_by":     "session:ea8a9c5e" | (absent when unclaimed)
 }
 ```
 
@@ -177,6 +199,7 @@ cliban project ls --json
 cliban activity --since 1d --json          # what changed, newest first
 cliban issue ls --status in-progress --json
 cliban issue blocked --json                # what's stuck on something
+cliban issue ready --json                  # what's takeable right now
 cliban milestone ls --sort activity --stats --json
 ```
 
@@ -308,6 +331,27 @@ cliban issue import - < /tmp/imp.ndjson --json     # or stream
 Each line is `{project, title, [description, status, priority, milestone,
 parent, labels]}`. With `--project KEY`, records may omit `project`.
 
+### The frontier — what can I take right now
+`ready` is the complement of `blocked`: backlog status, not archived, every
+blocker done, nobody's claim on it. Claim before you start so concurrent
+sessions skip it:
+```bash
+cliban issue ready --project PROJ --json
+cliban issue ready --parent PROJ-12 --json               # decision tickets of a map
+cliban issue ready --project PROJ --milestone "v0.1" --json
+cliban issue claim PROJ-42 && cliban issue mv PROJ-42 in-progress
+```
+
+### Milestone waves — what runs in parallel, in what order
+```bash
+cliban milestone waves --project PROJ "v0.1" --json
+# {"waves":[["PROJ-1","PROJ-4"],["PROJ-2"],["PROJ-3"]],
+#  "done":[...], "external_blocked":[...]}
+```
+Wave N is safe to dispatch once waves 1..N-1 are done. `external_blocked`
+lists issues gated by open work *outside* the milestone — finishing the waves
+won't unblock them. A dependency cycle exits 2 naming the issues in it.
+
 ### Sub-issues, parents, relations
 ```bash
 cliban issue add --project PROJ --parent PROJ-12 --title "Repro test" --json
@@ -330,16 +374,51 @@ EOF
 On `edit` these **replace** the description — see trap 1. Safe on `add`, where
 there is nothing to lose.
 
-### Append to a description without clobbering it
-There is no append flag; adding a section means round-tripping the current
-body (same pattern for `milestone edit` and `project edit`):
+### Write one section without touching the rest
+`--section` replaces exactly one H2 and leaves every other byte alone —
+atomic on the store thread, no read-modify-write:
 ```bash
-cliban issue show PROJ-12 --json | jq -r '.description' > /tmp/d.md
-printf '\n## Update\n...\n' >> /tmp/d.md     # or edit /tmp/d.md in place
-cliban issue edit PROJ-12 --description-file /tmp/d.md
+cliban issue edit PROJ-12 --section spec --description-file - <<'EOF'
+The spec text.
+EOF
+cliban issue edit PROJ-12 --section plan --description-file ./plan.md
+cliban issue edit PROJ-12 --section "Open questions" --create-section --description='- who owns auth?'
+cliban issue show PROJ-12 --section "Open questions"
 ```
-For progress notes and plan ticks, prefer `issue log` / `issue tick` — they
-append atomically without the round-trip.
+`spec|plan|activity|notes` are aliases for the contract sections; **any other
+value is a verbatim H2 anchor** — `--section "Decisions so far"` targets
+`## Decisions so far`, exact match. Writing to a section that doesn't exist is
+exit 2 listing the sections that do (so a typo can't silently append a junk
+section); pass `--create-section` when you genuinely mean to add one. Payloads
+carry the section *body* only: a leading `## <same anchor>` line is stripped
+for you, and any other H2 inside the payload is exit 2 (it would terminate
+the section and silently orphan what follows).
+`--section activity` is refused on writes — the Activity Log belongs to
+`issue log`. After writing a plan by hand, check it parses:
+```bash
+cliban issue lint PROJ-12        # exit 2 + findings when tick would choke
+```
+
+### Append to a section without rewriting it
+`append-section` adds a block to the END of one section, atomically — the
+tool for growing a list or journal-style section. Leading `-` works, so
+markdown bullets need no quoting tricks:
+```bash
+cliban issue append-section PROJ-12 --section "Decisions so far" "- picked sqlite over pg — single-writer fits"
+echo "long block" | cliban issue append-section PROJ-12 --section notes --text-file -
+```
+Same existence policy and `--create-section` escape hatch as `edit --section`;
+activity refused (use `issue log`, which stamps and dedupes).
+
+### Guard racy edits with compare-and-swap
+Concurrent sessions share this board. When you round-trip a description (or
+any edit where you decided based on what you read), pin the read:
+```bash
+TS=$(cliban issue show PROJ-12 --json | jq -r .updated_at)
+cliban issue edit PROJ-12 --description-file /tmp/d.md --if-updated-at "$TS"
+# exit 2 "stale write" if anything changed since — re-read and retry
+```
+`project edit` takes the same flag.
 
 ### Labels
 ```bash
@@ -410,6 +489,10 @@ and matched **exactly**; anything else in the description is left untouched.
 - `## Activity Log` — chronological events (what `activity` reads back)
 - `## Notes` — long-lived notes (mainly on *project* descriptions)
 
+Descriptions may carry any other H2 you like (`## Rollout`, `## Decisions so
+far`); the contract tools ignore them, and `edit --section` /
+`append-section` / `show --section` address them by verbatim anchor.
+
 Plan tasks are numbered H3 headings; steps are GFM checkboxes at column zero
 (indented child bullets are not steps):
 
@@ -458,8 +541,15 @@ in the *project* description, one lesson per `###` subsection.
 cliban project search PROJ "sqlite canonical" --json      # search first
 cliban project search PROJ "wal" --section all --limit 5 --json
 cliban project show PROJ --section notes
-cliban project edit PROJ --description-file - < updated-project.md
+cliban project note add PROJ --title "cargo test needs --test-threads=1" --body - <<'EOF'
+The fixtures share a tempdir; parallel runs corrupt it and the failures look
+like flaky assertions, not contention.
+EOF
 ```
+
+`note add` appends one `### <title>` subsection under `## Notes` and touches
+nothing else — always prefer it over `project edit --description-file` for
+recording a lesson; the whole-description path is only for restructuring.
 
 `search` fuzzy-matches every whitespace-separated term against each heading and
 body, returns only matching subsections, ranked, capped by `--limit` (default
@@ -535,7 +625,11 @@ in-progress. A cancelled Linear issue arrives as `done` **and archived**.
   `--note` when the reason isn't obvious from the title.
 - Don't log narration ("working on it"). Log findings, decisions and dead ends.
 - Don't rewrite a whole description just to note progress — `--description`
-  wipes the Activity Log. Use `issue log` / `issue tick`.
+  wipes the Activity Log. Use `issue log` / `issue tick`, and `--section` for
+  spec/plan writes.
+- Don't record a project lesson by round-tripping the whole description — use
+  `project note add`.
+- Don't start work another session may also see without `issue claim`.
 - Don't expect `rm` to delete: it archives (milestones: cancels) and tells you
   so. Nothing in cliban destroys a work item.
 - Don't invent flags: there is no `--key`, no `issue move`, no `--all`. If a

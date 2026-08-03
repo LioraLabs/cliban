@@ -10,7 +10,7 @@ requires_skills: [cliban-workflow]
 
 Orchestrate every issue in a cliban milestone to completion: one agent per ticket, run in dependency order, each isolated in its own worktree, each driven through a planning stage then a test-first execution stage. The orchestrator owns integration and merges; agents never merge.
 
-**Craft-stack dependencies:** the planning and execution stages inside each ticket agent run on the craft stack bound in the repo adapter (`docs/agents/issue-tracker.md`, see cliban-workflow's Per-Repo Binding) — the milestone uses the same operating rhythm as solo work in the repo, just one instance per ticket. Known mappings: **superpowers** (`writing-plans`, `subagent-driven-development`, `using-git-worktrees`, `finishing-a-development-branch`) and **mattpocock-skills** (`implement`, which plans and executes with TDD in one skill). No adapter or no stack: use the generic fallback given inline at each stage. The cliban-workflow contract (where specs, plans, and logs live) applies under every stack and supersedes any file-based artifact locations those skills describe.
+**Craft-stack dependencies:** the planning and execution stages inside each ticket agent run on the craft stack bound in the repo adapter (`docs/agents/issue-tracker.md`, see cliban-workflow's Per-Repo Binding) — the milestone uses the same operating rhythm as solo work in the repo, just one instance per ticket. Known mappings: **superpowers** (`writing-plans`, `subagent-driven-development`, `using-git-worktrees`, `finishing-a-development-branch`) and **mattpocock-skills** — but note their workflow entry points (`implement`, `to-spec`, `to-tickets`) are user-invocable only (`disable-model-invocation: true`), so a ticket agent cannot invoke `/implement` via the Skill tool. Instead it follows implement's rhythm through the suite's agent-invocable building blocks: `mattpocock-skills:tdd` at the plan's seams, typecheck regularly, `mattpocock-skills:code-review` before reporting. No adapter or no stack: use the generic fallback given inline at each stage. The cliban-workflow contract (where specs, plans, and logs live) applies under every stack and supersedes any file-based artifact locations those skills describe.
 
 **Core principle:** The orchestrator is a conductor, not a coder. It computes the dependency order, dispatches one agent per ticket, gates each ticket on its dependencies, and integrates finished work onto a milestone branch — never `main` — until the user finalizes.
 
@@ -80,7 +80,15 @@ For each issue capture `key`, `status`, and `relations` (`blocked_by` targets). 
 
 ### Step 2: Compute waves
 
-Topologically sort. A **wave** is the set of currently-ready, not-yet-done issues — they run in parallel. After a wave's issues land, recompute readiness; newly unblocked issues form the next wave. Announce the plan:
+Don't derive the partition by hand — the CLI computes it deterministically from the blocking graph:
+
+```bash
+cliban milestone waves --project <KEY> "<milestone name>" --json
+# {"waves":[["PROJ-5"],["PROJ-6","PROJ-8"],["PROJ-7"],["PROJ-9"]],
+#  "done":[...], "external_blocked":[...]}
+```
+
+`waves[0]` is dispatchable now; wave N is safe once waves 1..N-1 merged. Treat a non-empty `external_blocked` as a stop-and-ask: those issues are gated by open work *outside* the milestone and no amount of wave-finishing frees them. A dependency cycle exits 2 naming the issues — fix the board before orchestrating. Re-run `waves` after each integration rather than tracking readiness yourself. Announce the plan:
 
 ```
 Waves: [PROJ-5] -> [PROJ-6, PROJ-8] -> [PROJ-7] -> [PROJ-9]
@@ -106,9 +114,9 @@ git worktree add "$ROOT/.worktrees/<ticket-branch>" -b "<ticket-branch>" "milest
 
 Use the issue's `git_branch_name` as `<ticket-branch>`. Then dispatch **one agent per ticket** (parallel within a wave). Each ticket agent **MUST** be dispatched as `general-purpose` — it has to spawn its own implementer/reviewer subagents during execution, which tool-restricted agent types (`Explore`, `Plan`) cannot do. The agent's brief **MUST**:
 
-1. `cd` into its worktree and confirm isolation.
-2. Plan the issue → fills the issue's `## Plan` per the cliban-workflow contract. Use the bound craft stack's planning skill (`superpowers:writing-plans`; mattpocock's `implement` plans as its first act); fallback: write a behavioral, task-by-task plan (files, behaviors, test intent, checkbox steps) directly into the issue's `## Plan` section.
-3. Execute the plan for the same key, task-by-task with review at the plan's checkpoints. Use the bound stack's execution skill (`superpowers:subagent-driven-development`; mattpocock's `implement` continues into TDD); fallback: execute each task test-first, ticking steps as they land and pausing at each `### Review Checkpoint` for a fresh-context review. The ticket agent is the **capable executor**: it fans out its own implementer and reviewer subagents.
+1. `cd` into its worktree and confirm isolation. Export `CLIBAN_ACTOR=agent:<KEY>` in every shell — subagents inherit the orchestrator's `CLAUDE_CODE_SESSION_ID`, so without an explicit actor every sibling attributes (and claims) as the same session and claims lose mutual exclusion. Then `cliban issue claim <KEY>` and `mv` to in-progress.
+2. Plan the issue → fills the issue's `## Plan` per the cliban-workflow contract. Use the bound craft stack's planning skill (`superpowers:writing-plans`; mattpocock-skills has no agent-invocable planner — write the plan per the fallback, marking the seams where TDD will drive); fallback: write a behavioral, task-by-task plan (files, behaviors, test intent, checkbox steps) directly into the issue's `## Plan` section.
+3. Execute the plan for the same key, task-by-task with review at the plan's checkpoints. Use the bound stack's execution skill (`superpowers:subagent-driven-development`; for mattpocock-skills, follow implement's rhythm — `mattpocock-skills:tdd` at the plan's seams, typecheck regularly, `mattpocock-skills:code-review` at the end; do not try to invoke `/implement` itself, it is user-only); fallback: execute each task test-first, ticking steps as they land and pausing at each `### Review Checkpoint` for a fresh-context review. The ticket agent is the **capable executor**: it fans out its own implementer and reviewer subagents.
 4. Commit all work on `<ticket-branch>`. **MUST NOT** merge, touch `main`, or touch the milestone branch.
 5. Report back **only after every commit has landed** (commit-then-report; never report with staged-but-uncommitted work, never commit after reporting): final commit SHA, branch name, test status, one-line summary, and merge-risk notes.
 
