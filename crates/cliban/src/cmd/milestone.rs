@@ -75,7 +75,7 @@ pub enum MilestoneCmd {
         /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
         #[arg(long, conflicts_with = "json")]
         table: bool,
-        /// include each milestone's `description` body in --json output
+        /// full rows in --json output: description body plus the fields list rows omit
         #[arg(long)]
         full: bool,
     },

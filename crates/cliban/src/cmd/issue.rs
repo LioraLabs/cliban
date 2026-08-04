@@ -117,7 +117,7 @@ pub enum IssueCmd {
         /// human table output
         #[arg(long, conflicts_with = "json")]
         table: bool,
-        /// include each issue's `description` body in --json output
+        /// full rows in --json output: description body plus the fields list rows omit
         #[arg(long)]
         full: bool,
     },
@@ -136,7 +136,7 @@ pub enum IssueCmd {
         /// human table output
         #[arg(long, conflicts_with = "json")]
         table: bool,
-        /// include each issue's `description` body in --json output
+        /// full rows in --json output: description body plus the fields list rows omit
         #[arg(long)]
         full: bool,
     },
@@ -226,7 +226,7 @@ pub struct LsArgs {
     /// human table output (overrides $CLIBAN_OUTPUT and pipe detection)
     #[arg(long, conflicts_with = "json")]
     table: bool,
-    /// include each issue's `description` body in --json output
+    /// full rows in --json output: description body plus the fields list rows omit
     #[arg(long)]
     full: bool,
     /// include archived issues

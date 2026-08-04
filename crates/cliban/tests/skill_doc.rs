@@ -11,10 +11,25 @@
 use std::collections::BTreeSet;
 use std::process::Command;
 
+/// SKILL.md plus every reference file it progressively discloses — a command
+/// documented only in `references/` must not drift either.
 fn skill_md() -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../plugin/skills/cliban/SKILL.md");
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugin/skills/cliban");
+    let mut md = std::fs::read_to_string(dir.join("SKILL.md"))
+        .unwrap_or_else(|e| panic!("read {}: {e}", dir.join("SKILL.md").display()));
+    if let Ok(refs) = std::fs::read_dir(dir.join("references")) {
+        for entry in refs.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "md") {
+                md.push('\n');
+                md.push_str(
+                    &std::fs::read_to_string(&path)
+                        .unwrap_or_else(|e| panic!("read {}: {e}", path.display())),
+                );
+            }
+        }
+    }
+    md
 }
 
 /// Subcommand paths named in the doc. cliban's tree is at most two deep

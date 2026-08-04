@@ -38,6 +38,9 @@ pub enum ProjectCmd {
     Ls {
         #[arg(long)]
         archived: bool,
+        /// include each project's `description` body (and full metadata) in --json output
+        #[arg(long)]
+        full: bool,
         #[arg(long)]
         json: bool,
         /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
@@ -172,9 +175,18 @@ pub async fn run(db: &Option<String>, args: ProjectArgs) -> CliResult<()> {
         }
         ProjectCmd::Ls {
             archived,
+            full,
             json,
             table,
-        } => ls(db, archived, crate::output::mode(json, table)).await,
+        } => {
+            ls(
+                db,
+                archived,
+                crate::output::Detail::from_full_flag(full),
+                crate::output::mode(json, table),
+            )
+            .await
+        }
         ProjectCmd::Show {
             key,
             section,
@@ -267,7 +279,10 @@ pub async fn run(db: &Option<String>, args: ProjectArgs) -> CliResult<()> {
 /// mode, the `show --json` shape in json mode. Never silent.
 fn confirm_project(p: &cliban_core::schema::Project, verb: &str, mode: Mode) -> CliResult<()> {
     if mode.is_json() {
-        println!("{}", serde_json::to_string_pretty(&project_json(p)).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&project_json(p)).unwrap()
+        );
     } else {
         println!("{verb} {}", p.key);
     }
@@ -275,6 +290,13 @@ fn confirm_project(p: &cliban_core::schema::Project, verb: &str, mode: Mode) -> 
 }
 
 fn project_json(p: &cliban_core::schema::Project) -> serde_json::Value {
+    project_json_detail(p, crate::output::Detail::Full)
+}
+
+fn project_json_detail(
+    p: &cliban_core::schema::Project,
+    detail: crate::output::Detail,
+) -> serde_json::Value {
     build_project_json(
         &p.key,
         &p.name,
@@ -284,6 +306,7 @@ fn project_json(p: &cliban_core::schema::Project) -> serde_json::Value {
         p.issue_seq,
         &format_usec(p.inserted_at),
         &format_usec(p.updated_at),
+        detail,
     )
 }
 
@@ -320,7 +343,12 @@ async fn add(
     Ok(())
 }
 
-async fn ls(db: &Option<String>, archived: bool, mode: Mode) -> CliResult<()> {
+async fn ls(
+    db: &Option<String>,
+    archived: bool,
+    detail: crate::output::Detail,
+    mode: Mode,
+) -> CliResult<()> {
     let store = store_open::open(db).await?;
     let mut ps = store.call(projects::list).await?;
     if !archived {
@@ -328,7 +356,7 @@ async fn ls(db: &Option<String>, archived: bool, mode: Mode) -> CliResult<()> {
     }
     if mode.is_json() {
         for p in &ps {
-            let v = project_json(p);
+            let v = project_json_detail(p, detail);
             println!("{}", serde_json::to_string(&v).unwrap());
         }
     } else {

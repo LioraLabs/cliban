@@ -274,34 +274,28 @@ fn events_for(
     out
 }
 
+/// One event, on the list-row diet: absent means null. `issue_status` (the
+/// issue's status *now*, repeated on every historical row) was cut outright —
+/// current state is one `issue ls` away, and transitions live in `message`.
+/// `ts` is second precision; the microsecond original only orders the feed.
 fn event_json(e: &Event) -> Value {
     let mut m = Map::new();
-    m.insert(
-        "actor".into(),
-        match &e.actor {
-            Some(s) => json!(s),
-            None => Value::Null,
-        },
-    );
+    if let Some(a) = &e.actor {
+        m.insert("actor".into(), json!(a));
+    }
     m.insert("key".into(), json!(e.key));
     m.insert("kind".into(), json!(e.kind));
-    m.insert(
-        "message".into(),
-        match &e.message {
-            Some(s) => json!(s),
-            None => Value::Null,
-        },
-    );
-    m.insert(
-        "milestone".into(),
-        match &e.milestone {
-            Some(s) => json!(s),
-            None => Value::Null,
-        },
-    );
+    if let Some(msg) = &e.message {
+        m.insert("message".into(), json!(msg));
+    }
+    if let Some(ms) = &e.milestone {
+        m.insert("milestone".into(), json!(ms));
+    }
     m.insert("project".into(), json!(e.project));
-    m.insert("issue_status".into(), json!(e.status));
     m.insert("title".into(), json!(e.title));
-    m.insert("ts".into(), json!(format_usec(e.ts)));
+    m.insert(
+        "ts".into(),
+        json!(crate::output::trim_usec(&format_usec(e.ts))),
+    );
     Value::Object(m)
 }

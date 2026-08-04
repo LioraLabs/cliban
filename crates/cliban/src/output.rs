@@ -134,8 +134,55 @@ impl Detail {
     }
 }
 
+/// Second-precision copy of a stored microsecond timestamp, for Brief rows.
+/// `Full` output keeps the stored precision — `--if-updated-at` round-trips
+/// through `show`, so the CAS token is never a trimmed value.
+pub fn trim_usec(ts: &str) -> String {
+    match (ts.find('.'), ts.ends_with('Z')) {
+        (Some(dot), true) => format!("{}Z", &ts[..dot]),
+        _ => ts.to_string(),
+    }
+}
+
 pub fn build_issue_json(i: IssueJsonInputs, detail: Detail) -> Value {
     let mut m = Map::new();
+    if detail == Detail::Brief {
+        // The list-row diet: a field that is null, empty, or the default is
+        // absent, and per-row constants an agent never reads from a list
+        // (`created_at`, `git_branch_name`, `position`) stay in `Full`.
+        // Absent-means-default is already the row contract (`claimed_by`,
+        // `completed_at`); Brief extends it to every optional field.
+        if i.archived {
+            m.insert("archived".into(), json!(true));
+        }
+        if let Some(c) = &i.claimed_by {
+            m.insert("claimed_by".into(), json!(c));
+        }
+        if let Some(c) = &i.completed_at {
+            m.insert("completed_at".into(), json!(trim_usec(c)));
+        }
+        if let Some(d) = &i.due_date {
+            m.insert("due_date".into(), json!(d));
+        }
+        m.insert("key".into(), json!(i.key));
+        if !i.labels.is_empty() {
+            m.insert("labels".into(), json!(i.labels));
+        }
+        if let Some(ms) = &i.milestone {
+            m.insert("milestone".into(), json!(ms));
+        }
+        if let Some(p) = &i.parent {
+            m.insert("parent".into(), json!(p));
+        }
+        m.insert("priority".into(), json!(i.priority));
+        if !i.relations.is_empty() {
+            m.insert("relations".into(), relations_json(&i.relations));
+        }
+        m.insert("status".into(), json!(i.status));
+        m.insert("title".into(), json!(i.title));
+        m.insert("updated_at".into(), json!(trim_usec(&i.updated_at)));
+        return Value::Object(m);
+    }
     m.insert("archived".into(), json!(i.archived));
     if let Some(c) = &i.claimed_by {
         m.insert("claimed_by".into(), json!(c));
@@ -144,9 +191,7 @@ pub fn build_issue_json(i: IssueJsonInputs, detail: Detail) -> Value {
         m.insert("completed_at".into(), json!(c));
     }
     m.insert("created_at".into(), json!(i.created_at));
-    if detail == Detail::Full {
-        m.insert("description".into(), json!(i.description));
-    }
+    m.insert("description".into(), json!(i.description));
     m.insert("due_date".into(), opt_str(&i.due_date));
     m.insert(
         "git_branch_name".into(),
@@ -158,8 +203,15 @@ pub fn build_issue_json(i: IssueJsonInputs, detail: Detail) -> Value {
     m.insert("parent".into(), opt_str(&i.parent));
     m.insert("position".into(), num_pos(i.position));
     m.insert("priority".into(), json!(i.priority));
-    let rels: Vec<Value> = i
-        .relations
+    m.insert("relations".into(), relations_json(&i.relations));
+    m.insert("status".into(), json!(i.status));
+    m.insert("title".into(), json!(i.title));
+    m.insert("updated_at".into(), json!(i.updated_at));
+    Value::Object(m)
+}
+
+fn relations_json(relations: &[RelationOut]) -> Value {
+    let rels: Vec<Value> = relations
         .iter()
         .map(|r| {
             let mut rm = Map::new();
@@ -168,11 +220,7 @@ pub fn build_issue_json(i: IssueJsonInputs, detail: Detail) -> Value {
             Value::Object(rm)
         })
         .collect();
-    m.insert("relations".into(), json!(rels));
-    m.insert("status".into(), json!(i.status));
-    m.insert("title".into(), json!(i.title));
-    m.insert("updated_at".into(), json!(i.updated_at));
-    Value::Object(m)
+    json!(rels)
 }
 
 /// Build the NDJSON object for a search match: the full issue JSON plus a
@@ -214,9 +262,13 @@ pub fn git_branch_name(key: &str, title: &str) -> String {
     format!("{key_lower}-{slug}")
 }
 
-/// Project JSON. Alpha keys:
+/// Project JSON. Alpha keys (Full):
 /// archived, auto_archive_done_after_days, created_at, description,
 /// issue_seq, key, name, updated_at.
+///
+/// Brief drops the `description` body (a project's `## Notes` memory can be
+/// tens of KB — `project ls` was 68 KB for 9 rows), plus `created_at`,
+/// `issue_seq`, null policy, and `archived:false`.
 #[allow(clippy::too_many_arguments)]
 pub fn build_project_json(
     key: &str,
@@ -227,8 +279,21 @@ pub fn build_project_json(
     issue_seq: i64,
     created_at: &str,
     updated_at: &str,
+    detail: Detail,
 ) -> Value {
     let mut m = Map::new();
+    if detail == Detail::Brief {
+        if archived {
+            m.insert("archived".into(), json!(true));
+        }
+        if let Some(d) = auto_archive_done_after_days {
+            m.insert("auto_archive_done_after_days".into(), json!(d));
+        }
+        m.insert("key".into(), json!(key));
+        m.insert("name".into(), json!(name));
+        m.insert("updated_at".into(), json!(trim_usec(updated_at)));
+        return Value::Object(m);
+    }
     m.insert("archived".into(), json!(archived));
     m.insert(
         "auto_archive_done_after_days".into(),
@@ -262,10 +327,21 @@ pub fn build_milestone_json(
     detail: Detail,
 ) -> Value {
     let mut m = Map::new();
-    m.insert("created_at".into(), json!(created_at));
-    if detail == Detail::Full {
-        m.insert("description".into(), json!(description));
+    if detail == Detail::Brief {
+        m.insert("issue_count".into(), json!(issue_count));
+        m.insert("name".into(), json!(name));
+        if let Some(p) = &project {
+            m.insert("project".into(), json!(p));
+        }
+        m.insert("status".into(), json!(status));
+        if let Some(t) = &target_date {
+            m.insert("target_date".into(), json!(t));
+        }
+        m.insert("updated_at".into(), json!(trim_usec(updated_at)));
+        return Value::Object(m);
     }
+    m.insert("created_at".into(), json!(created_at));
+    m.insert("description".into(), json!(description));
     m.insert("issue_count".into(), json!(issue_count));
     m.insert("name".into(), json!(name));
     m.insert("project".into(), opt_str(&project));
@@ -514,6 +590,7 @@ mod tests {
             42,
             "2026-01-01T00:00:00.000000Z",
             "2026-01-02T00:00:00.000000Z",
+            Detail::Full,
         );
         let s = serde_json::to_string(&v).unwrap();
         assert!(
@@ -524,12 +601,115 @@ mod tests {
         // ends with name then updated_at (alpha order: name < updated_at).
         assert!(s.contains(r#""name":"CLI Tool","updated_at""#), "got {s}");
 
-        let v2 = build_project_json("X", "X", "", true, None, 0, "t", "t");
+        let v2 = build_project_json("X", "X", "", true, None, 0, "t", "t", Detail::Full);
         let s2 = serde_json::to_string(&v2).unwrap();
         assert!(
             s2.contains(r#""auto_archive_done_after_days":null"#),
             "got {s2}"
         );
+    }
+
+    #[test]
+    fn brief_project_row_is_lean() {
+        let v = build_project_json(
+            "CLI",
+            "CLI Tool",
+            "a huge notes body",
+            false,
+            None,
+            42,
+            "2026-01-01T00:00:00.000000Z",
+            "2026-01-02T00:00:00.123456Z",
+            Detail::Brief,
+        );
+        let s = serde_json::to_string(&v).unwrap();
+        assert_eq!(
+            s,
+            r#"{"key":"CLI","name":"CLI Tool","updated_at":"2026-01-02T00:00:00Z"}"#
+        );
+        // archived:true and a set policy survive the diet.
+        let v2 = build_project_json("X", "X", "", true, Some(7), 0, "t", "tZ", Detail::Brief);
+        let s2 = serde_json::to_string(&v2).unwrap();
+        assert_eq!(
+            s2,
+            r#"{"archived":true,"auto_archive_done_after_days":7,"key":"X","name":"X","updated_at":"tZ"}"#
+        );
+    }
+
+    #[test]
+    fn brief_issue_row_omits_defaults_and_row_constants() {
+        let v = build_issue_json(
+            IssueJsonInputs {
+                key: "CLI-1".into(),
+                title: "First".into(),
+                description: "body".into(),
+                status: "backlog".into(),
+                priority: "high".into(),
+                claimed_by: None,
+                position: 1000.0,
+                archived: false,
+                due_date: None,
+                completed_at: None,
+                milestone: None,
+                parent: None,
+                labels: vec![],
+                relations: vec![],
+                created_at: "2026-01-01T00:00:00.000000Z".into(),
+                updated_at: "2026-01-01T00:00:00.654321Z".into(),
+            },
+            Detail::Brief,
+        );
+        let s = serde_json::to_string(&v).unwrap();
+        assert_eq!(
+            s,
+            r#"{"key":"CLI-1","priority":"high","status":"backlog","title":"First","updated_at":"2026-01-01T00:00:00Z"}"#
+        );
+    }
+
+    #[test]
+    fn brief_issue_row_keeps_set_optionals() {
+        let v = build_issue_json(
+            IssueJsonInputs {
+                key: "CLI-9".into(),
+                title: "T".into(),
+                description: "".into(),
+                status: "done".into(),
+                priority: "low".into(),
+                claimed_by: Some("session:abc".into()),
+                position: 1.0,
+                archived: true,
+                due_date: Some("2026-12-31".into()),
+                completed_at: Some("2026-06-01T00:00:00.000009Z".into()),
+                milestone: Some("M1".into()),
+                parent: Some("CLI-1".into()),
+                labels: vec!["bug".into()],
+                relations: vec![RelationOut {
+                    kind: "blocks".into(),
+                    target: "CLI-2".into(),
+                }],
+                created_at: "t".into(),
+                updated_at: "tZ".into(),
+            },
+            Detail::Brief,
+        );
+        let s = serde_json::to_string(&v).unwrap();
+        assert_eq!(
+            s,
+            r#"{"archived":true,"claimed_by":"session:abc","completed_at":"2026-06-01T00:00:00Z","due_date":"2026-12-31","key":"CLI-9","labels":["bug"],"milestone":"M1","parent":"CLI-1","priority":"low","relations":[{"type":"blocks","target":"CLI-2"}],"status":"done","title":"T","updated_at":"tZ"}"#
+        );
+        // Brief never carries description / git_branch_name / position / created_at.
+        assert!(!s.contains("description") && !s.contains("git_branch_name"));
+        assert!(!s.contains("position") && !s.contains("created_at"));
+    }
+
+    #[test]
+    fn trim_usec_only_touches_fractional_utc_stamps() {
+        assert_eq!(
+            trim_usec("2026-08-04T07:55:02.656951Z"),
+            "2026-08-04T07:55:02Z"
+        );
+        assert_eq!(trim_usec("2026-08-04T07:55:02Z"), "2026-08-04T07:55:02Z");
+        assert_eq!(trim_usec("2026-12-31"), "2026-12-31");
     }
 
     #[test]

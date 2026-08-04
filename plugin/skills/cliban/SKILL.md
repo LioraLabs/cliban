@@ -170,26 +170,28 @@ available on every read and every write (piped stdout already defaults to the
 
 ## JSON shapes
 
-Stable and agent-facing. Optional refs are `null` (never omitted), so
-destructuring is safe:
+Two detail levels, one rule: **list rows are lean, single-entity output is
+complete.**
 
-**`description` is a `show` field, not an `ls` field.** Listing commands omit
-the body; `--full` restores it. That is not a nicety: on a real board the
-bodies ARE the payload — `issue ls --project COOK --json` was 2.27 MB, 95% of
-it descriptions, against 119 KB without them. Reach for `ls` to find keys and
-`show` to read one issue. Pass `--full` only when you genuinely need every body
-at once, and never without `--project`.
+**Lean (list rows)** — `issue ls`, `blocked`, `ready`, `project ls`,
+`milestone ls`, the issues nested in `milestone show --with-issues`. A field
+that is null, empty, or the default is **absent** — no `"milestone":null`, no
+`"labels":[]`, no `"archived":false`. Also absent from every list row:
+`description`, `git_branch_name`, `position`, `created_at`. Timestamps are
+second precision. Read with `.get()` / jq (absent and null are the same to
+`jq .milestone`); never destructure a list row by fixed keys. `--full` on any
+list restores the complete shape below.
 
-Lean by default: `issue ls`, `issue blocked`, `issue ready`, `milestone ls`, and the
-issues nested in `milestone show --with-issues`.
-Always full: `issue show`, `issue current`, `milestone show`'s own body, the
-JSON echoed by `add` / `edit` / `mv` / `import`.
+**Full (complete shape)** — `issue show`, `issue current`, the JSON echoed by
+every mutation (`add`/`edit`/`mv`/`import`), and `--full` lists. Optional refs
+are `null` (never omitted) and timestamps keep microsecond precision, so CAS
+round-trips (`--if-updated-at`) must read from `show`, not from a list row:
 
 ```json
 {
   "key":            "PROJ-42",
   "title":          "...",
-  "description":    "...",     // ls: omitted unless --full; show: always
+  "description":    "...",
   "status":         "backlog",
   "priority":       "high",
   "position":       12000.5,
@@ -206,6 +208,13 @@ JSON echoed by `add` / `edit` / `mv` / `import`.
   "claimed_by":     "session:ea8a9c5e" | (absent when unclaimed)
 }
 ```
+
+Why the diet is not a nicety: on a real board the bodies ARE the payload —
+`issue ls --project COOK --json` was 2.27 MB with descriptions, and
+`project ls` was 68 KB for 9 rows before its `## Notes` memory moved behind
+`--full`. Reach for `ls` to find keys and `show` to read one entity. Pass
+`--full` only when you genuinely need every body at once, and never without
+`--project`.
 
 Parse NDJSON with `for line in stdout.splitlines(): json.loads(line)` (or `jq -c`).
 
@@ -263,14 +272,15 @@ Emits a merged, newest-first feed of:
 - `log` — a note you wrote with `issue log`
 
 Everything but the first two bullets is recorded automatically and attributed
-to `$CLIBAN_ACTOR`. State events have `message: null`; recorded ones carry the
-detail in `message`.
+to `$CLIBAN_ACTOR`.
 
-Fields: `ts`, `key`, `project`, `kind`, `issue_status`, `title`, `message`,
-`actor`, `milestone`. **`issue_status` is the issue's status *now*, not at the
-time of the event** — the transition itself is in `message`. Text output
-truncates long messages; `--json` never does. Defaults: `--since 1d`,
-`--limit 50` (`--limit 0` for no cap), `--archived` to include archived issues.
+Fields: `ts` (second precision), `key`, `project`, `kind`, `title`, and — only
+when set — `message`, `actor`, `milestone`. State events carry no `message`;
+recorded ones put the detail there (a `status` event's transition is its
+message). The issue's *current* status is not in the feed — that's one
+`issue ls` away. Text output truncates long messages; `--json` never does.
+Defaults: `--since 1d`, `--limit 50` (`--limit 0` for no cap), `--archived`
+to include archived issues.
 
 Filter by kind with jq: `cliban activity --json | jq -c 'select(.kind=="status")'`.
 
@@ -607,67 +617,12 @@ whole notes section unless the task genuinely needs it.
 
 ## Linear bridge
 
-Two explicit verbs. Nothing syncs in the background, so nothing crosses the
-boundary unless you ask.
-
-```bash
-cliban import linear ENG-412 --project PROJ            # pull it onto the board
-cliban import linear ENG-412 --project PROJ --dry-run  # see it first
-cliban import linear --mine --project PROJ             # everything assigned to you
-cliban push linear PROJ-42                             # state + progress comment
-cliban push linear PROJ-42 --description               # also mirror into the description
-cliban push linear PROJ-42 --create --team ENG         # no counterpart yet? make one
-cliban sync linear                                     # refresh every linked issue
-cliban sync linear --project PROJ                      # ... in one project only
-```
-
-**The inbound queue.** `import linear --mine` imports every open Linear issue
-assigned to the token's viewer: where the issue's team runs cycles, only the
-active cycle counts (the rest is backlog and is reported as skipped); where it
-does not, every open assigned issue is in scope. Already-linked issues are
-refreshed, not duplicated. `sync linear` re-imports every linked issue in one
-call, each under its own link's origin semantics. Both report
-created/refreshed/skipped counts and take `--dry-run` / `--json`.
-
-**The living progress comment.** `push` maintains ONE comment per linked
-issue and edits it in place (plan ticked/total, recent `issue log` findings,
-latest test status) — so your log discipline is exactly what the Linear
-thread shows, without notification spam. A comment someone deleted upstream
-is recreated once, silently.
-
-Needs `$LINEAR_API_KEY`. Optional `~/.config/cliban/linear.toml` sets the
-default team and any state-name overrides; never put the token in it. Set
-`push_on_move = true` there and every `issue mv` of a linked issue auto-pushes
-state + the living comment after the move lands locally — a failed push warns
-on one line and records board activity, but never fails the move.
-
-**Who owns what.** This is the rule that makes the bridge safe to re-run:
-
-| Field | Owner |
-|---|---|
-| title, priority, labels, due date, workflow state | Linear — a re-import overwrites your local edits |
-| `## Spec` | follows who created the pairing: link born from `import` → Linear owns it (re-import refreshes it); link born from `push --create` → cliban owns it (re-import leaves it alone; `push --description` may always mirror it outward) |
-| `## Plan`, `## Activity Log`, `## Notes` | cliban — a re-import never touches them |
-| Linear description outside cliban's fenced block, Linear comments | humans — never modified |
-
-So: re-import as often as you like, your ticked plan survives. But on an
-imported issue, don't edit the title or spec locally and expect it to stick —
-change it in Linear. An issue you pushed out with `--create` keeps its local
-spec forever.
-
-**Statuses.** `backlog` / `in-progress` / `done` round-trip cleanly.
-`blocked` and `in-review` only survive if the Linear team has a column named for
-them (Linear types both as "started"), otherwise they collapse into
-in-progress. A cancelled Linear issue arrives as `done` **and archived**.
-
-**Gotchas.**
-
-- `push` on an unlinked issue exits 1. Either `--create`, or adopt an existing
-  pairing with `import linear ENG-412 --project PROJ --link-to PROJ-42`.
-- `push` exits 2 if Linear changed since your last sync. Re-import first, or
-  `--force` if you know you are the authority.
-- One local issue per Linear issue. A second import refreshes rather than
-  duplicating.
+`import linear` / `push linear` / `sync linear` move issues between the board
+and Linear — two explicit verbs, nothing syncs in the background, and a strict
+field-ownership rule makes re-runs safe. **Before touching any of the three,
+read [references/linear-bridge.md](references/linear-bridge.md)** — it holds
+the command forms, the ownership table, status mapping, and the gotchas
+(unlinked push, stale push, `--link-to` adoption).
 
 ## Exit codes
 
