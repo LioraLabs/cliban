@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as crypto from 'node:crypto';
 import type { HostMsg, WebviewMsg } from '../shared/protocol';
+import type { Status } from '../shared/model';
 import { BoardStore } from './store';
 import { ClibanClient, ClibanError, CliMissingError } from './client/client';
 import { readSettings } from './settings';
@@ -91,6 +92,21 @@ export class BoardPanel {
       case 'openIssue':
         // detail drawer lands in a later task
         break;
+      case 'moveIssue':
+        await this.moveIssue(msg.requestId, msg.key, msg.toStatus);
+        break;
+    }
+  }
+
+  private async moveIssue(requestId: string, key: string, toStatus: Status): Promise<void> {
+    this.store.applyOptimistic(requestId, key, { status: toStatus });
+    try {
+      const echo = await this.client.moveIssue(key, toStatus);
+      this.store.commit(requestId, echo);
+    } catch (err) {
+      this.store.rollback(requestId);
+      const message = err instanceof Error ? err.message : String(err);
+      this.post({ type: 'toast', level: 'error', message });
     }
   }
 

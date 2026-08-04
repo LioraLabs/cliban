@@ -186,3 +186,40 @@ body.busy {
   text-align: center;
   opacity: 0.85;
 }
+
+/* drag and drop */
+
+.card.dragging {
+  opacity: 0.5;
+}
+
+.column.drop-target {
+  border-color: var(--vscode-focusBorder);
+  background: var(--vscode-list-hoverBackground);
+}
+
+/* toasts */
+
+.toasts {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 100;
+}
+
+.toast {
+  padding: 0.5rem 0.8rem;
+  border-radius: 4px;
+  max-width: 24rem;
+  background: var(--vscode-notifications-background);
+  color: var(--vscode-notifications-foreground);
+  border: 1px solid var(--vscode-notifications-border);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.toast-error {
+  border-color: var(--vscode-inputValidation-errorBorder);
+}

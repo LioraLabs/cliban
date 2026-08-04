@@ -48,6 +48,35 @@ export class BoardStore {
     this.emit();
   }
 
+  private pending = new Map<string, { key: string; before: Issue }>();
+
+  /** Apply a local patch ahead of the CLI round-trip, remembering the pre-state. */
+  applyOptimistic(requestId: string, key: string, patch: Partial<Issue>): void {
+    const idx = this.issues.findIndex((i) => i.key === key);
+    if (idx < 0) return;
+    const before = this.issues[idx]!;
+    this.pending.set(requestId, { key, before });
+    this.issues[idx] = { ...before, ...patch };
+    this.emit();
+  }
+
+  /** The mutation landed: drop the pending record and take the echo as truth. */
+  commit(requestId: string, echo: Issue): void {
+    this.pending.delete(requestId);
+    this.applyEcho(echo);
+  }
+
+  /** The mutation failed: restore the remembered pre-state if still present. */
+  rollback(requestId: string): void {
+    const entry = this.pending.get(requestId);
+    this.pending.delete(requestId);
+    if (!entry) return;
+    const idx = this.issues.findIndex((i) => i.key === entry.key);
+    if (idx < 0) return;
+    this.issues[idx] = entry.before;
+    this.emit();
+  }
+
   private emit(): void {
     const snap = this.snapshot();
     for (const fn of this.listeners) fn(snap);

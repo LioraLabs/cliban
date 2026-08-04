@@ -27,7 +27,13 @@ export interface BusyMsg {
   on: boolean;
 }
 
-export type HostMsg = BoardMsg | ErrorStateMsg | BusyMsg;
+export interface ToastMsg {
+  type: 'toast';
+  level: 'info' | 'error';
+  message: string;
+}
+
+export type HostMsg = BoardMsg | ErrorStateMsg | BusyMsg | ToastMsg;
 
 // ---- webview → host ----
 
@@ -48,6 +54,13 @@ export interface OpenIssueMsg {
   key: string;
 }
 
-export type WebviewMsg = ReadyMsg | RefreshMsg | PickProjectMsg | OpenIssueMsg;
+export interface MoveIssueMsg {
+  type: 'moveIssue';
+  requestId: string;
+  key: string;
+  toStatus: Status;
+}
+
+export type WebviewMsg = ReadyMsg | RefreshMsg | PickProjectMsg | OpenIssueMsg | MoveIssueMsg;
 
 export type { ActivityEvent, Issue, Label, Milestone, Status };

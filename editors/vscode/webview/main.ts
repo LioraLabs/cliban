@@ -1,6 +1,8 @@
 import './styles.css';
 import type { HostMsg, WebviewMsg } from '../shared/protocol';
+import type { Status } from '../shared/model';
 import { renderBoard, renderErrorState } from './board';
+import { toast } from './toast';
 
 declare function acquireVsCodeApi(): { postMessage(msg: WebviewMsg): void };
 
@@ -11,6 +13,8 @@ const handlers = {
   onOpenIssue: (key: string) => vscode.postMessage({ type: 'openIssue', key }),
   onPickProject: () => vscode.postMessage({ type: 'pickProject' }),
   onRefresh: () => vscode.postMessage({ type: 'refresh' }),
+  onMoveIssue: (key: string, toStatus: Status) =>
+    vscode.postMessage({ type: 'moveIssue', requestId: crypto.randomUUID(), key, toStatus }),
 };
 
 function onMessage(msg: HostMsg): void {
@@ -23,6 +27,9 @@ function onMessage(msg: HostMsg): void {
       break;
     case 'busy':
       document.body.classList.toggle('busy', msg.on);
+      break;
+    case 'toast':
+      toast(msg.level, msg.message);
       break;
   }
 }

@@ -14,6 +14,7 @@ export interface BoardHandlers {
   onOpenIssue(key: string): void;
   onPickProject(): void;
   onRefresh(): void;
+  onMoveIssue(key: string, toStatus: Status): void;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -30,6 +31,13 @@ function el<K extends keyof HTMLElementTagNameMap>(
 function renderCard(issue: Issue, handlers: BoardHandlers): HTMLElement {
   const card = el('div', 'card');
   card.dataset['key'] = issue.key;
+  card.draggable = true;
+  card.addEventListener('dragstart', (ev) => {
+    ev.dataTransfer?.setData('text/cliban-key', issue.key);
+    ev.dataTransfer?.setData('text/cliban-status', issue.status);
+    card.classList.add('dragging');
+  });
+  card.addEventListener('dragend', () => card.classList.remove('dragging'));
 
   const head = el('div', 'card-head');
   const key = el('span', 'card-key', issue.key);
@@ -90,6 +98,22 @@ export function renderBoard(root: HTMLElement, msg: BoardMsg, handlers: BoardHan
     const body = el('div', 'column-body');
     for (const issue of issues) body.append(renderCard(issue, handlers));
     column.append(body);
+    column.addEventListener('dragover', (ev) => {
+      const from = ev.dataTransfer?.types.includes('text/cliban-key');
+      if (!from) return;
+      ev.preventDefault();
+      column.classList.add('drop-target');
+    });
+    column.addEventListener('dragleave', () => column.classList.remove('drop-target'));
+    column.addEventListener('drop', (ev) => {
+      ev.preventDefault();
+      column.classList.remove('drop-target');
+      const key = ev.dataTransfer?.getData('text/cliban-key');
+      const fromStatus = ev.dataTransfer?.getData('text/cliban-status');
+      // same-column drops are a reorder, which the CLI cannot express — snap back
+      if (!key || fromStatus === status) return;
+      handlers.onMoveIssue(key, status);
+    });
     board.append(column);
   }
   root.append(board);
