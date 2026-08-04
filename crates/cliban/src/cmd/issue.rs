@@ -505,6 +505,7 @@ pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
             // mode, so the caller always learns nothing was deleted.
             let key = parse_issue_key(&key)?;
             let store = store_open::open(db).await?;
+            // Desired state = archived; already-archived is the same success.
             set_archived_on(&store, key.clone(), true).await?;
             println!(
                 "archived {key} — cliban archives instead of deleting \
@@ -514,13 +515,27 @@ pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
         }
         IssueCmd::Archive { key, json, table } => {
             let store = store_open::open(db).await?;
-            let issue = set_archived_on(&store, key, true).await?;
-            confirm_issue(&store, &issue, "archived", crate::output::mode(json, table)).await
+            let (issue, noop) = set_archived_on(&store, key, true).await?;
+            confirm_issue(
+                &store,
+                &issue,
+                "archived",
+                noop,
+                crate::output::mode(json, table),
+            )
+            .await
         }
         IssueCmd::Unarchive { key, json, table } => {
             let store = store_open::open(db).await?;
-            let issue = set_archived_on(&store, key, false).await?;
-            confirm_issue(&store, &issue, "unarchived", crate::output::mode(json, table)).await
+            let (issue, noop) = set_archived_on(&store, key, false).await?;
+            confirm_issue(
+                &store,
+                &issue,
+                "unarchived",
+                noop,
+                crate::output::mode(json, table),
+            )
+            .await
         }
         IssueCmd::Current { json, table } => current(db, crate::output::mode(json, table)).await,
         IssueCmd::Blocked {
@@ -1809,12 +1824,17 @@ async fn tick(db: &Option<String>, a: TickArgs) -> CliResult<()> {
     let lookup = key.clone();
     let task = a.task;
     let step = a.step;
-    let updated_at = store
+    let (updated_at, noop) = store
         .call(move |conn| {
             let tx = conn.unchecked_transaction()?;
             let issue = issues::get_by_key(&tx, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
             let new_desc = match descmd::tick_step(&issue.description, task, step) {
-                Ok(d) => d,
+                Ok(descmd::TickOutcome::Ticked(d)) => d,
+                // Desired state already holds: touch nothing (no UPDATE, no
+                // audit record), report success with the noop marker.
+                Ok(descmd::TickOutcome::AlreadyChecked) => {
+                    return Ok((format_usec(issue.updated_at), true));
+                }
                 Err(msg) => return Err(cliban_core::Error::validation("plan", &msg)),
             };
             let now = format_usec(cliban_core::time::now_usec());
@@ -1829,7 +1849,7 @@ async fn tick(db: &Option<String>, a: TickArgs) -> CliResult<()> {
                 &format!("ticked Task {task} Step {step}"),
             );
             tx.commit()?;
-            Ok(now)
+            Ok((now, false))
         })
         .await?;
 
@@ -1837,12 +1857,20 @@ async fn tick(db: &Option<String>, a: TickArgs) -> CliResult<()> {
         let mut m = serde_json::Map::new();
         m.insert("checked".into(), serde_json::json!(true));
         m.insert("key".into(), serde_json::json!(a.key));
+        if noop {
+            m.insert("noop".into(), serde_json::json!(true));
+        }
         m.insert("step".into(), serde_json::json!(a.step));
         m.insert("task".into(), serde_json::json!(a.task));
         m.insert("updated_at".into(), serde_json::json!(updated_at));
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::Value::Object(m)).unwrap()
+        );
+    } else if noop {
+        println!(
+            "ticked {} Task {} Step {} (already checked — nothing to do)",
+            a.key, a.task, a.step
         );
     } else {
         println!("ticked {} Task {} Step {}", a.key, a.task, a.step);
@@ -2290,12 +2318,18 @@ async fn mv(
             let issue =
                 issues::get_by_key(conn, &move_key)?.ok_or(cliban_core::Error::NotFound)?;
             let from = issue.status.clone();
+            // Desired state already holds: no reposition, no updated_at
+            // churn, no audit record — a retry is not a second move.
+            if from == move_status {
+                return Ok(from);
+            }
             issues::move_issue(conn, &issue, &move_status)?;
             // The move is the event worth recording; `--note` carries the why.
             crate::audit::record_move(conn, &issue, &from, &move_status, note.as_deref());
             Ok(from)
         })
         .await?;
+    let noop = from == status;
     // The move has committed; push_on_move (opt-in via linear.toml) may now
     // mirror it to a linked Linear issue. Best-effort: it never fails the mv.
     #[cfg(feature = "linear")]
@@ -2311,24 +2345,33 @@ async fn mv(
             .await?
             .ok_or(cliban_core::Error::NotFound)?;
         let inputs = issue_json_inputs(&store, &issue).await?;
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&build_issue_json(inputs, Detail::Full)).unwrap()
-        );
+        let mut v = build_issue_json(inputs, Detail::Full);
+        if noop {
+            if let serde_json::Value::Object(m) = &mut v {
+                m.insert("noop".into(), serde_json::json!(true));
+            }
+        }
+        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+    } else if noop {
+        println!("{key} already {status} (nothing to do)");
     } else {
         println!("moved {key}: {from} → {status}");
     }
     Ok(())
 }
 
-/// Flip an issue's archived bit and return the updated row. Prints nothing:
-/// `archive`/`unarchive` confirm via [`confirm_issue`], while `rm` keeps its
-/// own always-on message.
-async fn set_archived_on(store: &Store, key: String, archived: bool) -> CliResult<Issue> {
+/// Flip an issue's archived bit and return the (possibly untouched) row plus a
+/// noop flag. When the bit already matches — a retry, not a change — nothing is
+/// written and no audit record is added. Prints nothing: `archive`/`unarchive`
+/// confirm via [`confirm_issue`], while `rm` keeps its own always-on message.
+async fn set_archived_on(store: &Store, key: String, archived: bool) -> CliResult<(Issue, bool)> {
     let key = parse_issue_key(&key)?;
-    let issue = store
+    let result = store
         .call(move |conn| {
             let issue = issues::get_by_key(conn, &key)?.ok_or(cliban_core::Error::NotFound)?;
+            if issue.archived == archived {
+                return Ok((issue, true));
+            }
             let updated = issues::update(
                 conn,
                 &issue,
@@ -2343,22 +2386,34 @@ async fn set_archived_on(store: &Store, key: String, archived: bool) -> CliResul
                 "archive",
                 if archived { "archived" } else { "unarchived" },
             );
-            Ok(updated)
+            Ok((updated, false))
         })
         .await?;
-    Ok(issue)
+    Ok(result)
 }
 
 /// The mutation contract's success report: a one-line `{verb} {KEY}` in table
 /// mode, the full issue JSON (the `show --json` shape) in json mode. Never
-/// silent.
-async fn confirm_issue(store: &Store, issue: &Issue, verb: &str, mode: Mode) -> CliResult<()> {
+/// silent. A noop retry says so — `{KEY} already {verb} (nothing to do)` in
+/// table mode, a `"noop": true` field on the JSON echo.
+async fn confirm_issue(
+    store: &Store,
+    issue: &Issue,
+    verb: &str,
+    noop: bool,
+    mode: Mode,
+) -> CliResult<()> {
     if mode.is_json() {
         let inputs = issue_json_inputs(store, issue).await?;
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&build_issue_json(inputs, Detail::Full)).unwrap()
-        );
+        let mut v = build_issue_json(inputs, Detail::Full);
+        if noop {
+            if let serde_json::Value::Object(m) = &mut v {
+                m.insert("noop".into(), serde_json::json!(true));
+            }
+        }
+        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+    } else if noop {
+        println!("{} already {verb} (nothing to do)", issue.key);
     } else {
         println!("{verb} {}", issue.key);
     }
