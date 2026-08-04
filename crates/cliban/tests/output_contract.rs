@@ -44,6 +44,7 @@ fn run_env(db: &str, args: &[&str], extra_env: &[(&str, &str)]) -> Run {
         .env_remove("CLIBAN_ACTOR")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("CLIBAN_OUTPUT")
+        .env_remove("CLIBAN_PROJECT")
         .args(args);
     for (k, v) in extra_env {
         cmd.env(k, v);
@@ -63,7 +64,8 @@ fn run(db: &str, args: &[&str]) -> Run {
 fn ok(db: &str, args: &[&str]) -> String {
     let r = run(db, args);
     assert_eq!(
-        r.code, 0,
+        r.code,
+        0,
         "`cliban {}` failed: {}",
         args.join(" "),
         r.stderr
@@ -74,7 +76,8 @@ fn ok(db: &str, args: &[&str]) -> String {
 fn ok_env(db: &str, args: &[&str], extra_env: &[(&str, &str)]) -> String {
     let r = run_env(db, args, extra_env);
     assert_eq!(
-        r.code, 0,
+        r.code,
+        0,
         "`cliban {}` failed: {}",
         args.join(" "),
         r.stderr
@@ -89,15 +92,9 @@ const JSON: &[(&str, &str)] = &[("CLIBAN_OUTPUT", "json")];
 fn seeded(tag: &str) -> String {
     let db = tmp_db(tag);
     ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
-    ok(
-        &db,
-        &["issue", "add", "--project", "CLI", "--title", "alpha"],
-    );
-    ok(&db, &["issue", "add", "--project", "CLI", "--title", "beta"]);
-    ok(
-        &db,
-        &["milestone", "add", "--project", "CLI", "--name", "v1"],
-    );
+    ok(&db, &["issue", "add", "alpha", "--project", "CLI"]);
+    ok(&db, &["issue", "add", "beta", "--project", "CLI"]);
+    ok(&db, &["milestone", "add", "v1", "--project", "CLI"]);
     ok(&db, &["label", "add", "prio", "--project", "CLI"]);
     db
 }
@@ -174,7 +171,11 @@ fn the_env_var_pins_the_default() {
 fn json_and_table_flags_conflict() {
     let db = seeded("conflict");
     let r = run(&db, &["issue", "ls", "--json", "--table"]);
-    assert_eq!(r.code, 2, "clap must reject the contradiction: {}", r.stderr);
+    assert_eq!(
+        r.code, 2,
+        "clap must reject the contradiction: {}",
+        r.stderr
+    );
     assert!(r.stdout.is_empty());
 }
 
@@ -193,12 +194,12 @@ fn show_section_stays_raw_markdown_in_every_mode() {
             "## Spec\n\nthe spec body\n",
         ],
     );
-    let piped = ok(&db, &["issue", "show", "CLI-1", "--section", "spec"]);
+    let piped = ok(&db, &["issue", "cat", "CLI-1", "--section", "spec"]);
     assert_eq!(piped, "\nthe spec body\n");
     // Even a JSON pin does not turn the section read into JSON: the section
     // content IS the machine format.
     assert_eq!(
-        ok_env(&db, &["issue", "show", "CLI-1", "--section", "spec"], JSON),
+        ok_env(&db, &["issue", "cat", "CLI-1", "--section", "spec"], JSON),
         piped
     );
     // Same exemption on the project side.
@@ -212,7 +213,7 @@ fn show_section_stays_raw_markdown_in_every_mode() {
             "## Notes\n\n### A note\n\nremember this\n",
         ],
     );
-    let notes = ok_env(&db, &["project", "show", "CLI", "--section", "notes"], JSON);
+    let notes = ok_env(&db, &["project", "cat", "CLI", "--section", "notes"], JSON);
     assert!(notes.contains("remember this"), "{notes}");
     assert!(!notes.trim_start().starts_with('{'), "{notes}");
 }
@@ -289,10 +290,9 @@ fn milestone_edit_confirms_or_echoes() {
         &[
             "milestone",
             "edit",
+            "v1",
             "--project",
             "CLI",
-            "--name",
-            "v1",
             "--status",
             "completed",
         ],
@@ -305,7 +305,13 @@ fn milestone_edit_confirms_or_echoes() {
         ok_env(
             &db,
             &[
-                "milestone", "edit", "--project", "CLI", "--name", "v1", "--status", "open",
+                "milestone",
+                "edit",
+                "v1",
+                "--project",
+                "CLI",
+                "--status",
+                "open",
             ],
             TABLE
         ),
@@ -346,7 +352,13 @@ fn no_listed_mutation_succeeds_silently_in_either_mode() {
         &["label", "rm", "fresh", "--project", "CLI"],
         &["project", "edit", "CLI", "--name", "Other"],
         &[
-            "milestone", "edit", "--project", "CLI", "--name", "v1", "--target", "2027-01-01",
+            "milestone",
+            "edit",
+            "v1",
+            "--project",
+            "CLI",
+            "--target",
+            "2027-01-01",
         ],
         &[
             "project", "note", "add", "CLI", "--title", "N", "--body", "b",
@@ -400,9 +412,13 @@ fn confirmations_name_the_entity_and_the_change() {
 #[test]
 fn list_rows_are_lean_and_full_detail_is_complete() {
     let db = seeded("lean");
-    let row: serde_json::Value =
-        serde_json::from_str(ok(&db, &["issue", "ls", "-p", "CLI"]).lines().next().unwrap())
-            .unwrap();
+    let row: serde_json::Value = serde_json::from_str(
+        ok(&db, &["issue", "ls", "-p", "CLI"])
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
     for absent in [
         "description",
         "git_branch_name",
@@ -450,9 +466,13 @@ fn unscoped_milestone_ls_is_a_summary() {
         assert!(r.stderr.contains("--project"), "got {}", r.stderr);
     }
     // Scoped, the row form works and stays lean.
-    let row: serde_json::Value =
-        serde_json::from_str(ok(&db, &["milestone", "ls", "-p", "CLI"]).lines().next().unwrap())
-            .unwrap();
+    let row: serde_json::Value = serde_json::from_str(
+        ok(&db, &["milestone", "ls", "-p", "CLI"])
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
     assert!(row.get("created_at").is_none() && row.get("description").is_none());
     // --stats rows follow the same diet.
     let stat: serde_json::Value = serde_json::from_str(
@@ -471,11 +491,17 @@ fn short_filter_flags_match_their_long_forms() {
     let db = seeded("shorts");
     assert_eq!(
         ok(&db, &["issue", "ls", "-p", "CLI", "-s", "backlog"]),
-        ok(&db, &["issue", "ls", "--project", "CLI", "--status", "backlog"])
+        ok(
+            &db,
+            &["issue", "ls", "--project", "CLI", "--status", "backlog"]
+        )
     );
     assert_eq!(
         ok(&db, &["issue", "ls", "-p", "CLI", "-m", "v1"]),
-        ok(&db, &["issue", "ls", "--project", "CLI", "--milestone", "v1"])
+        ok(
+            &db,
+            &["issue", "ls", "--project", "CLI", "--milestone", "v1"]
+        )
     );
     assert_eq!(
         ok(&db, &["activity", "-p", "CLI"]),

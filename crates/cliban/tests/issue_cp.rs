@@ -39,6 +39,7 @@ fn run_env(db: &str, args: &[&str], extra_env: &[(&str, &str)]) -> Run {
         .env_remove("CLIBAN_ACTOR")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("CLIBAN_OUTPUT")
+        .env_remove("CLIBAN_PROJECT")
         .args(args);
     for (k, v) in extra_env {
         cmd.env(k, v);
@@ -54,7 +55,8 @@ fn run_env(db: &str, args: &[&str], extra_env: &[(&str, &str)]) -> Run {
 fn ok(db: &str, args: &[&str]) -> String {
     let r = run_env(db, args, &[]);
     assert_eq!(
-        r.code, 0,
+        r.code,
+        0,
         "`cliban {}` failed: {}",
         args.join(" "),
         r.stderr
@@ -65,7 +67,8 @@ fn ok(db: &str, args: &[&str]) -> String {
 fn ok_env(db: &str, args: &[&str], extra_env: &[(&str, &str)]) -> String {
     let r = run_env(db, args, extra_env);
     assert_eq!(
-        r.code, 0,
+        r.code,
+        0,
         "`cliban {}` failed: {}",
         args.join(" "),
         r.stderr
@@ -86,17 +89,16 @@ const SOURCE_DESC: &str = "## Spec\n\nthe spec body\n\n## Plan\n\n### Task 1: bu
 fn seeded(tag: &str) -> String {
     let db = tmp_db(tag);
     ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
-    ok(&db, &["milestone", "add", "--project", "CLI", "--name", "v1"]);
+    ok(&db, &["milestone", "add", "v1", "--project", "CLI"]);
     ok(&db, &["label", "add", "feature", "--project", "CLI"]);
     ok(
         &db,
         &[
             "issue",
             "add",
+            "template issue",
             "--project",
             "CLI",
-            "--title",
-            "template issue",
             "--description",
             SOURCE_DESC,
             "--priority",
@@ -110,15 +112,9 @@ fn seeded(tag: &str) -> String {
         ],
     );
     // A second issue so the source can carry a relation.
-    ok(
-        &db,
-        &["issue", "add", "--project", "CLI", "--title", "other"],
-    );
+    ok(&db, &["issue", "add", "other", "--project", "CLI"]);
     ok(&db, &["issue", "edit", "CLI-1", "--blocks", "CLI-2"]);
-    ok(
-        &db,
-        &["issue", "claim", "CLI-1", "--by", "someone"],
-    );
+    ok(&db, &["issue", "claim", "CLI-1", "--by", "someone"]);
     // History on the source that must never travel.
     ok(&db, &["issue", "log", "CLI-1", "original history entry"]);
     db
@@ -157,7 +153,10 @@ fn cp_copies_the_shape_and_never_the_history() {
     assert!(!desc.contains("Activity Log"), "{desc:?}");
     assert!(!desc.contains("original history entry"));
     assert!(!desc.contains("Decisions so far"));
-    assert!(!desc.contains("CLI-9"), "dangling promotion pointer: {desc:?}");
+    assert!(
+        !desc.contains("CLI-9"),
+        "dangling promotion pointer: {desc:?}"
+    );
 
     // History: never copied.
     assert_eq!(copy["relations"], serde_json::json!([]));
@@ -211,7 +210,7 @@ fn cp_cross_project_drops_the_milestone() {
 fn cp_records_provenance_on_the_copy() {
     let db = seeded("audit");
     ok(&db, &["issue", "cp", "CLI-1", "--json"]);
-    let activity = ok(&db, &["issue", "show", "CLI-3", "--section", "activity"]);
+    let activity = ok(&db, &["activity", "--issue", "CLI-3", "--table"]);
     assert!(
         activity.contains("copied from CLI-1"),
         "audit entry missing: {activity:?}"
@@ -219,7 +218,7 @@ fn cp_records_provenance_on_the_copy() {
     // Cross-project: the drop reason is part of the record.
     ok(&db, &["project", "add", "OPS", "--name", "Ops"]);
     ok(&db, &["issue", "cp", "CLI-1", "--project", "OPS", "--json"]);
-    let activity = ok(&db, &["issue", "show", "OPS-1", "--section", "activity"]);
+    let activity = ok(&db, &["activity", "--issue", "OPS-1", "--table"]);
     assert!(
         activity.contains("copied from CLI-1")
             && activity.contains("milestone")

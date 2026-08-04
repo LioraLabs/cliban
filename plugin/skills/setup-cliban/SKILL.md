@@ -139,7 +139,7 @@ Implementation plans are deliberately not git-tracked. ADRs deliberately are.
 ## When a skill says "publish to the issue tracker"
 
 ```bash
-cliban issue add --project <KEY> --title "<title>" --label <bug|feature|refactor|chore> \
+cliban issue add "<title>" --project <KEY> --label <bug|feature|refactor|chore> \
   --description-file - --json <<'EOF'
 ## Spec
 
@@ -151,7 +151,7 @@ EOF
 
 ```bash
 cliban issue show KEY --json                    # whole issue
-cliban issue show KEY --section spec|plan|activity|notes
+cliban issue cat KEY --section spec|plan|activity|notes
 cliban issue current --json                     # issue for the current branch
 ```
 
@@ -174,14 +174,14 @@ Used by `/wayfinder`. The **map** is a cliban issue; its tickets are native sub-
 
 - **Map**: an issue labelled `wayfinder:map`, holding the Destination / Notes /
   Decisions-so-far / Not-yet-specified / Out-of-scope body:
-  `cliban issue add --project <KEY> --label wayfinder:map --title "<map name>" ...`
+  `cliban issue add "<map name>" --project <KEY> --label wayfinder:map ...`
 - **Child ticket**: `cliban issue add --project <KEY> --parent <MAP-KEY> --label wayfinder:<type>`
   (`research` / `prototype` / `grilling` / `task`). List them:
   `cliban issue ls --parent <MAP-KEY> --json`.
 - **Blocking**: native edges — `--blocks` / `--blocked-by` on `issue add` / `issue edit`,
   visible on the board. A ticket is unblocked when every blocker is done;
-  `cliban issue blocked --project <KEY> --json` lists those still gated.
-- **Frontier query**: one call — `cliban issue ready --parent <MAP-KEY> --json`
+  `cliban issue ls --blocked --project <KEY> --json` lists those still gated.
+- **Frontier query**: one call — `cliban issue ls --ready --parent <MAP-KEY> --json`
   (backlog + unblocked + unclaimed IS the frontier).
 - **Claim**: `cliban issue claim <TICKET>`, the session's first write (the actor
   defaults to the ambient Claude session, so claims are per-session automatically);

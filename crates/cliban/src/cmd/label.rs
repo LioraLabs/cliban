@@ -17,8 +17,9 @@ pub enum LabelCmd {
     /// Add a label to a project
     Add {
         name: String,
+        /// project key (default: $CLIBAN_PROJECT)
         #[arg(long, short = 'p')]
-        project: String,
+        project: Option<String>,
         /// JSON output (echo the created label)
         #[arg(long)]
         json: bool,
@@ -28,8 +29,9 @@ pub enum LabelCmd {
     },
     /// List labels for a project
     Ls {
+        /// project key (default: $CLIBAN_PROJECT)
         #[arg(long, short = 'p')]
-        project: String,
+        project: Option<String>,
         #[arg(long)]
         json: bool,
         /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
@@ -39,8 +41,9 @@ pub enum LabelCmd {
     /// Delete a label (detaches it from all issues)
     Rm {
         name: String,
+        /// project key (default: $CLIBAN_PROJECT)
         #[arg(long, short = 'p')]
-        project: String,
+        project: Option<String>,
         /// JSON output (echo the removal)
         #[arg(long)]
         json: bool,
@@ -72,8 +75,13 @@ pub async fn run(db: &Option<String>, args: LabelArgs) -> CliResult<()> {
     }
 }
 
-async fn add(db: &Option<String>, name: String, project: String, mode: Mode) -> CliResult<()> {
-    let project = project.to_uppercase();
+async fn add(
+    db: &Option<String>,
+    name: String,
+    project: Option<String>,
+    mode: Mode,
+) -> CliResult<()> {
+    let project = crate::scope::required_project(project)?;
     let store = store_open::open(db).await?;
     let create_project = project.clone();
     let create_name = name.clone();
@@ -91,8 +99,8 @@ async fn add(db: &Option<String>, name: String, project: String, mode: Mode) -> 
     Ok(())
 }
 
-async fn ls(db: &Option<String>, project: String, mode: Mode) -> CliResult<()> {
-    let project = project.to_uppercase();
+async fn ls(db: &Option<String>, project: Option<String>, mode: Mode) -> CliResult<()> {
+    let project = crate::scope::required_project(project)?;
     let store = store_open::open(db).await?;
     let labels = store.call(move |conn| labels::list(conn, &project)).await?;
     for l in &labels {
@@ -105,8 +113,13 @@ async fn ls(db: &Option<String>, project: String, mode: Mode) -> CliResult<()> {
     Ok(())
 }
 
-async fn rm(db: &Option<String>, name: String, project: String, mode: Mode) -> CliResult<()> {
-    let project = project.to_uppercase();
+async fn rm(
+    db: &Option<String>,
+    name: String,
+    project: Option<String>,
+    mode: Mode,
+) -> CliResult<()> {
+    let project = crate::scope::required_project(project)?;
     let store = store_open::open(db).await?;
     // `issues_labels.label_id` has `ON DELETE CASCADE` (see migrations.rs) and
     // the connection runs with `PRAGMA foreign_keys = ON`, so deleting the

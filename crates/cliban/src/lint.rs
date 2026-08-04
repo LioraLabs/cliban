@@ -112,7 +112,10 @@ fn lint_plan(plan: &str, findings: &mut Vec<Finding>) {
         } else if lstripped != line && lstripped.starts_with("- [") {
             warn(
                 findings,
-                format!("indented checkbox {:?} is a child bullet — tick cannot reach it", lstripped.trim_end()),
+                format!(
+                    "indented checkbox {:?} is a child bullet — tick cannot reach it",
+                    lstripped.trim_end()
+                ),
             );
         }
     }
@@ -132,7 +135,10 @@ fn lint_plan(plan: &str, findings: &mut Vec<Finding>) {
         if *n != expected {
             warn(
                 findings,
-                format!("plan tasks are numbered {numbers:?}; expected 1..{}", numbers.len()),
+                format!(
+                    "plan tasks are numbered {numbers:?}; expected 1..{}",
+                    numbers.len()
+                ),
             );
             break;
         }
@@ -250,7 +256,9 @@ mod tests {
     fn stepless_task_is_a_warning() {
         let d = "## Plan\n\n### Task 1: a\n\nprose only\n";
         let f = lint_description(d);
-        assert!(f.iter().any(|f| f.severity == Severity::Warning && f.message.contains("no steps")));
+        assert!(f
+            .iter()
+            .any(|f| f.severity == Severity::Warning && f.message.contains("no steps")));
     }
 
     #[test]

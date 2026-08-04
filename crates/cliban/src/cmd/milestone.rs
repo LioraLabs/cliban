@@ -10,9 +10,8 @@ use cliban_core::schema::Milestone;
 use cliban_core::time::{format_date, format_usec, parse_date};
 use cliban_core::Store;
 
-use crate::cmd::issue::issue_json_inputs;
 use crate::errors::{CliError, CliResult};
-use crate::output::{build_issue_json, write_issue_table, Detail, IssueRow, Mode};
+use crate::output::{Detail, Mode};
 use crate::store_open;
 
 #[derive(clap::Args)]
@@ -26,11 +25,11 @@ pub enum MilestoneCmd {
     /// Partition a milestone's open issues into dependency waves (wave N is
     /// safe to start once waves 1..N-1 are done)
     Waves {
-        /// project key
-        #[arg(long, short = 'p')]
-        project: String,
         /// milestone name
         name: String,
+        /// project key (default: $CLIBAN_PROJECT)
+        #[arg(long, short = 'p')]
+        project: Option<String>,
         #[arg(long)]
         json: bool,
         /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
@@ -39,10 +38,11 @@ pub enum MilestoneCmd {
     },
     /// Add a milestone
     Add {
-        #[arg(long, short = 'p')]
-        project: String,
-        #[arg(long)]
+        /// milestone name
         name: String,
+        /// project key (default: $CLIBAN_PROJECT)
+        #[arg(long, short = 'p')]
+        project: Option<String>,
         #[arg(long, allow_hyphen_values = true)]
         description: Option<String>,
         #[arg(long = "description-file")]
@@ -58,7 +58,8 @@ pub enum MilestoneCmd {
     },
     /// List milestones
     Ls {
-        /// project key; omit for a per-project summary (counts only, no rows)
+        /// project key (default: $CLIBAN_PROJECT); unscoped (-p '*' or no
+        /// scope at all) is a per-project summary — counts only, no rows
         #[arg(long, short = 'p')]
         project: Option<String>,
         /// filter by status (open|completed|cancelled)
@@ -79,31 +80,26 @@ pub enum MilestoneCmd {
         #[arg(long)]
         full: bool,
     },
-    /// Show a milestone (accepts positional NAME or --name)
+    /// Show a milestone
     Show {
-        /// milestone name (or pass via --name)
-        name: Option<String>,
+        /// milestone name
+        name: String,
+        /// project key (default: $CLIBAN_PROJECT)
         #[arg(long, short = 'p')]
-        project: String,
-        #[arg(long = "name")]
-        name_flag: Option<String>,
+        project: Option<String>,
         #[arg(long)]
         json: bool,
         /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
         #[arg(long, conflicts_with = "json")]
         table: bool,
-        #[arg(long = "with-issues")]
-        with_issues: bool,
-        /// include each listed issue's `description` body (--with-issues)
-        #[arg(long)]
-        full: bool,
     },
     /// Edit a milestone
     Edit {
-        #[arg(long, short = 'p')]
-        project: String,
-        #[arg(long)]
+        /// milestone name
         name: String,
+        /// project key (default: $CLIBAN_PROJECT)
+        #[arg(long, short = 'p')]
+        project: Option<String>,
         /// new name
         #[arg(long)]
         rename: Option<String>,
@@ -131,10 +127,11 @@ pub enum MilestoneCmd {
     /// the undo.
     #[command(hide = true)]
     Rm {
-        #[arg(long, short = 'p')]
-        project: String,
-        #[arg(long)]
+        /// milestone name
         name: String,
+        /// project key (default: $CLIBAN_PROJECT)
+        #[arg(long, short = 'p')]
+        project: Option<String>,
     },
 }
 
@@ -189,23 +186,9 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
         MilestoneCmd::Show {
             name,
             project,
-            name_flag,
             json,
             table,
-            with_issues,
-            full,
-        } => {
-            show(
-                db,
-                name,
-                project,
-                name_flag,
-                crate::output::mode(json, table),
-                with_issues,
-                full,
-            )
-            .await
-        }
+        } => show(db, name, project, crate::output::mode(json, table)).await,
         MilestoneCmd::Edit {
             project,
             name,
@@ -218,7 +201,7 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             json,
             table,
         } => {
-            let project_key = project.to_uppercase();
+            let project_key = crate::scope::required_project(project)?;
             let (m, count) = apply_edit(
                 db,
                 project_key.clone(),
@@ -244,7 +227,7 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             // `cancelled` is a milestone's archived state, so that is what a
             // delete becomes — the closest safe thing, not a refusal. The
             // message IS the point — it prints in every mode.
-            let project_key = project.to_uppercase();
+            let project_key = crate::scope::required_project(project)?;
             apply_edit(
                 db,
                 project_key.clone(),
@@ -259,8 +242,7 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             .await?;
             println!(
                 "cancelled milestone {name} in {project_key} — cliban cancels instead of \
-                 deleting (undo: cliban milestone edit --project {project_key} --name {name} \
-                 --status open)"
+                 deleting (undo: cliban milestone edit {name:?} -p {project_key} --status open)"
             );
             Ok(())
         }
@@ -356,14 +338,14 @@ fn milestone_json(m: &Milestone, project: &str, count: i64, detail: Detail) -> V
 
 async fn add(
     db: &Option<String>,
-    project: String,
+    project: Option<String>,
     name: String,
     description: Option<String>,
     description_file: Option<String>,
     target: Option<String>,
     mode: Mode,
 ) -> CliResult<()> {
-    let project_key = project.to_uppercase();
+    let project_key = crate::scope::required_project(project)?;
     let target_date = parse_target(target.as_deref().unwrap_or(""))?;
     let (description, _set) = resolve_description(description, description_file)?;
 
@@ -404,7 +386,7 @@ async fn ls(
     mode: Mode,
     full: bool,
 ) -> CliResult<()> {
-    let project_key = project.map(|p| p.to_uppercase());
+    let project_key = crate::scope::project(project);
     let sort = milestones::Sort::parse(&sort).ok_or_else(|| {
         CliError::validation(format!(
             "invalid --sort {sort:?} (want activity, name or target)"
@@ -574,32 +556,12 @@ fn milestone_stats_json(
 
 async fn show(
     db: &Option<String>,
-    name: Option<String>,
-    project: String,
-    name_flag: Option<String>,
+    name: String,
+    project: Option<String>,
     mode: Mode,
-    with_issues: bool,
-    full: bool,
 ) -> CliResult<()> {
-    // name = positional XOR --name (equal is ok); none → validation error.
-    let mut resolved = name_flag.clone().unwrap_or_default();
-    if let Some(pos) = &name {
-        if !resolved.is_empty() && &resolved != pos {
-            return Err(CliError::validation(
-                "pass NAME positionally OR via --name, not both",
-            ));
-        }
-        resolved = pos.clone();
-    }
-    if resolved.is_empty() {
-        return Err(CliError::validation(
-            "milestone name required (positional or --name)",
-        ));
-    }
-    if project.is_empty() {
-        return Err(CliError::validation("--project is required"));
-    }
-    let project_key = project.to_uppercase();
+    let resolved = name;
+    let project_key = crate::scope::required_project(project)?;
 
     let store = store_open::open(db).await?;
     let get_key = project_key.clone();
@@ -634,14 +596,6 @@ async fn show(
         map.insert("created_at".into(), json!(format_usec(m.inserted_at)));
         map.insert("description".into(), json!(m.description));
         map.insert("issue_count".into(), json!(count));
-        if with_issues {
-            let mut arr = Vec::with_capacity(issue_list.len());
-            for i in &issue_list {
-                let inputs = issue_json_inputs(&store, i).await?;
-                arr.push(build_issue_json(inputs, Detail::from_full_flag(full)));
-            }
-            map.insert("issues".into(), Value::Array(arr));
-        }
         map.insert("name".into(), json!(m.name));
         map.insert("project".into(), json!(project_key));
         map.insert("status".into(), json!(m.status));
@@ -668,51 +622,9 @@ async fn show(
         "{} — {}\nstatus:  {}\ntarget:  {}\nissues:  {}\n{}\n",
         m.name, project_key, m.status, tgt, count, m.description
     );
-    if with_issues {
-        println!();
-        let mut rows = Vec::with_capacity(issue_list.len());
-        for i in &issue_list {
-            let (ms_name, parent_key) = resolve_refs(&store, i).await?;
-            rows.push(IssueRow {
-                key: i.key.clone(),
-                title: i.title.clone(),
-                status: i.status.clone(),
-                priority: i.priority.clone(),
-                milestone: ms_name,
-                parent: parent_key,
-            });
-        }
-        print!("{}", write_issue_table(&rows));
-    }
     Ok(())
 }
 
-/// Resolve milestone name + parent key for an issue (empty when unset).
-async fn resolve_refs(
-    store: &Store,
-    issue: &cliban_core::schema::Issue,
-) -> CliResult<(String, String)> {
-    let milestone_id = issue.milestone_id;
-    let parent_id = issue.parent_id;
-    let pair = store
-        .call(move |conn| {
-            let milestone = match milestone_id {
-                Some(mid) => milestones::get_by_id(conn, mid)?.map(|m| m.name),
-                None => None,
-            };
-            let parent = match parent_id {
-                Some(pid) => issues::get_by_id(conn, pid)?.map(|i| i.key),
-                None => None,
-            };
-            Ok((milestone.unwrap_or_default(), parent.unwrap_or_default()))
-        })
-        .await?;
-    Ok(pair)
-}
-
-/// Apply a milestone edit and return the updated row plus its (non-archived)
-/// issue count. Prints nothing: `edit` confirms per the output contract while
-/// `rm` keeps its own always-on message.
 #[allow(clippy::too_many_arguments)]
 async fn apply_edit(
     db: &Option<String>,
@@ -760,8 +672,13 @@ async fn apply_edit(
 /// `milestone waves`: print the dependency-wave partition the core computes —
 /// the deterministic answer to "what can run in parallel, in what order" that
 /// orchestrators previously derived by hand from the blocking graph.
-async fn waves(db: &Option<String>, project: String, name: String, mode: Mode) -> CliResult<()> {
-    let project = project.to_uppercase();
+async fn waves(
+    db: &Option<String>,
+    project: Option<String>,
+    name: String,
+    mode: Mode,
+) -> CliResult<()> {
+    let project = crate::scope::required_project(project)?;
     let store = store_open::open(db).await?;
     let w = store
         .call(move |conn| milestones::waves(conn, &project, &name))

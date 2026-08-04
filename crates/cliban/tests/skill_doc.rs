@@ -69,9 +69,7 @@ fn documented_paths(md: &str) -> BTreeSet<Vec<String>> {
 /// describes the default build, so under `--no-default-features` these are
 /// legitimately absent and must not be reported as drift.
 fn feature_gated(path: &[String]) -> bool {
-    let gated = cfg!(not(feature = "linear")) && matches!(path[0].as_str(), "import" | "push");
-    // `issue import` is unrelated to the Linear bridge and always present.
-    gated && path.len() > 1
+    cfg!(not(feature = "linear")) && path[0] == "linear"
 }
 
 #[test]

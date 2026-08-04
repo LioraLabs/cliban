@@ -57,7 +57,7 @@ fn ok(db: &str, args: &[&str]) {
 /// pipe buffer: a handful of log entries with long bodies.
 fn seed_busy_board(db: &str) {
     ok(db, &["project", "add", "SP", "--name", "Sigpipe"]);
-    ok(db, &["issue", "add", "--project", "SP", "--title", "noisy issue"]);
+    ok(db, &["issue", "add", "noisy issue", "--project", "SP"]);
     let long_line = "x".repeat(8 * 1024);
     for _ in 0..12 {
         ok(db, &["issue", "log", "SP-1", &long_line]);
@@ -113,7 +113,7 @@ fn issue_show_piped_to_closed_reader_does_not_panic() {
     // large description is another single-write path past the pipe buffer.
     let db = tmp_db("show");
     ok(&db, &["project", "add", "SP", "--name", "Sigpipe"]);
-    ok(&db, &["issue", "add", "--project", "SP", "--title", "big"]);
+    ok(&db, &["issue", "add", "big", "--project", "SP"]);
     let big_body = format!("## Spec\n\n{}", "y".repeat(128 * 1024));
     let out = cmd(&db)
         .args(["issue", "edit", "SP-1", "--description-file", "-"])

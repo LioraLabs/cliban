@@ -4,8 +4,8 @@ use std::io::{Read, Write};
 
 use cliban_core::contexts::issues::{CreateIssue, ListOpts, UpdateIssue};
 use cliban_core::contexts::{claims, issues, milestones, relations};
-use cliban_core::sections::replace_section;
 use cliban_core::schema::{Issue, ISSUE_PRIORITIES, ISSUE_STATUSES};
+use cliban_core::sections::replace_section;
 use cliban_core::time::{format_date, format_usec, parse_date};
 use cliban_core::Store;
 
@@ -108,38 +108,6 @@ pub enum IssueCmd {
         #[arg(long, conflicts_with = "json")]
         table: bool,
     },
-    /// List issues that have at least one open blocker
-    Blocked {
-        #[arg(long, short = 'p')]
-        project: Option<String>,
-        #[arg(long)]
-        json: bool,
-        /// human table output
-        #[arg(long, conflicts_with = "json")]
-        table: bool,
-        /// full rows in --json output: description body plus the fields list rows omit
-        #[arg(long)]
-        full: bool,
-    },
-    /// List takeable issues: backlog status, no open blocker, unclaimed
-    Ready {
-        #[arg(long, short = 'p')]
-        project: Option<String>,
-        /// only sub-issues of this parent key
-        #[arg(long)]
-        parent: Option<String>,
-        /// milestone name (requires --project; names are project-scoped)
-        #[arg(long, short = 'm')]
-        milestone: Option<String>,
-        #[arg(long)]
-        json: bool,
-        /// human table output
-        #[arg(long, conflicts_with = "json")]
-        table: bool,
-        /// full rows in --json output: description body plus the fields list rows omit
-        #[arg(long)]
-        full: bool,
-    },
     /// Claim an issue for the current actor ($CLIBAN_ACTOR, or the ambient
     /// Claude session)
     Claim {
@@ -186,9 +154,6 @@ pub struct ShowArgs {
     /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
     #[arg(long, conflicts_with = "json")]
     table: bool,
-    /// show only one section: spec|plan|activity|notes
-    #[arg(long)]
-    section: Option<String>,
     /// pipe human-readable output through $PAGER
     #[arg(long)]
     pager: bool,
@@ -241,16 +206,21 @@ pub struct LsArgs {
     /// cap result count (default 50 when --search is set; ignored otherwise)
     #[arg(long, default_value_t = 0)]
     limit: i64,
+    /// only takeable issues: backlog status, no open blocker, unclaimed
+    #[arg(long, conflicts_with_all = ["blocked", "status", "archived", "search"])]
+    ready: bool,
+    /// only issues with at least one open blocker
+    #[arg(long, conflicts_with = "search")]
+    blocked: bool,
 }
 
 #[derive(clap::Args)]
 pub struct AddArgs {
-    /// project key (required)
-    #[arg(long, short = 'p')]
-    project: String,
-    /// issue title
-    #[arg(long, allow_hyphen_values = true)]
+    /// issue title (optional only with --editor)
     title: Option<String>,
+    /// project key (default: $CLIBAN_PROJECT)
+    #[arg(long, short = 'p')]
+    project: Option<String>,
     /// description (use '-' to read from stdin)
     #[arg(long, allow_hyphen_values = true)]
     description: Option<String>,
@@ -441,6 +411,9 @@ pub struct RmArgs {
 pub struct CatArgs {
     /// issue key
     key: String,
+    /// print only one section's body: spec|plan|activity|notes, or a verbatim H2 anchor
+    #[arg(long)]
+    section: Option<String>,
 }
 
 /// Shared shape of the `close`/`reopen` reflexes: a fixed-status `mv` — same
@@ -662,30 +635,6 @@ pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
             .await
         }
         IssueCmd::Current { json, table } => current(db, crate::output::mode(json, table)).await,
-        IssueCmd::Blocked {
-            project,
-            json,
-            table,
-            full,
-        } => blocked(db, project, crate::output::mode(json, table), full).await,
-        IssueCmd::Ready {
-            project,
-            parent,
-            milestone,
-            json,
-            table,
-            full,
-        } => {
-            ready(
-                db,
-                project,
-                parent,
-                milestone,
-                crate::output::mode(json, table),
-                full,
-            )
-            .await
-        }
         IssueCmd::Claim {
             key,
             by,
@@ -807,7 +756,7 @@ fn read_stdin() -> CliResult<String> {
 }
 
 async fn add(db: &Option<String>, a: AddArgs) -> CliResult<()> {
-    let project_key = a.project.to_uppercase();
+    let project_key = crate::scope::required_project(a.project)?;
     let title = a.title.unwrap_or_default();
 
     let (description, desc_set) = resolve_description(a.description, a.description_file)?;
@@ -820,7 +769,7 @@ async fn add(db: &Option<String>, a: AddArgs) -> CliResult<()> {
             return Err(CliError::validation("--editor requires a TTY"));
         }
         return Err(CliError::validation(
-            "--title required (pass --editor to open $EDITOR)",
+            "a title is required (pass --editor to open $EDITOR)",
         ));
     }
 
@@ -929,7 +878,13 @@ async fn add(db: &Option<String>, a: AddArgs) -> CliResult<()> {
         issue = fresh;
     }
 
-    print_issue_result(&store, &issue, "created", crate::output::mode(a.json, a.table)).await
+    print_issue_result(
+        &store,
+        &issue,
+        "created",
+        crate::output::mode(a.json, a.table),
+    )
+    .await
 }
 
 /// Echo a mutated issue: human `{verb} {KEY}: {title}\n`; json pretty.
@@ -1050,11 +1005,7 @@ fn resolve_section(s: &str) -> Result<String, CliError> {
 /// that isn't there is exit 2 naming what IS there, unless the caller
 /// explicitly asked to create it — `replace_section` would otherwise turn a
 /// typo into a junk section appended below the real one, silently.
-fn require_section(
-    issue: &Issue,
-    anchor: &str,
-    create: bool,
-) -> Result<(), cliban_core::Error> {
+fn require_section(issue: &Issue, anchor: &str, create: bool) -> Result<(), cliban_core::Error> {
     if create || cliban_core::sections::find_section(&issue.description, anchor).2 {
         return Ok(());
     }
@@ -1083,43 +1034,6 @@ async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
         .await?
         .ok_or(cliban_core::Error::NotFound)?;
 
-    // --section is a targeted machine read; mutually exclusive with json/pager.
-    if let Some(section) = &a.section {
-        let anchor = resolve_section(section)?;
-        // The activity view is the union of the author's narrative and the
-        // transitions cliban recorded; either alone is a partial history.
-        let recorded = if anchor == "Activity Log" {
-            let id = issue.id;
-            store
-                .call(move |conn| {
-                    cliban_core::contexts::activity_log::list_for_issue(conn, id, 200)
-                })
-                .await?
-        } else {
-            Vec::new()
-        };
-        let (start, end, ok) = find_section(&issue.description, &anchor);
-        if !ok && recorded.is_empty() {
-            // Wrapped as "not found: <msg>" so the caller sees what was missing.
-            return Err(CliError::not_found(format!(
-                "not found: no ## {anchor} section in {}",
-                a.key
-            )));
-        }
-        let written = if ok {
-            &issue.description[start..end]
-        } else {
-            ""
-        };
-        if recorded.is_empty() {
-            // Nothing recorded: emit the section byte-for-byte as stored.
-            print!("{written}");
-        } else {
-            print!("{}", merge_activity_view(written, &recorded));
-        }
-        return Ok(());
-    }
-
     if crate::output::mode(a.json, a.table).is_json() {
         let inputs = issue_json_inputs(&store, &issue).await?;
         println!(
@@ -1146,50 +1060,6 @@ async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
         print!("{body}");
     }
     Ok(())
-}
-
-/// One chronological view over the two activity sources: the `## Activity Log`
-/// lines an author wrote, and the entries cliban recorded itself. Both render
-/// as `- <ts> — <msg>`; recorded ones carry `[actor]` when attribution was set.
-///
-/// Only called when there is something recorded — with an empty table the
-/// stored section is emitted verbatim, so a description that was never
-/// auto-recorded reads exactly as it always did.
-fn merge_activity_view(
-    written: &str,
-    recorded: &[cliban_core::schema::ActivityLogEntry],
-) -> String {
-    const STAMP: &str = "%Y-%m-%dT%H:%MZ";
-    // `issue log` records into both places, so drop the markdown copy of any
-    // line a recorded entry already covers — the recorded one carries the
-    // actor. What survives is hand-written, or predates recording.
-    let already: std::collections::HashSet<(i64, String)> = recorded
-        .iter()
-        .filter(|e| e.kind == "log")
-        .map(|e| crate::audit::log_dedupe_key(e.ts, &e.message))
-        .collect();
-    let mut lines: Vec<(chrono::DateTime<Utc>, String)> =
-        descmd::parse_activity_log(&format!("## Activity Log\n{written}"))
-            .into_iter()
-            .filter(|(ts, msg)| !already.contains(&crate::audit::log_dedupe_key(*ts, msg)))
-            .map(|(ts, msg)| (ts, format!("- {} — {msg}", ts.format(STAMP))))
-            .collect();
-    for e in recorded {
-        let who = crate::audit::actor_of(&e.extra)
-            .map(|a| format!("[{a}] "))
-            .unwrap_or_default();
-        lines.push((
-            e.ts,
-            format!("- {} — {who}{}", e.ts.format(STAMP), e.message),
-        ));
-    }
-    lines.sort_by_key(|(ts, _)| *ts);
-    let mut out = String::from("\n");
-    for (_, line) in &lines {
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
 }
 
 fn dash_if_empty(s: &str) -> String {
@@ -1245,7 +1115,7 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
     }
 
     // Pre-parse the typed filters before any store work.
-    let project = a.project.as_deref().map(str::to_uppercase);
+    let project = crate::scope::project(a.project.clone());
     let status = match &a.status {
         Some(s) if !s.is_empty() => Some(parse_status(s)?),
         _ => None,
@@ -1343,6 +1213,29 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
     if let Some(threshold) = updated_since {
         issues.retain(|i| i.updated_at >= threshold);
     }
+    // --ready / --blocked are relation-aware subsets computed in core;
+    // intersecting with the fetch keeps every other ls filter composable
+    // with them for free.
+    if a.ready {
+        let pk = project.clone();
+        let ready_ids: std::collections::HashSet<i64> = store
+            .call(move |conn| relations::list_ready(conn, pk.as_deref(), None, None))
+            .await?
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        issues.retain(|i| ready_ids.contains(&i.id));
+    }
+    if a.blocked {
+        let pk = project.clone();
+        let blocked_ids: std::collections::HashSet<i64> = store
+            .call(move |conn| relations::list_blocked(conn, pk.as_deref()))
+            .await?
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        issues.retain(|i| blocked_ids.contains(&i.id));
+    }
 
     // Base ordering: ORDER BY p.key, i.status,
     // i.position (the issue key embeds the project key, so its prefix sorts by
@@ -1378,7 +1271,7 @@ async fn run_search(db: &Option<String>, a: &LsArgs, query: String) -> CliResult
     let store = store_open::open(db).await?;
     let opts = crate::search::Options {
         query,
-        project: a.project.as_deref().map(str::to_uppercase),
+        project: crate::scope::project(a.project.clone()),
         label: a.label.clone(),
         milestone: a.milestone.clone(),
         status: a.status.clone(),
@@ -1722,8 +1615,7 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
                         require_section(&issue, anchor, create_section)?;
                         let body = cliban_core::sections::sanitize_section_body(anchor, &body)
                             .map_err(|m| cliban_core::Error::validation("section", &m))?;
-                        upd.description =
-                            Some(replace_section(&issue.description, anchor, &body));
+                        upd.description = Some(replace_section(&issue.description, anchor, &body));
                     }
                 }
                 issues::update(conn, &issue, upd)?;
@@ -1879,7 +1771,13 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
             .await?;
     }
 
-    print_issue_result(&store, &issue, "updated", crate::output::mode(a.json, a.table)).await
+    print_issue_result(
+        &store,
+        &issue,
+        "updated",
+        crate::output::mode(a.json, a.table),
+    )
+    .await
 }
 
 async fn log(db: &Option<String>, a: LogArgs, teach: Option<Teach>) -> CliResult<()> {
@@ -2302,7 +2200,13 @@ async fn cp(db: &Option<String>, a: CpArgs) -> CliResult<()> {
         .await?
         .ok_or(cliban_core::Error::NotFound)?;
 
-    print_issue_result(&store, &issue, "copied", crate::output::mode(a.json, a.table)).await
+    print_issue_result(
+        &store,
+        &issue,
+        "copied",
+        crate::output::mode(a.json, a.table),
+    )
+    .await
 }
 
 async fn archive_done(db: &Option<String>, a: ArchiveDoneArgs) -> CliResult<()> {
@@ -2353,12 +2257,12 @@ async fn archive_done(db: &Option<String>, a: ArchiveDoneArgs) -> CliResult<()> 
         return Ok(());
     }
 
-    let project = a.project.filter(|p| !p.is_empty());
-    let project = match project {
-        Some(p) => p.to_uppercase(),
+    let project = match crate::scope::project(a.project) {
+        Some(p) => p,
         None => {
             return Err(CliError::validation(
-                "--project is required (or use --auto for the per-project policy)",
+                "no project scope: pass -p KEY, set $CLIBAN_PROJECT, or use --auto \
+                 for the per-project policy",
             ))
         }
     };
@@ -2395,7 +2299,7 @@ async fn import(db: &Option<String>, a: ImportArgs) -> CliResult<()> {
         None | Some("") | Some("-") => read_stdin()?,
         Some(p) => std::fs::read_to_string(p).map_err(|e| CliError::other(e.to_string()))?,
     };
-    let default_project = a.project.clone().unwrap_or_default();
+    let default_project = crate::scope::project(a.project.clone()).unwrap_or_default();
 
     let store = store_open::open(db).await?;
     let mut created = 0i64;
@@ -2555,8 +2459,7 @@ async fn mv(
     let move_status = status.clone();
     let from = store
         .call(move |conn| {
-            let issue =
-                issues::get_by_key(conn, &move_key)?.ok_or(cliban_core::Error::NotFound)?;
+            let issue = issues::get_by_key(conn, &move_key)?.ok_or(cliban_core::Error::NotFound)?;
             let from = issue.status.clone();
             // Desired state already holds: no reposition, no updated_at
             // churn, no audit record — a retry is not a second move.
@@ -2616,7 +2519,8 @@ async fn mv(
 
 /// `issue cat`: the stored description, verbatim — the one read that never
 /// formats. No `--json`/`--table`, no mode branch, no trailing decoration:
-/// its whole contract is "the bytes, exactly".
+/// its whole contract is "the bytes, exactly". `--section` narrows the same
+/// contract to one H2's body.
 async fn cat(db: &Option<String>, a: CatArgs) -> CliResult<()> {
     let key = parse_issue_key(&a.key)?;
     let store = store_open::open(db).await?;
@@ -2624,6 +2528,20 @@ async fn cat(db: &Option<String>, a: CatArgs) -> CliResult<()> {
         .call(move |conn| issues::get_by_key(conn, &key))
         .await?
         .ok_or(cliban_core::Error::NotFound)?;
+    if let Some(section) = &a.section {
+        let anchor = resolve_section(section)?;
+        let (start, end, ok) = find_section(&issue.description, &anchor);
+        if !ok {
+            // "not found" (exit 1), not validation: an absent section is an
+            // answer about this issue, not a usage mistake.
+            return Err(CliError::not_found(format!(
+                "not found: no ## {anchor} section in {}",
+                a.key
+            )));
+        }
+        print!("{}", &issue.description[start..end]);
+        return Ok(());
+    }
     print!("{}", issue.description);
     Ok(())
 }
@@ -2633,11 +2551,7 @@ async fn cat(db: &Option<String>, a: CatArgs) -> CliResult<()> {
 /// these reflexes — it prints in every mode, so the caller always learns
 /// nothing was deleted. `delete` additionally states the canonical form
 /// (`archive`) once, per the alias contract.
-async fn rm_reflex(
-    db: &Option<String>,
-    key: String,
-    canonical: Option<&str>,
-) -> CliResult<()> {
+async fn rm_reflex(db: &Option<String>, key: String, canonical: Option<&str>) -> CliResult<()> {
     let key = parse_issue_key(&key)?;
     let store = store_open::open(db).await?;
     // Desired state = archived; already-archived is the same success.
@@ -2803,36 +2717,6 @@ async fn current(db: &Option<String>, mode: Mode) -> CliResult<()> {
     Ok(())
 }
 
-async fn blocked(
-    db: &Option<String>,
-    project: Option<String>,
-    mode: Mode,
-    full: bool,
-) -> CliResult<()> {
-    let project = project.map(|p| p.to_uppercase()).filter(|p| !p.is_empty());
-    let store = store_open::open(db).await?;
-    let pk = project.clone();
-    let mut issues = store
-        .call(move |conn| relations::list_blocked(conn, pk.as_deref()))
-        .await?;
-    // Base ordering: ORDER BY p.key, i.status, i.position.
-    base_order(&mut issues);
-    if mode.is_json() {
-        for i in &issues {
-            let inputs = issue_json_inputs(&store, i).await?;
-            println!(
-                "{}",
-                serde_json::to_string(&build_issue_json(inputs, Detail::from_full_flag(full)))
-                    .unwrap()
-            );
-        }
-        return Ok(());
-    }
-    let rows = issue_rows(&store, &issues).await?;
-    print!("{}", write_issue_table(&rows));
-    Ok(())
-}
-
 /// The compare-and-swap guard behind `--if-updated-at`: runs inside the write
 /// job on the store thread, so the check and the write are atomic.
 fn check_cas(issue: &Issue, expected: Option<&str>) -> Result<(), cliban_core::Error> {
@@ -2849,46 +2733,6 @@ fn check_cas(issue: &Issue, expected: Option<&str>) -> Result<(), cliban_core::E
             ),
         ));
     }
-    Ok(())
-}
-
-async fn ready(
-    db: &Option<String>,
-    project: Option<String>,
-    parent: Option<String>,
-    milestone: Option<String>,
-    mode: Mode,
-    full: bool,
-) -> CliResult<()> {
-    let project = project.map(|p| p.to_uppercase()).filter(|p| !p.is_empty());
-    let parent = match parent {
-        Some(p) => Some(parse_issue_key(&p)?),
-        None => None,
-    };
-    if milestone.is_some() && project.is_none() {
-        return Err(CliError::validation(
-            "--milestone needs --project (milestone names are project-scoped)",
-        ));
-    }
-    let store = store_open::open(db).await?;
-    let (pk, pak, ms) = (project.clone(), parent.clone(), milestone.clone());
-    let mut issues_list = store
-        .call(move |conn| relations::list_ready(conn, pk.as_deref(), pak.as_deref(), ms.as_deref()))
-        .await?;
-    base_order(&mut issues_list);
-    if mode.is_json() {
-        for i in &issues_list {
-            let inputs = issue_json_inputs(&store, i).await?;
-            println!(
-                "{}",
-                serde_json::to_string(&build_issue_json(inputs, Detail::from_full_flag(full)))
-                    .unwrap()
-            );
-        }
-        return Ok(());
-    }
-    let rows = issue_rows(&store, &issues_list).await?;
-    print!("{}", write_issue_table(&rows));
     Ok(())
 }
 
@@ -2923,12 +2767,9 @@ async fn claim_cmd(
                     "claim",
                     &format!("claimed by {as_actor} (took over from {})", p.claimed_by),
                 ),
-                None => crate::audit::record(
-                    conn,
-                    &issue,
-                    "claim",
-                    &format!("claimed by {as_actor}"),
-                ),
+                None => {
+                    crate::audit::record(conn, &issue, "claim", &format!("claimed by {as_actor}"))
+                }
             }
             Ok((issue, claim))
         })
@@ -3053,8 +2894,9 @@ async fn append_section_cmd(db: &Option<String>, a: AppendSectionArgs) -> CliRes
         }
         (Some(t), None) => t,
         (None, Some(f)) if f == "-" => read_stdin()?,
-        (None, Some(f)) => std::fs::read_to_string(&f)
-            .map_err(|e| CliError::other(format!("read {f}: {e}")))?,
+        (None, Some(f)) => {
+            std::fs::read_to_string(&f).map_err(|e| CliError::other(format!("read {f}: {e}")))?
+        }
         // No positional, no --text-file: piped/redirected stdin IS the text;
         // a TTY keeps the fast error (blank piped text is caught below).
         (None, None) => match crate::stdin_input::fallback()? {
@@ -3099,5 +2941,11 @@ async fn append_section_cmd(db: &Option<String>, a: AppendSectionArgs) -> CliRes
             Ok(updated)
         })
         .await?;
-    print_issue_result(&store, &issue, "updated", crate::output::mode(a.json, a.table)).await
+    print_issue_result(
+        &store,
+        &issue,
+        "updated",
+        crate::output::mode(a.json, a.table),
+    )
+    .await
 }

@@ -38,6 +38,7 @@ fn run_as(db: &str, actor: Option<&str>, args: &[&str]) -> Run {
         .env_remove("CLIBAN_ACTOR")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("CLIBAN_OUTPUT")
+        .env_remove("CLIBAN_PROJECT")
         .args(args);
     if let Some(a) = actor {
         cmd.env("CLIBAN_ACTOR", a);
@@ -65,14 +66,8 @@ fn ok(db: &str, args: &[&str]) -> String {
 fn seeded() -> String {
     let db = tmp_db("feed");
     ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
-    ok(
-        &db,
-        &["issue", "add", "--project", "CLI", "--title", "alpha"],
-    );
-    ok(
-        &db,
-        &["issue", "add", "--project", "CLI", "--title", "beta"],
-    );
+    ok(&db, &["issue", "add", "alpha", "--project", "CLI"]);
+    ok(&db, &["issue", "add", "beta", "--project", "CLI"]);
     ok(&db, &["issue", "mv", "CLI-2", "done"]);
     ok(&db, &["issue", "log", "CLI-1", "rebased onto main"]);
     db
@@ -185,10 +180,7 @@ fn an_old_window_reports_nothing_rather_than_everything() {
 fn an_issue_created_and_finished_in_the_window_reports_both() {
     let db = tmp_db("both");
     ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
-    ok(
-        &db,
-        &["issue", "add", "--project", "CLI", "--title", "quick"],
-    );
+    ok(&db, &["issue", "add", "quick", "--project", "CLI"]);
     ok(&db, &["issue", "mv", "CLI-1", "done"]);
     let k = kinds(&events(&db, &[]));
     assert!(k.contains(&("CLI-1".into(), "created".into())), "{k:?}");
@@ -201,10 +193,7 @@ fn an_issue_created_and_finished_in_the_window_reports_both() {
 fn a_move_records_its_transition_without_being_asked() {
     let db = tmp_db("auto");
     ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
-    ok(
-        &db,
-        &["issue", "add", "--project", "CLI", "--title", "work"],
-    );
+    ok(&db, &["issue", "add", "work", "--project", "CLI"]);
     ok(&db, &["issue", "mv", "CLI-1", "in-progress"]);
     ok(&db, &["issue", "mv", "CLI-1", "in-review"]);
 
@@ -227,10 +216,7 @@ fn a_move_records_its_transition_without_being_asked() {
 fn a_note_records_the_why_alongside_the_transition() {
     let db = tmp_db("note");
     ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
-    ok(
-        &db,
-        &["issue", "add", "--project", "CLI", "--title", "work"],
-    );
+    ok(&db, &["issue", "add", "work", "--project", "CLI"]);
     ok(
         &db,
         &[
@@ -254,10 +240,7 @@ fn a_note_records_the_why_alongside_the_transition() {
 fn cliban_actor_attributes_recorded_entries() {
     let db = tmp_db("actor");
     ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
-    ok(
-        &db,
-        &["issue", "add", "--project", "CLI", "--title", "work"],
-    );
+    ok(&db, &["issue", "add", "work", "--project", "CLI"]);
     ok_as(&db, "claude", &["issue", "mv", "CLI-1", "in-progress"]);
     ok_as(&db, "alex", &["issue", "mv", "CLI-1", "done"]);
 
@@ -282,10 +265,7 @@ fn cliban_actor_attributes_recorded_entries() {
 fn ambient_claude_session_attributes_when_no_actor_is_set() {
     let db = tmp_db("session_actor");
     ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
-    ok(
-        &db,
-        &["issue", "add", "--project", "CLI", "--title", "work"],
-    );
+    ok(&db, &["issue", "add", "work", "--project", "CLI"]);
 
     // No CLIBAN_ACTOR, but a Claude Code session in the environment: the
     // session id becomes the actor, shortened for the timeline.
@@ -321,7 +301,10 @@ fn ambient_claude_session_attributes_when_no_actor_is_set() {
         .filter(|e| e["kind"] == "status")
         .filter_map(|e| e["actor"].as_str().map(str::to_string))
         .collect();
-    assert!(actors.contains(&"session:ea8a9c5e".to_string()), "{actors:?}");
+    assert!(
+        actors.contains(&"session:ea8a9c5e".to_string()),
+        "{actors:?}"
+    );
     assert!(actors.contains(&"alex".to_string()), "{actors:?}");
 }
 
@@ -329,10 +312,7 @@ fn ambient_claude_session_attributes_when_no_actor_is_set() {
 fn archiving_is_recorded_too() {
     let db = tmp_db("arch");
     ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
-    ok(
-        &db,
-        &["issue", "add", "--project", "CLI", "--title", "work"],
-    );
+    ok(&db, &["issue", "add", "work", "--project", "CLI"]);
     ok(&db, &["issue", "archive", "CLI-1"]);
     ok(&db, &["issue", "unarchive", "CLI-1"]);
     let msgs: Vec<String> = events(&db, &["--archived"])
@@ -345,38 +325,39 @@ fn archiving_is_recorded_too() {
 }
 
 #[test]
-fn section_activity_merges_written_prose_with_recorded_transitions() {
+fn issue_history_merges_written_prose_with_recorded_transitions() {
     let db = tmp_db("merge");
     ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
-    ok(
-        &db,
-        &["issue", "add", "--project", "CLI", "--title", "work"],
-    );
+    ok(&db, &["issue", "add", "work", "--project", "CLI"]);
 
-    // Nothing recorded yet and no section written: still a clean 1.
+    // No ## Activity Log section written yet: cat --section is a clean 1.
     assert_eq!(
-        run(&db, &["issue", "show", "CLI-1", "--section", "activity"]).code,
+        run(&db, &["issue", "cat", "CLI-1", "--section", "activity"]).code,
         1
     );
 
     ok_as(&db, "claude", &["issue", "log", "CLI-1", "starting now"]);
-    // A logged note is recorded as well as written to the markdown, so it
-    // appears exactly once and carries its author.
-    let written = ok(&db, &["issue", "show", "CLI-1", "--section", "activity"]);
+    // cat is raw bytes: the written line appears once, unmerged, undecorated.
+    let written = ok(&db, &["issue", "cat", "CLI-1", "--section", "activity"]);
     assert_eq!(written.matches("starting now").count(), 1, "{written}");
-    assert!(written.contains("[claude] starting now"), "{written}");
 
     ok_as(&db, "claude", &["issue", "mv", "CLI-1", "done"]);
-    let merged = ok(&db, &["issue", "show", "CLI-1", "--section", "activity"]);
-    assert!(merged.contains("starting now"), "keeps the prose: {merged}");
+    // The merged per-issue history is `activity --issue`: the logged prose and
+    // the recorded transition, once each, attributed, all history (no window).
+    let evs = events(&db, &["--issue", "CLI-1"]);
+    let logs: Vec<_> = evs.iter().filter(|e| e["kind"] == "log").collect();
+    assert_eq!(logs.len(), 1, "shown once, not once per source: {evs:?}");
+    assert_eq!(logs[0]["message"], "starting now");
+    assert_eq!(logs[0]["actor"], "claude");
     assert!(
-        merged.contains("[claude] backlog → done"),
-        "adds the recorded transition: {merged}"
+        evs.iter()
+            .any(|e| e["kind"] == "status" && e["message"] == "backlog → done"),
+        "the recorded transition is part of the history: {evs:?}"
     );
-    // One chronological list, oldest first.
-    let prose_at = merged.find("starting now").unwrap();
-    let move_at = merged.find("backlog → done").unwrap();
-    assert!(prose_at < move_at, "chronological order: {merged}");
+    assert!(
+        evs.iter().all(|e| e["key"] == "CLI-1"),
+        "--issue scopes to one issue: {evs:?}"
+    );
 }
 
 /// Messages of the recorded entries of one kind, for one issue.
@@ -396,10 +377,9 @@ fn one_issue(tag: &str) -> String {
         &[
             "issue",
             "add",
+            "orig",
             "--project",
             "CLI",
-            "--title",
-            "orig",
             "--priority",
             "low",
         ],
@@ -446,10 +426,7 @@ fn an_edit_that_changes_nothing_records_nothing() {
 #[test]
 fn label_and_relation_changes_are_recorded() {
     let db = one_issue("labels");
-    ok(
-        &db,
-        &["issue", "add", "--project", "CLI", "--title", "other"],
-    );
+    ok(&db, &["issue", "add", "other", "--project", "CLI"]);
     ok(&db, &["issue", "edit", "CLI-1", "--label", "bug"]);
     ok(&db, &["issue", "edit", "CLI-1", "--remove-label", "bug"]);
     ok(&db, &["issue", "edit", "CLI-1", "--blocked-by", "CLI-2"]);
@@ -505,7 +482,7 @@ fn a_logged_note_is_not_reported_twice() {
         "written to markdown *and* recorded, but shown once: {logs:?}"
     );
     // Same in the per-issue view.
-    let view = ok(&db, &["issue", "show", "CLI-1", "--section", "activity"]);
+    let view = ok(&db, &["issue", "cat", "CLI-1", "--section", "activity"]);
     assert_eq!(view.matches("exactly once please").count(), 1, "{view}");
 }
 
@@ -557,10 +534,7 @@ fn plan_ticks_and_promotions_are_recorded_on_both_issues() {
 fn filters_narrow_the_feed() {
     let db = seeded();
     ok(&db, &["project", "add", "LM", "--name", "Loom"]);
-    ok(
-        &db,
-        &["issue", "add", "--project", "LM", "--title", "other"],
-    );
+    ok(&db, &["issue", "add", "other", "--project", "LM"]);
 
     let cli_only = events(&db, &["--project", "CLI"]);
     assert!(

@@ -47,21 +47,26 @@ fn elide(s: &str, max: usize) -> String {
 
 #[derive(clap::Args)]
 pub struct ActivityArgs {
-    /// how far back to look: 4h, 3d, 2w, today, yesterday, 2026-07-25, RFC3339
-    #[arg(long, default_value = "1d")]
-    since: String,
-    /// project key filter
+    /// how far back to look: 4h, 3d, 2w, today, yesterday, 2026-07-25,
+    /// RFC3339 (default: 1d; with --issue: all history)
+    #[arg(long)]
+    since: Option<String>,
+    /// project key filter (default: $CLIBAN_PROJECT; -p '*' = all)
     #[arg(long, short = 'p')]
     project: Option<String>,
     /// milestone name filter
     #[arg(long, short = 'm')]
     milestone: Option<String>,
+    /// one issue's full merged history (recorded events + hand-written
+    /// ## Activity Log lines)
+    #[arg(long)]
+    issue: Option<String>,
     /// include archived issues
     #[arg(long)]
     archived: bool,
-    /// cap the number of events (0 = no cap)
-    #[arg(long, default_value_t = 50)]
-    limit: i64,
+    /// cap the number of events (0 = no cap; default 50, or 0 with --issue)
+    #[arg(long)]
+    limit: Option<i64>,
     /// NDJSON output (one compact JSON object per line)
     #[arg(long)]
     json: bool,
@@ -102,8 +107,19 @@ impl Event {
 }
 
 pub async fn run(db: &Option<String>, a: ActivityArgs) -> CliResult<()> {
-    let since = crate::since::parse(&a.since, "--since")?;
-    let project = a.project.map(|p| p.to_uppercase());
+    // --issue flips the defaults from "the recent board" to "this ticket's
+    // whole story": all history, no cap. Explicit --since/--limit still win.
+    let since_str = a.since.clone().unwrap_or_else(|| {
+        if a.issue.is_some() {
+            "1970-01-01".to_string()
+        } else {
+            "1d".to_string()
+        }
+    });
+    let since = crate::since::parse(&since_str, "--since")?;
+    let limit = a.limit.unwrap_or(if a.issue.is_some() { 0 } else { 50 });
+    let issue_key = a.issue.as_deref().map(str::to_uppercase);
+    let project = crate::scope::project(a.project.clone());
     let store = store_open::open(db).await?;
 
     let (list_project, list_milestone, archived) =
@@ -170,10 +186,13 @@ pub async fn run(db: &Option<String>, a: ActivityArgs) -> CliResult<()> {
             by_issue.get(&issue.id).map(Vec::as_slice).unwrap_or(&[]),
         ));
     }
+    if let Some(k) = &issue_key {
+        events.retain(|e| &e.key == k);
+    }
     // Newest first; ties broken by key so the output is deterministic.
     events.sort_by(|a, b| b.ts.cmp(&a.ts).then_with(|| a.key.cmp(&b.key)));
-    if a.limit > 0 {
-        events.truncate(a.limit as usize);
+    if limit > 0 {
+        events.truncate(limit as usize);
     }
 
     let now = Utc::now();
@@ -184,7 +203,7 @@ pub async fn run(db: &Option<String>, a: ActivityArgs) -> CliResult<()> {
         return Ok(());
     }
     if events.is_empty() {
-        println!("no activity since {}", a.since);
+        println!("no activity since {since_str}");
         return Ok(());
     }
     let key_width = events
@@ -208,7 +227,7 @@ pub async fn run(db: &Option<String>, a: ActivityArgs) -> CliResult<()> {
     eprintln!(
         "— {} event(s) since {} ({})",
         events.len(),
-        a.since,
+        since_str,
         relative(since, now)
     );
     Ok(())

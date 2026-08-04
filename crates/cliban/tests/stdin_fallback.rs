@@ -44,6 +44,7 @@ fn base_cmd(db: &str, args: &[&str]) -> Command {
         .env_remove("CLIBAN_ACTOR")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("CLIBAN_OUTPUT")
+        .env_remove("CLIBAN_PROJECT")
         .args(args);
     cmd
 }
@@ -87,7 +88,8 @@ fn run_piped_stdin(db: &str, args: &[&str], content: &str) -> Run {
 fn ok_null(db: &str, args: &[&str]) -> String {
     let r = run_null_stdin(db, args);
     assert_eq!(
-        r.code, 0,
+        r.code,
+        0,
         "`cliban {}` failed: {}",
         args.join(" "),
         r.stderr
@@ -99,7 +101,7 @@ fn ok_null(db: &str, args: &[&str]) -> String {
 fn seeded(tag: &str) -> String {
     let db = tmp_db(tag);
     ok_null(&db, &["project", "add", "SF", "--name", "Stdin Fallback"]);
-    ok_null(&db, &["issue", "add", "--project", "SF", "--title", "alpha"]);
+    ok_null(&db, &["issue", "add", "alpha", "--project", "SF"]);
     db
 }
 
@@ -110,7 +112,7 @@ fn piped_log_message_comes_from_stdin() {
     let db = seeded("log_pipe");
     let r = run_piped_stdin(&db, &["issue", "log", "SF-1"], "found the frobnicator\n");
     assert_eq!(r.code, 0, "stderr: {}", r.stderr);
-    let activity = ok_null(&db, &["issue", "show", "SF-1", "--section", "activity"]);
+    let activity = ok_null(&db, &["issue", "cat", "SF-1", "--section", "activity"]);
     assert!(
         activity.contains("found the frobnicator"),
         "activity: {activity}"
@@ -133,7 +135,7 @@ fn piped_append_section_text_comes_from_stdin() {
         "- a piped lesson\n",
     );
     assert_eq!(r.code, 0, "stderr: {}", r.stderr);
-    let notes = ok_null(&db, &["issue", "show", "SF-1", "--section", "notes"]);
+    let notes = ok_null(&db, &["issue", "cat", "SF-1", "--section", "notes"]);
     assert!(notes.contains("- a piped lesson"), "notes: {notes}");
 }
 
@@ -146,7 +148,7 @@ fn piped_note_add_body_comes_from_stdin() {
         "the body arrived by pipe\n",
     );
     assert_eq!(r.code, 0, "stderr: {}", r.stderr);
-    let notes = ok_null(&db, &["project", "show", "SF", "--section", "notes"]);
+    let notes = ok_null(&db, &["project", "cat", "SF", "--section", "notes"]);
     assert!(notes.contains("### Piped lesson"), "notes: {notes}");
     assert!(notes.contains("the body arrived by pipe"), "notes: {notes}");
 }
@@ -162,7 +164,7 @@ fn explicit_log_message_beats_piped_stdin() {
         "from the pipe\n",
     );
     assert_eq!(r.code, 0, "stderr: {}", r.stderr);
-    let activity = ok_null(&db, &["issue", "show", "SF-1", "--section", "activity"]);
+    let activity = ok_null(&db, &["issue", "cat", "SF-1", "--section", "activity"]);
     assert!(activity.contains("from the arg"), "activity: {activity}");
     assert!(
         !activity.contains("from the pipe"),
@@ -176,12 +178,19 @@ fn explicit_note_body_beats_piped_stdin() {
     let r = run_piped_stdin(
         &db,
         &[
-            "project", "note", "add", "SF", "--title", "T", "--body", "flag body",
+            "project",
+            "note",
+            "add",
+            "SF",
+            "--title",
+            "T",
+            "--body",
+            "flag body",
         ],
         "pipe body\n",
     );
     assert_eq!(r.code, 0, "stderr: {}", r.stderr);
-    let notes = ok_null(&db, &["project", "show", "SF", "--section", "notes"]);
+    let notes = ok_null(&db, &["project", "cat", "SF", "--section", "notes"]);
     assert!(notes.contains("flag body"), "notes: {notes}");
     assert!(!notes.contains("pipe body"), "notes: {notes}");
 }
@@ -209,7 +218,11 @@ fn empty_pipe_append_section_is_a_clean_validation_error() {
         &["issue", "append-section", "SF-1", "--section", "notes"],
     );
     assert_eq!(r.code, 2, "stdout: {} stderr: {}", r.stdout, r.stderr);
-    assert!(r.stderr.contains("nothing to append"), "stderr: {}", r.stderr);
+    assert!(
+        r.stderr.contains("nothing to append"),
+        "stderr: {}",
+        r.stderr
+    );
 }
 
 #[test]
@@ -219,7 +232,7 @@ fn empty_pipe_note_add_keeps_the_bare_heading_note() {
     let db = seeded("note_empty");
     let r = run_null_stdin(&db, &["project", "note", "add", "SF", "--title", "Bare"]);
     assert_eq!(r.code, 0, "stderr: {}", r.stderr);
-    let notes = ok_null(&db, &["project", "show", "SF", "--section", "notes"]);
+    let notes = ok_null(&db, &["project", "cat", "SF", "--section", "notes"]);
     assert!(notes.contains("### Bare"), "notes: {notes}");
 }
 

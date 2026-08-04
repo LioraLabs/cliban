@@ -27,15 +27,22 @@ use crate::store_open;
 // ---------------------------------------------------------------- args
 
 #[derive(clap::Args)]
-pub struct ImportArgs {
+pub struct LinearArgs {
     #[command(subcommand)]
-    pub cmd: ImportProvider,
+    pub cmd: LinearCmd,
 }
 
+/// The bridge is a noun like any other: `cliban linear <verb>`. A second
+/// tracker would arrive as its own noun (`cliban jira import`), not as a
+/// provider argument.
 #[derive(clap::Subcommand)]
-pub enum ImportProvider {
+pub enum LinearCmd {
     /// Import (or refresh) a Linear issue as a cliban issue
-    Linear(ImportLinearArgs),
+    Import(ImportLinearArgs),
+    /// Push a cliban issue's state and progress to its Linear counterpart
+    Push(PushLinearArgs),
+    /// Refresh every Linear-linked issue on the board in one call
+    Sync(SyncLinearArgs),
 }
 
 #[derive(clap::Args)]
@@ -47,9 +54,9 @@ pub struct ImportLinearArgs {
     /// does not
     #[arg(long, conflicts_with_all = ["key", "link_to"])]
     pub mine: bool,
-    /// cliban project KEY the issue lands in
+    /// cliban project KEY the issue lands in (default: $CLIBAN_PROJECT)
     #[arg(long, short = 'p')]
-    pub project: String,
+    pub project: Option<String>,
     /// Attach the imported issue to this milestone
     #[arg(long, short = 'm')]
     pub milestone: Option<String>,
@@ -61,18 +68,6 @@ pub struct ImportLinearArgs {
     pub dry_run: bool,
     #[arg(long)]
     pub json: bool,
-}
-
-#[derive(clap::Args)]
-pub struct PushArgs {
-    #[command(subcommand)]
-    pub cmd: PushProvider,
-}
-
-#[derive(clap::Subcommand)]
-pub enum PushProvider {
-    /// Push a cliban issue's state and progress to its Linear counterpart
-    Linear(PushLinearArgs),
 }
 
 #[derive(clap::Args)]
@@ -106,20 +101,8 @@ pub struct PushLinearArgs {
 }
 
 #[derive(clap::Args)]
-pub struct SyncArgs {
-    #[command(subcommand)]
-    pub cmd: SyncProvider,
-}
-
-#[derive(clap::Subcommand)]
-pub enum SyncProvider {
-    /// Refresh every Linear-linked issue on the board in one call
-    Linear(SyncLinearArgs),
-}
-
-#[derive(clap::Args)]
 pub struct SyncLinearArgs {
-    /// Only refresh issues in this cliban project
+    /// Only refresh issues in this cliban project (default: $CLIBAN_PROJECT; -p '*' = all)
     #[arg(long, short = 'p')]
     pub project: Option<String>,
     /// Report what would change and write nothing
@@ -171,21 +154,11 @@ impl Writes {
 
 // ---------------------------------------------------------------- dispatch
 
-pub async fn run_import(db: &Option<String>, args: ImportArgs) -> CliResult<()> {
+pub async fn run_linear(db: &Option<String>, args: LinearArgs) -> CliResult<()> {
     match args.cmd {
-        ImportProvider::Linear(a) => import_linear(db, a).await,
-    }
-}
-
-pub async fn run_push(db: &Option<String>, args: PushArgs) -> CliResult<()> {
-    match args.cmd {
-        PushProvider::Linear(a) => push_linear(db, a).await,
-    }
-}
-
-pub async fn run_sync(db: &Option<String>, args: SyncArgs) -> CliResult<()> {
-    match args.cmd {
-        SyncProvider::Linear(a) => sync_linear(db, a).await,
+        LinearCmd::Import(a) => import_linear(db, a).await,
+        LinearCmd::Push(a) => push_linear(db, a).await,
+        LinearCmd::Sync(a) => sync_linear(db, a).await,
     }
 }
 
@@ -202,7 +175,7 @@ async fn import_linear(db: &Option<String>, args: ImportLinearArgs) -> CliResult
         ));
     };
     let (team_key, number) = ops::parse_issue_key(key).map_err(sync_err)?;
-    let project = args.project.to_uppercase();
+    let project = crate::scope::required_project(args.project.clone())?;
 
     let api = cliban_sync::linear::Client::from_env().map_err(sync_err)?;
     let remote = ops::issue_by_key(&api, &team_key, number)
@@ -321,7 +294,7 @@ async fn apply_labels_and_link(
 /// yours-and-current comes through [`import_one`], so a re-run refreshes what
 /// the last run created and the whole verb is safe to run on a loop.
 async fn import_mine(db: &Option<String>, args: ImportLinearArgs) -> CliResult<()> {
-    let project = args.project.to_uppercase();
+    let project = crate::scope::required_project(args.project.clone())?;
 
     let api = cliban_sync::linear::Client::from_env().map_err(sync_err)?;
     let assigned = ops::assigned_to_viewer(&api).await.map_err(sync_err)?;
@@ -411,7 +384,11 @@ async fn import_mine(db: &Option<String>, args: ImportLinearArgs) -> CliResult<(
             })
         );
     } else {
-        let prefix = if args.dry_run { "dry run: mine" } else { "mine" };
+        let prefix = if args.dry_run {
+            "dry run: mine"
+        } else {
+            "mine"
+        };
         println!("{prefix}: {created} created, {refreshed} refreshed, {skipped} skipped");
     }
     Ok(())
@@ -733,7 +710,10 @@ async fn sync_linear(db: &Option<String>, args: SyncLinearArgs) -> CliResult<()>
                 "linear": remote.identifier,
             }));
             if !args.json {
-                println!("dry run: would refresh {} ← {}", issue.key, remote.identifier);
+                println!(
+                    "dry run: would refresh {} ← {}",
+                    issue.key, remote.identifier
+                );
             }
             continue;
         }
@@ -772,7 +752,11 @@ async fn sync_linear(db: &Option<String>, args: SyncLinearArgs) -> CliResult<()>
             })
         );
     } else {
-        let prefix = if args.dry_run { "dry run: sync" } else { "sync" };
+        let prefix = if args.dry_run {
+            "dry run: sync"
+        } else {
+            "sync"
+        };
         println!("{prefix}: {refreshed} refreshed, {skipped} skipped");
     }
     Ok(())
@@ -1201,7 +1185,10 @@ fn report_import_plan(
     let action = match target {
         ImportTarget::Existing(i, _) => format!("refresh {}", i.key),
         ImportTarget::Adopt(i) => format!("adopt {}", i.key),
-        ImportTarget::Create => format!("create a new issue in {}", args.project.to_uppercase()),
+        ImportTarget::Create => format!(
+            "create a new issue in {}",
+            crate::scope::project(args.project.clone()).unwrap_or_default()
+        ),
     };
     if args.json {
         println!(

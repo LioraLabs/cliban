@@ -4,21 +4,21 @@ Two explicit verbs. Nothing syncs in the background, so nothing crosses the
 boundary unless you ask.
 
 ```bash
-cliban import linear ENG-412 --project PROJ            # pull it onto the board
-cliban import linear ENG-412 --project PROJ --dry-run  # see it first
-cliban import linear --mine --project PROJ             # everything assigned to you
-cliban push linear PROJ-42                             # state + progress comment
-cliban push linear PROJ-42 --description               # also mirror into the description
-cliban push linear PROJ-42 --create --team ENG         # no counterpart yet? make one
-cliban sync linear                                     # refresh every linked issue
-cliban sync linear --project PROJ                      # ... in one project only
+cliban linear import ENG-412 --project PROJ            # pull it onto the board
+cliban linear import ENG-412 --project PROJ --dry-run  # see it first
+cliban linear import --mine --project PROJ             # everything assigned to you
+cliban linear push PROJ-42                             # state + progress comment
+cliban linear push PROJ-42 --description               # also mirror into the description
+cliban linear push PROJ-42 --create --team ENG         # no counterpart yet? make one
+cliban linear sync                                     # refresh every linked issue
+cliban linear sync --project PROJ                      # ... in one project only
 ```
 
-**The inbound queue.** `import linear --mine` imports every open Linear issue
+**The inbound queue.** `linear import --mine` imports every open Linear issue
 assigned to the token's viewer: where the issue's team runs cycles, only the
 active cycle counts (the rest is backlog and is reported as skipped); where it
 does not, every open assigned issue is in scope. Already-linked issues are
-refreshed, not duplicated. `sync linear` re-imports every linked issue in one
+refreshed, not duplicated. `linear sync` re-imports every linked issue in one
 call, each under its own link's origin semantics. Both report
 created/refreshed/skipped counts and take `--dry-run` / `--json`.
 
@@ -56,7 +56,7 @@ in-progress. A cancelled Linear issue arrives as `done` **and archived**.
 **Gotchas.**
 
 - `push` on an unlinked issue exits 1. Either `--create`, or adopt an existing
-  pairing with `import linear ENG-412 --project PROJ --link-to PROJ-42`.
+  pairing with `linear import ENG-412 --project PROJ --link-to PROJ-42`.
 - `push` exits 2 if Linear changed since your last sync. Re-import first, or
   `--force` if you know you are the authority.
 - One local issue per Linear issue. A second import refreshes rather than

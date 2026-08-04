@@ -5,27 +5,42 @@ description: Drive the local cliban kanban board via its CLI. Use when the user 
 
 # Using cliban
 
-A terminal-first kanban board built for agents: every read has a `--json`
-form, nothing opens an editor unless asked, and mutations are retry-safe.
+A terminal-first kanban board built for agents. One grammar covers the whole
+surface:
 
-## Traps — read first
+    cliban <noun> <verb> [IDENTITY] [flags]
 
-1. **`--description` / `--description-file` on `edit` REPLACES the whole
-   description**, destroying `## Plan`, `## Activity Log`, everything. Use the
-   narrow tools: `edit --section spec|plan|notes` (one section), `issue log`
-   (append progress), `issue tick` (tick a step), `project note add` (lesson).
-2. **Piped stdout is already JSON** (NDJSON from lists, one pretty object from
-   `show`); a TTY gets tables. `--json`/`--table` force it, `CLIBAN_OUTPUT`
-   pins it. Mutations echo the changed entity as JSON when piped.
-   (`show --section` is the exception: always raw markdown.)
-3. **`--project` / `-p` takes the KEY, not the name** (`-p PROJ`); upcased for
-   you.
-4. **`project add` takes the key positionally** (`project add PROJ --name
-   "..."`); `issue add` instead needs `--project PROJ --title "..."`.
-5. **Time args share one parser** (`--since`, `--updated-since`): `45s`, `4h`,
-   `3d`, `2w`, `today`, `yesterday`, `2026-07-25`, RFC3339. UTC everywhere.
-6. **Statuses are fixed**: `backlog | in-progress | blocked | in-review |
-   done`. Move with `issue mv KEY done` — the verb is `mv`, not `move`.
+- **Nouns**: `project`, `issue`, `milestone`, `label`, `linear`, `activity`
+  (the event feed), `tui` (humans only).
+- **Identity is positional**: `issue show PROJ-42`, `issue add "Fix
+  ordering"`, `milestone edit "v0.1" --status completed`. Milestones are
+  addressed by name (project-scoped); issues by key. A flag-looking title
+  needs the standard `--` escape.
+- **Filters are short flags**: `-p` project KEY, `-s` status, `-m` milestone.
+- **Ambient scope**: `$CLIBAN_PROJECT` (set per-repo via direnv) is the
+  default `-p` everywhere. Explicit `-p KEY` beats it; `-p '*'` deliberately
+  widens to every project. Commands that need a project error with both
+  spellings when neither is set. The env var never fills positional identity
+  — only the `-p` flag.
+- **Three viewers, one job each**: `ls` = many lean rows; `show` = one
+  complete entity; `cat` = raw markdown bytes (whole description or
+  `--section X`), never formatted.
+- **Output follows the reader**: piped stdout → JSON/NDJSON, TTY → tables;
+  `--json`/`--table` force it, `$CLIBAN_OUTPUT` pins it. Mutations echo the
+  changed entity as JSON when piped, confirm in one line on a TTY. `cat` is
+  the exception: always bytes, every mode.
+
+## Traps
+
+1. **`--description`/`--description-file` on `edit` REPLACES the whole
+   description**, destroying `## Plan`, `## Activity Log`, everything. Use
+   the narrow tools: `edit --section spec|plan|notes` (one section),
+   `issue log` (append progress), `issue tick` (tick a step),
+   `project note add` (lesson).
+2. **Statuses are fixed**: `backlog | in-progress | blocked | in-review |
+   done`. Move with `issue mv KEY done` — the verb is `mv`.
+3. **Time args share one parser** (`--since`, `--updated-since`): `45s`,
+   `4h`, `3d`, `2w`, `today`, `yesterday`, `2026-07-25`, RFC3339. All UTC.
 
 ## Protocol
 
@@ -46,44 +61,38 @@ cliban issue mv PROJ-42 done --note "merged as abc1234"
 - Promote discovered scope instead of widening the ticket:
   `cliban issue promote PROJ-42 --task 1 --step 3 --title "..."` (`--as
   sub-issue|related`), or file a new issue with `--blocked-by`.
-- Before starting: `cliban activity --since 3d -p PROJ` and
-  `cliban issue show PROJ-42 --section activity` — what already happened,
-  including approaches already rejected.
+- Before starting: `cliban activity --since 3d` (the board lately) and
+  `cliban activity --issue PROJ-42` (one ticket's whole merged history) —
+  including approaches already tried and rejected.
 - **Retry-safe:** re-running a mutation whose state already holds is a no-op
   that says so (`"noop": true` in JSON) and writes nothing. Retry freely
   after timeouts; only genuinely wrong targets fail.
 
 ## Command map
 
-`--db PATH` is global. Filter shorts everywhere: `-p` project, `-s` status,
-`-m` milestone.
+`--db PATH` is global; `$CLIBAN_DB` and `$CLIBAN_PROJECT` come from the
+environment.
 
 | Command | Purpose |
 |---|---|
-| `project add\|ls\|show\|edit\|search\|archive\|unarchive` | projects + project memory |
-| `issue add\|ls\|show\|edit\|mv` | the core loop |
-| `issue cat` | raw stored description, never formatted |
-| `issue cp` | copy an issue's shape (plan reset) — never its history |
+| `project add\|ls\|show\|cat\|edit\|search\|archive\|unarchive` | projects + project memory |
+| `project note add` | append one `###` lesson under project `## Notes` |
+| `issue add\|ls\|show\|cat\|edit\|mv` | the core loop |
 | `issue log\|tick\|promote` | plan + activity mechanics |
 | `issue append-section` | atomic append to the end of one H2 section |
 | `issue lint` | validate description structure before `tick` bites |
-| `issue import` | bulk create from NDJSON |
-| `issue blocked\|ready` | what's stuck / what's takeable right now |
 | `issue claim\|release` | session ownership on a shared board |
 | `issue current` | the issue for the current git branch |
+| `issue cp` | copy an issue's shape (plan reset) — never its history |
+| `issue import` | bulk create from NDJSON |
 | `issue archive\|unarchive\|archive-done` | keep the board clean |
-| `activity` | what changed since \<time\>, newest first |
-| `project note add` | append one `###` lesson under project `## Notes` |
+| `activity` | what changed since \<time\>; `--issue KEY` = one full history |
 | `milestone add\|ls\|show\|edit\|waves` | milestones (`waves` = dependency order) |
-| `label add\|ls\|rm` | labels |
-| `import\|push\|sync linear` | Linear bridge — see references/linear-bridge.md |
-| `tui` | interactive board (needs a TTY — not for agents) |
+| `label add\|ls\|rm` | labels (`label rm` deletes — labels have no history) |
+| `linear import\|push\|sync` | Linear bridge — see references/linear-bridge.md |
 
-Bare `cliban ls|mv|rm|show|log|tick|cat` are hidden synonyms of
-`issue <verb>`; GitHub reflexes `issue close|reopen|comment|delete` exist too
-(`delete`/`rm` archive — nothing ever deletes). Aliases name their canonical
-form and add `"canonical"` to the JSON echo; ignore unknown JSON fields.
-Prefer canonical forms in anything you write down.
+There is no delete: archiving is the terminal state, reversible, and keeps
+the key, relations, and recorded past.
 
 ## Vocabulary
 
@@ -91,70 +100,69 @@ Prefer canonical forms in anything you write down.
   `open|completed|cancelled` (cancelled = archived; no separate flag).
 - Keys are `PROJ-42`; project keys uppercase, 2–10 chars. Sub-issue depth
   max 2. Relations: `blocks`, `blocked_by`, `related_to`.
-- **Milestones are addressed by name.** Only `milestone show` takes the name
-  positionally; `add`/`edit`/`rm` require `--name`.
 
 ## JSON shapes
 
 **List rows are lean; single-entity output is complete.**
 
-- **Lean** (`issue ls`/`blocked`/`ready`, `project ls`, `milestone ls`,
-  issues under `milestone show --with-issues`): a field that is null, empty,
-  or the default is **absent** — no `"milestone":null`, no `"labels":[]`, no
-  `"archived":false`. Also never in list rows: `description`,
-  `git_branch_name`, `position`, `created_at`. Second-precision timestamps.
-  Read with `.get()` / jq; never destructure by fixed keys.
+- **Lean** (`issue ls`, `project ls`, `milestone ls`): a field that is null,
+  empty, or the default is **absent** — no `"milestone":null`, no
+  `"labels":[]`, no `"archived":false`. Also never in list rows:
+  `description`, `git_branch_name`, `position`, `created_at`.
+  Second-precision timestamps. Read with `.get()` / jq; never destructure by
+  fixed keys.
 - **Full** (`issue show`, `issue current`, every mutation echo, `--full` on
-  any list): all fields, optional ones `null`, microsecond timestamps. Fields:
-  key, title, description, status, priority, position, archived, milestone,
-  parent, due_date, labels, relations `[{type,target}]`, git_branch_name,
-  created_at, updated_at, plus completed_at/claimed_by when set.
+  any list): all fields, optional ones `null`, microsecond timestamps.
+  Fields: key, title, description, status, priority, position, archived,
+  milestone, parent, due_date, labels, relations `[{type,target}]`,
+  git_branch_name, created_at, updated_at, plus completed_at/claimed_by when
+  set.
 
-The bodies are the payload (an unscoped ls with descriptions ran to
-megabytes): use `ls` to find keys, `show` to read one entity, `--full` only
-deliberately and never without `-p`.
+The bodies are the payload: `ls` to find keys, `show` to read one entity,
+`--full` only deliberately and never without a project scope.
 
 ## Reads
 
 ```bash
-cliban activity --since 1d -p PROJ         # merged event feed: created/completed/updated/status/edit/plan/archive/log
-cliban issue ls -p PROJ -s in-progress
-cliban issue ls -p PROJ -m "v0.1" --sort priority     # sort: priority|created|updated|position[:asc|desc]
-cliban issue ls -p PROJ --search "ordering" --limit 20  # fuzzy; adds score; default limit 50
-cliban issue ls -p PROJ --label bug --no-subs --parent PROJ-12 --updated-since 2d
-cliban issue ready -p PROJ                 # takeable: backlog, unblocked, unclaimed
-cliban issue blocked -p PROJ
+cliban activity --since 1d                 # merged event feed: created/completed/updated/status/edit/plan/archive/log
+cliban activity --issue PROJ-42            # one issue's complete history (all time, no cap)
+cliban issue ls -s in-progress
+cliban issue ls --ready                    # takeable: backlog, unblocked, unclaimed
+cliban issue ls --blocked                  # at least one open blocker
+cliban issue ls -m "v0.1" --sort priority  # sort: priority|created|updated|position[:asc|desc]
+cliban issue ls --search "ordering" --limit 20   # fuzzy; adds score; default limit 50
+cliban issue ls --label bug --no-subs --parent PROJ-12 --updated-since 2d
 cliban issue show PROJ-42
-cliban issue show PROJ-42 --section plan   # spec|plan|activity|notes or any verbatim H2; raw md
 cliban issue cat PROJ-42                   # whole description, verbatim bytes
+cliban issue cat PROJ-42 --section plan    # one section's body: spec|plan|activity|notes or any verbatim H2
 cliban issue current                       # branch-matched issue; exit 1 = none (an answer, not a failure)
-cliban milestone ls                        # unscoped = per-project counts only ({milestones,open,project})
-cliban milestone ls -p PROJ --stats        # rows + done_count/last_activity; detail flags need -p
-cliban milestone show "v0.1" -p PROJ --with-issues
-cliban milestone waves -p PROJ "v0.1"      # {"waves":[[...],[...]],"done":[...],"external_blocked":[...]}
+cliban milestone ls                        # in scope: lean rows; unscoped: per-project counts only
+cliban milestone ls --stats                # + done_count/last_activity (needs a project scope)
+cliban milestone show "v0.1"
+cliban milestone waves "v0.1"              # {"waves":[[...],[...]],"done":[...],"external_blocked":[...]}
 ```
 
-Scope every list with `-p`; unscoped `issue ls` walks every project on the
-machine. `--archived` includes archived issues (excluded by default).
+All of these assume `$CLIBAN_PROJECT`; add `-p KEY` to point elsewhere,
+`-p '*'` to span every project. `--archived` includes archived issues.
 `activity` fields: `ts,key,project,kind,title` + `message/actor/milestone`
-when set; state events carry no message, recorded ones put the detail there.
-Wave N of `waves` is safe to dispatch once waves 1..N-1 are done;
+when set. Wave N of `waves` is dispatchable once waves 1..N-1 are done;
 `external_blocked` is gated by open work outside the milestone.
 
 ## Writes
 
 ```bash
-cliban issue add -p PROJ --title "..." --description "..." --priority high \
-  --label bug --label ui --milestone "v0.1" --due 2026-06-01 \
-  --parent PROJ-12 --blocked-by PROJ-3 --related-to PROJ-7    # all optional but title; --status too
+cliban issue add "Fix the column ordering" --description "..." --priority high \
+  --label bug --label ui -m "v0.1" --due 2026-06-01 -s backlog \
+  --parent PROJ-12 --blocked-by PROJ-3 --related-to PROJ-7   # everything but the title optional
 cliban issue edit PROJ-12 --priority urgent --label perf --remove-label stale
-cliban issue edit PROJ-12 --milestone "v0.1"      # or --clear-milestone / --clear-parent
+cliban issue edit PROJ-12 -m "v0.1"               # or --clear-milestone / --clear-parent
 cliban issue edit PROJ-12 --blocks PROJ-9         # or --blocked-by / --related-to / --remove-relation
-cliban issue cp PROJ-12 --title "Q3 edition"      # copies title/Spec/Plan(reset)/Notes/labels/priority; never history
-cliban issue import ./items.ndjson                # lines: {project,title,[description,status,priority,milestone,parent,labels]}; '-' = stdin; --project fills project
-cliban label add bug -p PROJ
-cliban milestone add -p PROJ --name "v0.1" --target 2026-06-01
-cliban milestone edit -p PROJ --name v0.1 --status completed   # or --rename / --target / --clear-target
+cliban issue edit PROJ-12 --title "Renamed"
+cliban issue cp PROJ-12 --title "Q3 edition"      # copies title/Spec/Plan(reset)/Notes/labels/priority
+cliban issue import ./items.ndjson                # lines: {project,title,[description,status,priority,milestone,parent,labels]}; '-' = stdin
+cliban label add bug
+cliban milestone add "v0.1" --target 2026-06-01
+cliban milestone edit "v0.1" --status completed   # or --rename / --target / --clear-target
 cliban project add PROJ --name "Cliban" --description "..."
 ```
 
@@ -197,30 +205,27 @@ Durable lessons live under `## Notes` on the *project*, one `###` per lesson
 
 ```bash
 cliban project search PROJ "sqlite wal" --limit 5   # NDJSON {project,heading,content,score}; search before loading
-cliban project show PROJ --section notes
+cliban project cat PROJ --section notes
 cliban project note add PROJ --title "cargo test needs --test-threads=1" --body - <<'EOF'
 Fixtures share a tempdir; parallel runs corrupt it.
 EOF
 ```
 
-## Archiving — there is no delete
+## Archiving
 
 ```bash
 cliban issue archive PROJ-12              # reversible: unarchive; key/history kept
-cliban issue archive-done -p PROJ         # sweep the done column; --auto honors project policy
+cliban issue archive-done                 # sweep the done column; --auto honors project policy
 cliban project edit PROJ --auto-archive-done-after 7d   # 0 disables
 cliban project archive KEY
-cliban milestone edit -p PROJ --name v0.1 --status cancelled
+cliban milestone edit "v0.1" --status cancelled
 ```
-
-`issue rm` / `project rm` archive and name the undo; `milestone rm` cancels.
-Only `label rm` truly deletes (labels have no history).
 
 ## Exit codes
 
 `0` ok · `1` not found (also: no section, no branch-matched issue) ·
-`2` validation (bad status, bad flag, broken plan structure, stale CAS) ·
-`3` internal/db error.
+`2` validation (bad status, bad flag, missing scope, broken plan structure,
+stale CAS) · `3` internal/db error.
 
 DB: `$XDG_DATA_HOME/cliban/cliban.db` (fallback `~/.local/share/...`);
 override `--db` / `$CLIBAN_DB`.
@@ -232,5 +237,5 @@ override `--db` / `$CLIBAN_DB`.
 - Don't note progress by rewriting descriptions (trap 1); don't log narration.
 - Don't create placeholder issues as memory — `project note add` + `project search`.
 - Don't start shared work unclaimed; don't finish without moving the ticket.
-- Don't invent flags (no `--key`, no `issue move`, no `--all`) — on rejection
-  run `cliban <cmd> --help` once instead of guessing again.
+- Don't invent flags or verbs — on rejection run `cliban <cmd> --help` once
+  instead of guessing again.

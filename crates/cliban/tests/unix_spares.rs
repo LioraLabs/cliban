@@ -45,6 +45,7 @@ fn base_cmd(db: &str, args: &[&str]) -> Command {
         .env_remove("CLIBAN_ACTOR")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("CLIBAN_OUTPUT")
+        .env_remove("CLIBAN_PROJECT")
         .args(args);
     cmd
 }
@@ -88,7 +89,8 @@ fn run_piped_stdin(db: &str, args: &[&str], content: &str) -> Run {
 fn ok(db: &str, args: &[&str]) -> String {
     let r = run(db, args);
     assert_eq!(
-        r.code, 0,
+        r.code,
+        0,
         "`cliban {}` failed: {}",
         args.join(" "),
         r.stderr
@@ -96,7 +98,8 @@ fn ok(db: &str, args: &[&str]) -> String {
     r.stdout
 }
 
-const DESC: &str = "## Spec\n\nspare verbs\n\n## Plan\n\n### Task 1: t\n\n- [ ] **Step 1: s** — do\n\n## Notes\n";
+const DESC: &str =
+    "## Spec\n\nspare verbs\n\n## Plan\n\n### Task 1: t\n\n- [ ] **Step 1: s** — do\n\n## Notes\n";
 
 /// A board with one project and one issue carrying a full description.
 fn seeded(tag: &str) -> String {
@@ -107,10 +110,9 @@ fn seeded(tag: &str) -> String {
         &[
             "issue",
             "add",
+            "alpha",
             "--project",
             "UX",
-            "--title",
-            "alpha",
             "--description",
             DESC,
         ],
@@ -134,12 +136,17 @@ fn assert_same(canonical: &Run, alias: &Run, what: &str) {
 fn top_level_reads_are_byte_identical_to_issue_reads() {
     let db = seeded("reads");
     for (canonical, alias) in [
+        (vec!["issue", "ls", "--json"], vec!["ls", "--json"]),
         (
-            vec!["issue", "ls", "--json"],
-            vec!["ls", "--json"],
-        ),
-        (
-            vec!["issue", "ls", "--project", "UX", "--status", "backlog", "--table"],
+            vec![
+                "issue",
+                "ls",
+                "--project",
+                "UX",
+                "--status",
+                "backlog",
+                "--table",
+            ],
             vec!["ls", "--project", "UX", "--status", "backlog", "--table"],
         ),
         (
@@ -147,13 +154,10 @@ fn top_level_reads_are_byte_identical_to_issue_reads() {
             vec!["show", "UX-1", "--json"],
         ),
         (
-            vec!["issue", "show", "UX-1", "--section", "spec"],
-            vec!["show", "UX-1", "--section", "spec"],
+            vec!["issue", "cat", "UX-1", "--section", "spec"],
+            vec!["cat", "UX-1", "--section", "spec"],
         ),
-        (
-            vec!["issue", "cat", "UX-1"],
-            vec!["cat", "UX-1"],
-        ),
+        (vec!["issue", "cat", "UX-1"], vec!["cat", "UX-1"]),
     ] {
         let c = run(&db, &canonical);
         let a = run(&db, &alias);
@@ -173,7 +177,10 @@ fn top_level_mutations_print_the_exact_canonical_confirmations() {
     let r = run(&db, &["mv", "UX-1", "in-progress", "--table"]);
     assert_eq!(r.stdout, "UX-1 already in-progress (nothing to do)\n");
     // tick
-    let r = run(&db, &["tick", "UX-1", "--task", "1", "--step", "1", "--table"]);
+    let r = run(
+        &db,
+        &["tick", "UX-1", "--task", "1", "--step", "1", "--table"],
+    );
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert_eq!(r.stdout, "ticked UX-1 Task 1 Step 1\n");
     // log
@@ -314,9 +321,16 @@ fn close_note_lands_on_the_timeline_like_mv_note() {
     let db = seeded("close_note");
     ok(
         &db,
-        &["issue", "close", "UX-1", "--note", "shipped in v2", "--table"],
+        &[
+            "issue",
+            "close",
+            "UX-1",
+            "--note",
+            "shipped in v2",
+            "--table",
+        ],
     );
-    let activity = ok(&db, &["issue", "show", "UX-1", "--section", "activity"]);
+    let activity = ok(&db, &["activity", "--issue", "UX-1", "--table"]);
     assert!(activity.contains("shipped in v2"), "activity: {activity}");
 }
 
@@ -346,7 +360,7 @@ fn comment_is_log_with_a_teaching_line() {
     let r = run(&db, &["issue", "comment", "UX-1", "looks right", "--table"]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert_eq!(r.stdout, "commented UX-1 (log): looks right\n");
-    let activity = ok(&db, &["issue", "show", "UX-1", "--section", "activity"]);
+    let activity = ok(&db, &["issue", "cat", "UX-1", "--section", "activity"]);
     assert!(activity.contains("looks right"), "activity: {activity}");
 }
 
@@ -356,7 +370,7 @@ fn comment_inherits_the_stdin_fallback() {
     let db = seeded("comment_pipe");
     let r = run_piped_stdin(&db, &["issue", "comment", "UX-1"], "from the pipe\n");
     assert_eq!(r.code, 0, "{}", r.stderr);
-    let activity = ok(&db, &["issue", "show", "UX-1", "--section", "activity"]);
+    let activity = ok(&db, &["issue", "cat", "UX-1", "--section", "activity"]);
     assert!(activity.contains("from the pipe"), "activity: {activity}");
     // Empty pipe keeps log's fast validation error, byte-identically.
     let c = run(&db, &["issue", "log", "UX-1"]);

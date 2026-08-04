@@ -327,7 +327,10 @@ fn is_issue_key_shaped(s: &str) -> bool {
     };
     let (project, seq) = (&s[..idx], &s[idx + 1..]);
     !project.is_empty()
-        && project.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && project
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
         && project.chars().all(|c| c.is_ascii_alphanumeric())
         && !seq.is_empty()
         && seq.chars().all(|c| c.is_ascii_digit())

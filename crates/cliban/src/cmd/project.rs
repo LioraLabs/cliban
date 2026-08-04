@@ -51,12 +51,18 @@ pub enum ProjectCmd {
     Show {
         key: String,
         #[arg(long)]
-        section: Option<String>,
-        #[arg(long)]
         json: bool,
         /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
         #[arg(long, conflicts_with = "json")]
         table: bool,
+    },
+    /// Print the raw description exactly as stored — never formatted
+    Cat {
+        key: String,
+        /// print only one section's body: spec|plan|activity|notes, or a
+        /// verbatim H2 anchor
+        #[arg(long)]
+        section: Option<String>,
     },
     /// Fuzzy-search Markdown subsections in a project description
     Search {
@@ -187,12 +193,8 @@ pub async fn run(db: &Option<String>, args: ProjectArgs) -> CliResult<()> {
             )
             .await
         }
-        ProjectCmd::Show {
-            key,
-            section,
-            json,
-            table,
-        } => show(db, key, section, json, table).await,
+        ProjectCmd::Show { key, json, table } => show(db, key, json, table).await,
+        ProjectCmd::Cat { key, section } => cat(db, key, section).await,
         ProjectCmd::Search {
             key,
             query,
@@ -368,36 +370,35 @@ async fn ls(
     Ok(())
 }
 
-async fn show(
-    db: &Option<String>,
-    key: String,
-    section: Option<String>,
-    json: bool,
-    table: bool,
-) -> CliResult<()> {
+async fn show(db: &Option<String>, key: String, json: bool, table: bool) -> CliResult<()> {
     let key = key.to_uppercase();
     let store = store_open::open(db).await?;
     let p = store
         .call(move |conn| projects::fetch_by_key(conn, &key))
         .await?;
-    if let Some(section) = section {
-        // The section content IS the machine format: raw markdown always,
-        // regardless of $CLIBAN_OUTPUT or piping. Only the explicit --json
-        // flag is an error here.
-        if json {
-            return Err(CliError::validation(
-                "--section and --json are mutually exclusive",
-            ));
-        }
-        let body = description_section(&p.description, &section)?;
-        print!("{body}");
-        return Ok(());
-    }
     if crate::output::mode(json, table).is_json() {
         let v = project_json(&p);
         println!("{}", serde_json::to_string_pretty(&v).unwrap());
     } else {
         println!("{} — {}\n{}", p.key, p.name, p.description);
+    }
+    Ok(())
+}
+
+/// `project cat`: the same bytes-only contract as `issue cat` — the whole
+/// description, or one section's body, verbatim in every mode.
+async fn cat(db: &Option<String>, key: String, section: Option<String>) -> CliResult<()> {
+    let key = key.to_uppercase();
+    let store = store_open::open(db).await?;
+    let p = store
+        .call(move |conn| projects::fetch_by_key(conn, &key))
+        .await?;
+    match section {
+        Some(section) => {
+            let body = description_section(&p.description, &section)?;
+            print!("{body}");
+        }
+        None => print!("{}", p.description),
     }
     Ok(())
 }

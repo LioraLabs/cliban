@@ -24,7 +24,7 @@ Implementation plans are deliberately not git-tracked. ADRs deliberately are.
 ## When a skill says "publish to the issue tracker"
 
 ```bash
-cliban issue add --project CLI --title "<title>" --label <bug|feature|refactor|chore> \
+cliban issue add "<title>" --project CLI --label <bug|feature|refactor|chore> \
   --description-file - --json <<'EOF'
 ## Spec
 
@@ -36,7 +36,7 @@ EOF
 
 ```bash
 cliban issue show KEY --json                    # whole issue
-cliban issue show KEY --section spec|plan|activity|notes
+cliban issue cat KEY --section spec|plan|activity|notes
 cliban issue current --json                     # issue for the current branch
 ```
 

@@ -29,6 +29,7 @@ fn run(db: &str, args: &[&str]) -> (String, String, i32) {
         .env_remove("CLIBAN_DB")
         .env_remove("XDG_DATA_HOME")
         .env_remove("CLIBAN_OUTPUT")
+        .env_remove("CLIBAN_PROJECT")
         .args(args)
         .output()
         .expect("run cliban");
@@ -43,8 +44,8 @@ fn seeded() -> String {
     let db = tmp_db("board");
     for args in [
         vec!["project", "add", "CLI", "--name", "Cliban"],
-        vec!["milestone", "add", "--project", "CLI", "--name", "v1"],
-        vec!["issue", "add", "--project", "CLI", "--title", "keep me"],
+        vec!["milestone", "add", "v1", "--project", "CLI"],
+        vec!["issue", "add", "keep me", "--project", "CLI"],
     ] {
         assert_eq!(run(&db, &args).2, 0, "seed failed: {args:?}");
     }
@@ -58,7 +59,7 @@ fn rm_archives_and_says_so_rather_than_refusing() {
         (vec!["issue", "rm", "CLI-1"], "archived CLI-1"),
         (vec!["project", "rm", "CLI"], "archived project CLI"),
         (
-            vec!["milestone", "rm", "--project", "CLI", "--name", "v1"],
+            vec!["milestone", "rm", "v1", "--project", "CLI"],
             "cancelled milestone v1",
         ),
     ] {
@@ -84,10 +85,7 @@ fn rm_archives_rather_than_destroying() {
     let db = seeded();
     run(&db, &["issue", "rm", "CLI-1"]);
     run(&db, &["project", "rm", "CLI"]);
-    run(
-        &db,
-        &["milestone", "rm", "--project", "CLI", "--name", "v1"],
-    );
+    run(&db, &["milestone", "rm", "v1", "--project", "CLI"]);
 
     // Every row is still there, just archived/cancelled.
     let issue = run(&db, &["issue", "show", "CLI-1", "--json"]).0;

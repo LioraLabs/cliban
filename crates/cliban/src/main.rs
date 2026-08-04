@@ -7,6 +7,7 @@ mod audit;
 mod errors;
 mod lint;
 mod output;
+mod scope;
 mod search;
 mod since;
 mod stdin_input;
@@ -40,15 +41,9 @@ enum Command {
     Activity(cmd::activity::ActivityArgs),
     /// Manage milestones
     Milestone(cmd::milestone::MilestoneArgs),
-    /// Import an issue from an external tracker
+    /// The Linear bridge: import, push, sync
     #[cfg(feature = "linear")]
-    Import(cmd::sync::ImportArgs),
-    /// Push a cliban issue back to an external tracker
-    #[cfg(feature = "linear")]
-    Push(cmd::sync::PushArgs),
-    /// Refresh every linked issue from an external tracker in one call
-    #[cfg(feature = "linear")]
-    Sync(cmd::sync::SyncArgs),
+    Linear(cmd::sync::LinearArgs),
 
     // ------------------------------------------------------------------
     // Unix spares: the issue is cliban's default noun, so the bare verbs
@@ -156,11 +151,7 @@ async fn run(cli: Cli) -> errors::CliResult<()> {
         Some(Command::Activity(args)) => cmd::activity::run(&cli.db, args).await,
         Some(Command::Milestone(args)) => cmd::milestone::run(&cli.db, args).await,
         #[cfg(feature = "linear")]
-        Some(Command::Import(args)) => cmd::sync::run_import(&cli.db, args).await,
-        #[cfg(feature = "linear")]
-        Some(Command::Push(args)) => cmd::sync::run_push(&cli.db, args).await,
-        #[cfg(feature = "linear")]
-        Some(Command::Sync(args)) => cmd::sync::run_sync(&cli.db, args).await,
+        Some(Command::Linear(args)) => cmd::sync::run_linear(&cli.db, args).await,
         Some(Command::Ls(a)) => {
             cmd::issue::run(&cli.db, issue_default(cmd::issue::IssueCmd::Ls(a))).await
         }

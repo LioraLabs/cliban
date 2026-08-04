@@ -2,7 +2,7 @@
 set -u
 DB="$1"; fail=0
 
-notes=$(cliban --db "$DB" project show ACME --section notes 2>/dev/null)
+notes=$(cliban --db "$DB" project cat ACME --section notes 2>/dev/null)
 
 # The lesson landed as a subsection in project Notes
 printf '%s' "$notes" | grep -qi 'test-threads' \
