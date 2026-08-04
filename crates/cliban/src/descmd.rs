@@ -53,6 +53,24 @@ pub fn find_task(plan_body: &str, n: i32) -> (usize, usize, bool) {
     }
 }
 
+/// Number of `### Task N:` headings inside `## Plan` — what lets `tick` and
+/// `promote` infer `--task` when the plan has exactly one.
+pub fn count_tasks(desc: &str) -> usize {
+    let (start, end, ok) = find_section(desc, "Plan");
+    if !ok {
+        return 0;
+    }
+    desc[start..end]
+        .lines()
+        .filter(|l| {
+            let t = l.trim_end();
+            t.strip_prefix("### Task ")
+                .and_then(|rest| rest.split(':').next())
+                .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        })
+        .count()
+}
+
 /// One bite-sized step line in a Task body.
 pub struct Step {
     /// 1-based step index within the task; reserved for future step-level
@@ -321,7 +339,7 @@ fn strip_promotion_suffix(line: &str) -> String {
 
 /// `PROJECT-N`: letters/digits (starting with a letter) before the last dash,
 /// a positive integer after it.
-fn is_issue_key_shaped(s: &str) -> bool {
+pub fn is_issue_key_shaped(s: &str) -> bool {
     let Some(idx) = s.rfind('-') else {
         return false;
     };

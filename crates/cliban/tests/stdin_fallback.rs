@@ -100,7 +100,7 @@ fn ok_null(db: &str, args: &[&str]) -> String {
 /// A board with one project and one issue.
 fn seeded(tag: &str) -> String {
     let db = tmp_db(tag);
-    ok_null(&db, &["project", "add", "SF", "--name", "Stdin Fallback"]);
+    ok_null(&db, &["project", "add", "SF", "Stdin Fallback"]);
     ok_null(&db, &["issue", "add", "alpha", "--project", "SF"]);
     db
 }
@@ -144,7 +144,7 @@ fn piped_note_add_body_comes_from_stdin() {
     let db = seeded("note_pipe");
     let r = run_piped_stdin(
         &db,
-        &["project", "note", "add", "SF", "--title", "Piped lesson"],
+        &["project", "note", "add", "SF", "Piped lesson"],
         "the body arrived by pipe\n",
     );
     assert_eq!(r.code, 0, "stderr: {}", r.stderr);
@@ -182,7 +182,6 @@ fn explicit_note_body_beats_piped_stdin() {
             "note",
             "add",
             "SF",
-            "--title",
             "T",
             "--body",
             "flag body",
@@ -230,7 +229,7 @@ fn empty_pipe_note_add_keeps_the_bare_heading_note() {
     // Body is optional for project notes: an empty pipe means "no body",
     // exactly like today's scripted `note add` with stdin at /dev/null.
     let db = seeded("note_empty");
-    let r = run_null_stdin(&db, &["project", "note", "add", "SF", "--title", "Bare"]);
+    let r = run_null_stdin(&db, &["project", "note", "add", "SF", "Bare"]);
     assert_eq!(r.code, 0, "stderr: {}", r.stderr);
     let notes = ok_null(&db, &["project", "cat", "SF", "--section", "notes"]);
     assert!(notes.contains("### Bare"), "notes: {notes}");

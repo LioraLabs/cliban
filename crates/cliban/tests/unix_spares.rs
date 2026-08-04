@@ -104,7 +104,7 @@ const DESC: &str =
 /// A board with one project and one issue carrying a full description.
 fn seeded(tag: &str) -> String {
     let db = tmp_db(tag);
-    ok(&db, &["project", "add", "UX", "--name", "Unix Spares"]);
+    ok(&db, &["project", "add", "UX", "Unix Spares"]);
     ok(
         &db,
         &[

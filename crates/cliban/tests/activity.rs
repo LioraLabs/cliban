@@ -65,7 +65,7 @@ fn ok(db: &str, args: &[&str]) -> String {
 /// A board with one created issue, one moved to done, and one logged note.
 fn seeded() -> String {
     let db = tmp_db("feed");
-    ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
+    ok(&db, &["project", "add", "CLI", "Cliban"]);
     ok(&db, &["issue", "add", "alpha", "--project", "CLI"]);
     ok(&db, &["issue", "add", "beta", "--project", "CLI"]);
     ok(&db, &["issue", "mv", "CLI-2", "done"]);
@@ -179,7 +179,7 @@ fn an_old_window_reports_nothing_rather_than_everything() {
 #[test]
 fn an_issue_created_and_finished_in_the_window_reports_both() {
     let db = tmp_db("both");
-    ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
+    ok(&db, &["project", "add", "CLI", "Cliban"]);
     ok(&db, &["issue", "add", "quick", "--project", "CLI"]);
     ok(&db, &["issue", "mv", "CLI-1", "done"]);
     let k = kinds(&events(&db, &[]));
@@ -192,7 +192,7 @@ fn an_issue_created_and_finished_in_the_window_reports_both() {
 #[test]
 fn a_move_records_its_transition_without_being_asked() {
     let db = tmp_db("auto");
-    ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
+    ok(&db, &["project", "add", "CLI", "Cliban"]);
     ok(&db, &["issue", "add", "work", "--project", "CLI"]);
     ok(&db, &["issue", "mv", "CLI-1", "in-progress"]);
     ok(&db, &["issue", "mv", "CLI-1", "in-review"]);
@@ -215,7 +215,7 @@ fn a_move_records_its_transition_without_being_asked() {
 #[test]
 fn a_note_records_the_why_alongside_the_transition() {
     let db = tmp_db("note");
-    ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
+    ok(&db, &["project", "add", "CLI", "Cliban"]);
     ok(&db, &["issue", "add", "work", "--project", "CLI"]);
     ok(
         &db,
@@ -239,7 +239,7 @@ fn a_note_records_the_why_alongside_the_transition() {
 #[test]
 fn cliban_actor_attributes_recorded_entries() {
     let db = tmp_db("actor");
-    ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
+    ok(&db, &["project", "add", "CLI", "Cliban"]);
     ok(&db, &["issue", "add", "work", "--project", "CLI"]);
     ok_as(&db, "claude", &["issue", "mv", "CLI-1", "in-progress"]);
     ok_as(&db, "alex", &["issue", "mv", "CLI-1", "done"]);
@@ -264,7 +264,7 @@ fn cliban_actor_attributes_recorded_entries() {
 #[test]
 fn ambient_claude_session_attributes_when_no_actor_is_set() {
     let db = tmp_db("session_actor");
-    ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
+    ok(&db, &["project", "add", "CLI", "Cliban"]);
     ok(&db, &["issue", "add", "work", "--project", "CLI"]);
 
     // No CLIBAN_ACTOR, but a Claude Code session in the environment: the
@@ -311,7 +311,7 @@ fn ambient_claude_session_attributes_when_no_actor_is_set() {
 #[test]
 fn archiving_is_recorded_too() {
     let db = tmp_db("arch");
-    ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
+    ok(&db, &["project", "add", "CLI", "Cliban"]);
     ok(&db, &["issue", "add", "work", "--project", "CLI"]);
     ok(&db, &["issue", "archive", "CLI-1"]);
     ok(&db, &["issue", "unarchive", "CLI-1"]);
@@ -327,7 +327,7 @@ fn archiving_is_recorded_too() {
 #[test]
 fn issue_history_merges_written_prose_with_recorded_transitions() {
     let db = tmp_db("merge");
-    ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
+    ok(&db, &["project", "add", "CLI", "Cliban"]);
     ok(&db, &["issue", "add", "work", "--project", "CLI"]);
 
     // No ## Activity Log section written yet: cat --section is a clean 1.
@@ -371,7 +371,7 @@ fn recorded(db: &str, kind: &str) -> Vec<String> {
 
 fn one_issue(tag: &str) -> String {
     let db = tmp_db(tag);
-    ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
+    ok(&db, &["project", "add", "CLI", "Cliban"]);
     ok(
         &db,
         &[
@@ -533,7 +533,7 @@ fn plan_ticks_and_promotions_are_recorded_on_both_issues() {
 #[test]
 fn filters_narrow_the_feed() {
     let db = seeded();
-    ok(&db, &["project", "add", "LM", "--name", "Loom"]);
+    ok(&db, &["project", "add", "LM", "Loom"]);
     ok(&db, &["issue", "add", "other", "--project", "LM"]);
 
     let cli_only = events(&db, &["--project", "CLI"]);

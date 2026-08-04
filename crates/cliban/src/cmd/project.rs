@@ -21,9 +21,10 @@ pub struct ProjectArgs {
 pub enum ProjectCmd {
     /// Add a project (KEY must be uppercase letters/digits, 2-10 chars)
     Add {
+        /// project key (uppercase letters/digits, 2-10 chars)
         key: String,
-        #[arg(long)]
-        name: String,
+        /// display name (default: the key)
+        name: Option<String>,
         #[arg(long, allow_hyphen_values = true)]
         description: Option<String>,
         #[arg(long = "description-file")]
@@ -49,7 +50,8 @@ pub enum ProjectCmd {
     },
     /// Show a project
     Show {
-        key: String,
+        /// project key (default: $CLIBAN_PROJECT)
+        key: Option<String>,
         #[arg(long)]
         json: bool,
         /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
@@ -58,7 +60,8 @@ pub enum ProjectCmd {
     },
     /// Print the raw description exactly as stored — never formatted
     Cat {
-        key: String,
+        /// project key (default: $CLIBAN_PROJECT)
+        key: Option<String>,
         /// print only one section's body: spec|plan|activity|notes, or a
         /// verbatim H2 anchor
         #[arg(long)]
@@ -66,8 +69,12 @@ pub enum ProjectCmd {
     },
     /// Fuzzy-search Markdown subsections in a project description
     Search {
-        key: String,
-        query: String,
+        /// `[KEY] QUERY` — with a single argument it is the QUERY and the
+        /// key comes from $CLIBAN_PROJECT
+        #[arg(value_name = "KEY-OR-QUERY")]
+        first: String,
+        #[arg(value_name = "QUERY")]
+        second: Option<String>,
         #[arg(long, default_value = "notes")]
         section: String,
         #[arg(long, default_value_t = 20)]
@@ -141,10 +148,12 @@ pub enum NoteCmd {
     /// Append a `### <title>` subsection under the project's `## Notes`,
     /// leaving everything else byte-identical
     Add {
-        key: String,
-        /// the note's `###` heading
-        #[arg(long, allow_hyphen_values = true)]
-        title: String,
+        /// `[KEY] TITLE` — with a single argument it is the note's `###`
+        /// heading and the key comes from $CLIBAN_PROJECT
+        #[arg(value_name = "KEY-OR-TITLE")]
+        first: String,
+        #[arg(value_name = "TITLE")]
+        second: Option<String>,
         /// note body (use '-' for stdin)
         #[arg(long, allow_hyphen_values = true)]
         body: Option<String>,
@@ -196,13 +205,17 @@ pub async fn run(db: &Option<String>, args: ProjectArgs) -> CliResult<()> {
         ProjectCmd::Show { key, json, table } => show(db, key, json, table).await,
         ProjectCmd::Cat { key, section } => cat(db, key, section).await,
         ProjectCmd::Search {
-            key,
-            query,
+            first,
+            second,
             section,
             limit,
             json,
             table,
         } => {
+            let (key, query) = match second {
+                Some(q) => (crate::scope::project_identity(Some(first))?, q),
+                None => (crate::scope::project_identity(None)?, first),
+            };
             search(
                 db,
                 key,
@@ -237,13 +250,17 @@ pub async fn run(db: &Option<String>, args: ProjectArgs) -> CliResult<()> {
         }
         ProjectCmd::Note { cmd } => match cmd {
             NoteCmd::Add {
-                key,
-                title,
+                first,
+                second,
                 body,
                 body_file,
                 json,
                 table,
             } => {
+                let (key, title) = match second {
+                    Some(t) => (crate::scope::project_identity(Some(first))?, t),
+                    None => (crate::scope::project_identity(None)?, first),
+                };
                 note_add(
                     db,
                     key,
@@ -315,12 +332,13 @@ fn project_json_detail(
 async fn add(
     db: &Option<String>,
     key: String,
-    name: String,
+    name: Option<String>,
     description: Option<String>,
     description_file: Option<String>,
     mode: Mode,
 ) -> CliResult<()> {
     let key = key.to_uppercase();
+    let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| key.clone());
     let description = resolve_description(description, description_file)?;
     let store = store_open::open(db).await?;
     let p = store
@@ -370,8 +388,8 @@ async fn ls(
     Ok(())
 }
 
-async fn show(db: &Option<String>, key: String, json: bool, table: bool) -> CliResult<()> {
-    let key = key.to_uppercase();
+async fn show(db: &Option<String>, key: Option<String>, json: bool, table: bool) -> CliResult<()> {
+    let key = crate::scope::project_identity(key)?;
     let store = store_open::open(db).await?;
     let p = store
         .call(move |conn| projects::fetch_by_key(conn, &key))
@@ -387,8 +405,8 @@ async fn show(db: &Option<String>, key: String, json: bool, table: bool) -> CliR
 
 /// `project cat`: the same bytes-only contract as `issue cat` — the whole
 /// description, or one section's body, verbatim in every mode.
-async fn cat(db: &Option<String>, key: String, section: Option<String>) -> CliResult<()> {
-    let key = key.to_uppercase();
+async fn cat(db: &Option<String>, key: Option<String>, section: Option<String>) -> CliResult<()> {
+    let key = crate::scope::project_identity(key)?;
     let store = store_open::open(db).await?;
     let p = store
         .call(move |conn| projects::fetch_by_key(conn, &key))
@@ -737,7 +755,7 @@ async fn note_add(
     let key = key.to_uppercase();
     let title = title.trim().to_string();
     if title.is_empty() {
-        return Err(CliError::validation("--title can't be blank"));
+        return Err(CliError::validation("the note title can't be blank"));
     }
     let body = match resolve_description(body, body_file)? {
         Some(explicit) => explicit,

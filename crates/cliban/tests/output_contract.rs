@@ -91,7 +91,7 @@ const JSON: &[(&str, &str)] = &[("CLIBAN_OUTPUT", "json")];
 /// A board with a project, two issues, a milestone, and a label.
 fn seeded(tag: &str) -> String {
     let db = tmp_db(tag);
-    ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
+    ok(&db, &["project", "add", "CLI", "Cliban"]);
     ok(&db, &["issue", "add", "alpha", "--project", "CLI"]);
     ok(&db, &["issue", "add", "beta", "--project", "CLI"]);
     ok(&db, &["milestone", "add", "v1", "--project", "CLI"]);
@@ -329,7 +329,7 @@ fn project_note_add_confirms_or_echoes() {
     let echo = ok(
         &db,
         &[
-            "project", "note", "add", "CLI", "--title", "Lesson", "--body", "learned",
+            "project", "note", "add", "CLI", "Lesson", "--body", "learned",
         ],
     );
     let v: serde_json::Value = serde_json::from_str(&echo).expect("note add echoes JSON");
@@ -337,7 +337,7 @@ fn project_note_add_confirms_or_echoes() {
     let confirm = ok_env(
         &db,
         &[
-            "project", "note", "add", "CLI", "--title", "Another", "--body", "more",
+            "project", "note", "add", "CLI", "Another", "--body", "more",
         ],
         TABLE,
     );
@@ -365,7 +365,7 @@ fn no_listed_mutation_succeeds_silently_in_either_mode() {
             "2027-01-01",
         ],
         &[
-            "project", "note", "add", "CLI", "--title", "N", "--body", "b",
+            "project", "note", "add", "CLI", "N", "--body", "b",
         ],
     ];
     for env in [JSON, TABLE] {

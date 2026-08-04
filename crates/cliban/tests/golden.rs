@@ -243,7 +243,6 @@ fn base_seed() -> Vec<Vec<&'static str>> {
             "project",
             "add",
             "CLI",
-            "--name",
             "CLI Project",
             "--description",
             "the cli",
@@ -340,7 +339,7 @@ fn test_project_parity() {
             &["project", "ls"],
             &["project", "show", "CLI", "--json"],
             &["project", "show", "CLI"],
-            &["project", "add", "NEW", "--name", "New", "--json"],
+            &["project", "add", "NEW", "New", "--json"],
         ],
     );
 }

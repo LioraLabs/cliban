@@ -121,6 +121,17 @@ fn main() {
 
     let cli = Cli::parse();
 
+    // Bare `cliban` with piped stdout is an agent asking for the map, not a
+    // human asking for the TUI — print help instead of a terminal-init error.
+    {
+        use std::io::IsTerminal;
+        if cli.cmd.is_none() && !std::io::stdout().is_terminal() {
+            use clap::CommandFactory;
+            let _ = Cli::command().print_help();
+            std::process::exit(2);
+        }
+    }
+
     // The TUI is synchronous and owns its own runtime (see cliban-tui::data),
     // so it must run OUTSIDE a tokio runtime — launch it before we build one.
     if matches!(cli.cmd, None | Some(Command::Tui)) {

@@ -73,7 +73,7 @@ and `SHA256SUMS` are on the
 Then:
 
 ```bash
-cliban project add PROJ --name "My project"
+cliban project add PROJ "My project"
 cliban issue add "First issue" --project PROJ --priority high
 cliban             # opens the TUI
 ```
@@ -234,7 +234,7 @@ Durable lessons live under `## Notes` in the *project* description, one
 `###` subsection per independently useful lesson:
 
 ```bash
-cliban project note add PROJ --title "cargo test needs --test-threads=1" --body - <<'EOF'
+cliban project note add PROJ "cargo test needs --test-threads=1" --body - <<'EOF'
 The fixtures share a tempdir; parallel runs corrupt it and the failures look
 like flaky assertions, not contention.
 EOF

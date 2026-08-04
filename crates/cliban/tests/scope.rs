@@ -63,8 +63,8 @@ fn ok_scoped(db: &str, scope: Option<&str>, args: &[&str]) -> String {
 
 fn seeded(tag: &str) -> String {
     let db = tmp_db(tag);
-    ok_scoped(&db, None, &["project", "add", "AA", "--name", "A"]);
-    ok_scoped(&db, None, &["project", "add", "BB", "--name", "B"]);
+    ok_scoped(&db, None, &["project", "add", "AA", "A"]);
+    ok_scoped(&db, None, &["project", "add", "BB", "B"]);
     ok_scoped(&db, None, &["issue", "add", "in a", "--project", "AA"]);
     ok_scoped(&db, None, &["issue", "add", "in b", "--project", "BB"]);
     db
@@ -115,12 +115,33 @@ fn missing_scope_errors_name_both_spellings() {
 }
 
 #[test]
-fn env_never_fills_positional_identity() {
+fn scope_fills_project_identity_on_reads_but_not_structural_writes() {
     let db = seeded("identity");
-    // `project cat` addresses a project BY KEY positionally; the scope must
-    // not stand in for it.
-    let r = run_scoped(&db, Some("AA"), &["project", "cat"]);
-    assert_ne!(r.code, 0, "positional identity must stay required");
-    assert!(r.stderr.contains("required"), "{}", r.stderr);
-    let _ = r.stdout;
+    ok_scoped(
+        &db,
+        None,
+        &["project", "edit", "AA", "--description", "## Notes\n"],
+    );
+    ok_scoped(&db, None, &["project", "note", "add", "AA", "a lesson"]);
+
+    // Reads and memory appends: the ambient scope stands in for the KEY.
+    let cat = ok_scoped(&db, Some("AA"), &["project", "cat"]);
+    assert!(cat.contains("a lesson"), "{cat}");
+    let noted = ok_scoped(&db, Some("AA"), &["project", "note", "add", "scoped lesson"]);
+    let _ = noted;
+    let found = ok_scoped(&db, Some("AA"), &["project", "search", "scoped"]);
+    assert!(found.contains("scoped lesson"), "{found}");
+    // Two positionals still mean KEY then TITLE/QUERY.
+    let found = ok_scoped(&db, None, &["project", "search", "AA", "scoped"]);
+    assert!(found.contains("scoped lesson"), "{found}");
+
+    // Structural writes name their target explicitly — no ambient fill.
+    let r = run_scoped(&db, Some("AA"), &["project", "archive"]);
+    assert_ne!(r.code, 0, "archive must not infer its target");
+    let r = run_scoped(&db, Some("AA"), &["project", "edit", "--name", "X"]);
+    assert_ne!(r.code, 0, "edit must not infer its target");
+    // And without any scope, the read errors teach both spellings.
+    let r = run_scoped(&db, None, &["project", "cat"]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("CLIBAN_PROJECT"), "{}", r.stderr);
 }

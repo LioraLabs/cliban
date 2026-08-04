@@ -203,7 +203,7 @@ pub struct LsArgs {
     /// fuzzy search query across title/key/labels/description
     #[arg(long)]
     search: Option<String>,
-    /// cap result count (default 50 when --search is set; ignored otherwise)
+    /// cap result count (0 = uncapped; --search defaults to 50)
     #[arg(long, default_value_t = 0)]
     limit: i64,
     /// only takeable issues: backlog status, no open blocker, unclaimed
@@ -448,9 +448,9 @@ struct Teach {
 pub struct TickArgs {
     /// issue key
     key: String,
-    /// task number (required, 1-indexed)
+    /// task number (1-indexed; optional when the plan has exactly one task)
     #[arg(long)]
-    task: i32,
+    task: Option<i32>,
     /// step number (required, 1-indexed)
     #[arg(long)]
     step: i32,
@@ -466,13 +466,13 @@ pub struct TickArgs {
 pub struct PromoteArgs {
     /// issue key
     key: String,
-    /// task number (required, 1-indexed)
+    /// task number (1-indexed; optional when the plan has exactly one task)
     #[arg(long)]
-    task: i32,
+    task: Option<i32>,
     /// step number (required, 1-indexed)
     #[arg(long)]
     step: i32,
-    /// title for the promoted issue (required)
+    /// title for the promoted issue (default: the step's own text)
     #[arg(long, default_value = "")]
     title: String,
     /// promotion mode: sub-issue|related
@@ -526,9 +526,6 @@ pub struct ArchiveDoneArgs {
 pub struct ImportArgs {
     /// NDJSON file path (default: stdin)
     file_arg: Option<String>,
-    /// NDJSON file path (default: stdin)
-    #[arg(long)]
-    file: Option<String>,
     /// default project key for records that omit it
     #[arg(long, short = 'p')]
     project: Option<String>,
@@ -1246,6 +1243,9 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
     if let Some(spec) = &sort {
         sort_issues(&mut issues, spec);
     }
+    if a.limit > 0 {
+        issues.truncate(a.limit as usize);
+    }
 
     if crate::output::mode(a.json, a.table).is_json() {
         for i in &issues {
@@ -1859,18 +1859,19 @@ async fn tick(db: &Option<String>, a: TickArgs) -> CliResult<()> {
     let key = parse_issue_key(&a.key)?;
     let store = store_open::open(db).await?;
     let lookup = key.clone();
-    let task = a.task;
+    let task_arg = a.task;
     let step = a.step;
-    let (updated_at, noop) = store
+    let (updated_at, noop, task) = store
         .call(move |conn| {
             let tx = conn.unchecked_transaction()?;
             let issue = issues::get_by_key(&tx, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+            let task = resolve_task(task_arg, &issue.description)?;
             let new_desc = match descmd::tick_step(&issue.description, task, step) {
                 Ok(descmd::TickOutcome::Ticked(d)) => d,
                 // Desired state already holds: touch nothing (no UPDATE, no
                 // audit record), report success with the noop marker.
                 Ok(descmd::TickOutcome::AlreadyChecked) => {
-                    return Ok((format_usec(issue.updated_at), true));
+                    return Ok((format_usec(issue.updated_at), true, task));
                 }
                 Err(msg) => return Err(cliban_core::Error::validation("plan", &msg)),
             };
@@ -1886,7 +1887,7 @@ async fn tick(db: &Option<String>, a: TickArgs) -> CliResult<()> {
                 &format!("ticked Task {task} Step {step}"),
             );
             tx.commit()?;
-            Ok((now, false))
+            Ok((now, false, task))
         })
         .await?;
 
@@ -1898,7 +1899,7 @@ async fn tick(db: &Option<String>, a: TickArgs) -> CliResult<()> {
             m.insert("noop".into(), serde_json::json!(true));
         }
         m.insert("step".into(), serde_json::json!(a.step));
-        m.insert("task".into(), serde_json::json!(a.task));
+        m.insert("task".into(), serde_json::json!(task));
         m.insert("updated_at".into(), serde_json::json!(updated_at));
         println!(
             "{}",
@@ -1907,12 +1908,31 @@ async fn tick(db: &Option<String>, a: TickArgs) -> CliResult<()> {
     } else if noop {
         println!(
             "ticked {} Task {} Step {} (already checked — nothing to do)",
-            a.key, a.task, a.step
+            a.key, task, a.step
         );
     } else {
-        println!("ticked {} Task {} Step {}", a.key, a.task, a.step);
+        println!("ticked {} Task {} Step {}", a.key, task, a.step);
     }
     Ok(())
+}
+
+/// `--task` may be omitted when `## Plan` has exactly one task; anything
+/// else is a real ambiguity the caller must settle.
+fn resolve_task(arg: Option<i32>, desc: &str) -> Result<i32, cliban_core::Error> {
+    match arg {
+        Some(t) => Ok(t),
+        None => match descmd::count_tasks(desc) {
+            1 => Ok(1),
+            0 => Err(cliban_core::Error::validation(
+                "plan",
+                "no `### Task N:` headings in ## Plan",
+            )),
+            n => Err(cliban_core::Error::validation(
+                "plan",
+                &format!("plan has {n} tasks; pass --task"),
+            )),
+        },
+    }
 }
 
 async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
@@ -1920,9 +1940,6 @@ async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
     let project_part = project_prefix(&key).to_string();
 
     // Up-front validations, before any store work.
-    if a.title.is_empty() {
-        return Err(CliError::validation("--title required"));
-    }
     if a.as_mode != "sub-issue" && a.as_mode != "related" {
         return Err(CliError::validation(format!(
             "invalid --as {:?} (want sub-issue|related)",
@@ -1939,7 +1956,7 @@ async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
     let mode = a.as_mode.clone();
     let proj_key = project_part.clone();
 
-    let new_key = store
+    let (new_key, task) = store
         .call(move |conn| {
             let tx = conn.unchecked_transaction()?;
 
@@ -1971,6 +1988,31 @@ async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
                     "cannot promote as sub-issue of a sub-issue (would exceed depth 2)",
                 ));
             }
+
+            // Resolve the step first: the raw line names the task (when
+            // inferred) and supplies the default title.
+            let task = resolve_task(task, &parent_desc)?;
+            let raw = match find_step_for_rewrite(&parent_desc, task, step) {
+                Some(s) => s,
+                None => {
+                    return Err(cliban_core::Error::validation(
+                        "plan",
+                        &format!("cannot find Task {task} Step {step} in parent description"),
+                    ))
+                }
+            };
+            let title = if title.is_empty() {
+                let t = step_title_text(&raw);
+                if t.is_empty() {
+                    return Err(cliban_core::Error::validation(
+                        "plan",
+                        "the step has no text to use as a title; pass --title",
+                    ));
+                }
+                t
+            } else {
+                title
+            };
 
             // 2. Allocate seq + insert new issue.
             let new_seq = issue_seq + 1;
@@ -2013,17 +2055,7 @@ async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
                 )?;
             }
 
-            // 4. Rewrite the parent's step line.
-            let step_obj = find_step_for_rewrite(&parent_desc, task, step);
-            let raw = match step_obj {
-                Some(s) => s,
-                None => {
-                    return Err(cliban_core::Error::validation(
-                        "plan",
-                        &format!("cannot find Task {task} Step {step} in parent description"),
-                    ))
-                }
-            };
+            // 4. Rewrite the parent's step line (located up front).
             let new_line = build_promoted_line(&raw, &new_key);
             let new_desc = match descmd::rewrite_step_line(&parent_desc, task, step, &new_line) {
                 Ok(d) => d,
@@ -2054,7 +2086,7 @@ async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
             }
 
             tx.commit()?;
-            Ok(new_key)
+            Ok((new_key, task))
         })
         .await?;
 
@@ -2063,7 +2095,7 @@ async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
         m.insert("new_key".into(), serde_json::json!(new_key));
         m.insert("parent".into(), serde_json::json!(a.key));
         m.insert("step".into(), serde_json::json!(a.step));
-        m.insert("task".into(), serde_json::json!(a.task));
+        m.insert("task".into(), serde_json::json!(task));
         println!(
             "{}",
             serde_json::to_string(&serde_json::Value::Object(m)).unwrap()
@@ -2071,10 +2103,41 @@ async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
     } else {
         println!(
             "promoted {} Task {} Step {} → {}",
-            a.key, a.task, a.step, new_key
+            a.key, task, a.step, new_key
         );
     }
     Ok(())
+}
+
+/// The step's human text: checkbox marker, bold markers, a leading
+/// `Step N:` label, and any `→ KEY` promotion suffix stripped — what
+/// `promote` uses when `--title` is not given.
+fn step_title_text(raw: &str) -> String {
+    let t = raw.trim();
+    let t = t
+        .strip_prefix("- [ ]")
+        .or_else(|| t.strip_prefix("- [x]"))
+        .unwrap_or(t)
+        .trim();
+    let t = t.strip_prefix("**").unwrap_or(t);
+    let t = t.strip_suffix("**").unwrap_or(t);
+    let t = match t.split_once(':') {
+        Some((label, rest))
+            if label
+                .strip_prefix("Step ")
+                .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())) =>
+        {
+            rest
+        }
+        _ => t,
+    };
+    let t = match t.rsplit_once('→') {
+        // Only a promotion suffix (`→ KEY`) strips — an arrow inside the
+        // step's own prose stays.
+        Some((before, after)) if descmd::is_issue_key_shaped(after.trim()) => before,
+        _ => t,
+    };
+    t.trim().to_string()
 }
 
 /// Locate a step line for rewriting: FindSection(Plan) → FindTask → FindStep,
@@ -2295,7 +2358,7 @@ async fn archive_done(db: &Option<String>, a: ArchiveDoneArgs) -> CliResult<()> 
 
 async fn import(db: &Option<String>, a: ImportArgs) -> CliResult<()> {
     let mode = crate::output::mode(a.json, a.table);
-    let path = a.file_arg.clone().or(a.file.clone());
+    let path = a.file_arg.clone();
     let content = match path.as_deref() {
         None | Some("") | Some("-") => read_stdin()?,
         Some(p) => std::fs::read_to_string(p).map_err(|e| CliError::other(e.to_string()))?,

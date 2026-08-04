@@ -43,7 +43,7 @@ fn run(db: &str, args: &[&str]) -> (String, String, i32) {
 fn seeded() -> String {
     let db = tmp_db("board");
     for args in [
-        vec!["project", "add", "CLI", "--name", "Cliban"],
+        vec!["project", "add", "CLI", "Cliban"],
         vec!["milestone", "add", "v1", "--project", "CLI"],
         vec!["issue", "add", "keep me", "--project", "CLI"],
     ] {

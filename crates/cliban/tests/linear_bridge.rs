@@ -271,7 +271,7 @@ impl Board {
         let _ = std::fs::remove_dir_all(&config_home);
         let board = Board { db, config_home };
         board
-            .run(&["project", "add", "PROJ", "--name", "Demo"], None)
+            .run(&["project", "add", "PROJ", "Demo"], None)
             .assert_ok();
         board
     }
@@ -1246,7 +1246,7 @@ fn sync_linear_honors_per_link_origin() {
 fn sync_linear_scopes_to_a_project() {
     let board = Board::new("syncproj");
     board
-        .run(&["project", "add", "OTHER", "--name", "Elsewhere"], None)
+        .run(&["project", "add", "OTHER", "Elsewhere"], None)
         .assert_ok();
 
     let stub = Stub::start(import_replies(

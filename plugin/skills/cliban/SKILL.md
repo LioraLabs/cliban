@@ -20,8 +20,9 @@ surface:
 - **Ambient scope**: `$CLIBAN_PROJECT` (set per-repo via direnv) is the
   default `-p` everywhere. Explicit `-p KEY` beats it; `-p '*'` deliberately
   widens to every project. Commands that need a project error with both
-  spellings when neither is set. The env var never fills positional identity
-  — only the `-p` flag.
+  spellings when neither is set. It also stands in for the positional KEY on
+  project reads and memory appends (`project show|cat|search|note add`) —
+  never on structural writes (`edit`, `archive`).
 - **Three viewers, one job each**: `ls` = many lean rows; `show` = one
   complete entity; `cat` = raw markdown bytes (whole description or
   `--section X`), never formatted.
@@ -52,15 +53,16 @@ the ambient Claude session (`session:<first-8>`). You supply the **why**:
 cliban issue claim PROJ-42            # before touching shared work (release / claim --force exist)
 cliban issue mv PROJ-42 in-progress
 cliban issue log PROJ-42 "Root cause: f64 positions collapse after ~50 reorders"
-cliban issue tick PROJ-42 --task 1 --step 2
+cliban issue tick PROJ-42 --task 1 --step 2   # --task optional when the plan has one task
 cliban issue mv PROJ-42 done --note "merged as abc1234"
 ```
 
 - Move the ticket when the work moves; attach the reason with `--note`.
 - Log **findings, decisions, dead ends** — never narration ("working on it").
 - Promote discovered scope instead of widening the ticket:
-  `cliban issue promote PROJ-42 --task 1 --step 3 --title "..."` (`--as
-  sub-issue|related`), or file a new issue with `--blocked-by`.
+  `cliban issue promote PROJ-42 --task 1 --step 3` (title defaults to the
+  step's own text; `--title` overrides; `--as sub-issue|related`), or file a
+  new issue with `--blocked-by`.
 - Before starting: `cliban activity --since 3d` (the board lately) and
   `cliban activity --issue PROJ-42` (one ticket's whole merged history) —
   including approaches already tried and rejected.
@@ -133,7 +135,7 @@ cliban issue ls -s in-progress
 cliban issue ls --ready                    # takeable: backlog, unblocked, unclaimed
 cliban issue ls --blocked                  # at least one open blocker
 cliban issue ls -m "v0.1" --sort priority  # sort: priority|created|updated|position[:asc|desc]
-cliban issue ls --search "ordering" --limit 20   # fuzzy; adds score; default limit 50
+cliban issue ls --search "ordering" --limit 20   # fuzzy; adds score; --limit caps any ls
 cliban issue ls --label bug --no-subs --parent PROJ-12 --updated-since 2d
 cliban issue show PROJ-42
 cliban issue cat PROJ-42                   # whole description, verbatim bytes
@@ -165,8 +167,8 @@ cliban issue cp PROJ-12 --title "Q3 edition"      # copies title/Spec/Plan(reset
 cliban issue import ./items.ndjson                # lines: {project,title,[description,status,priority,milestone,parent,labels]}; '-' = stdin
 cliban label add bug
 cliban milestone add "v0.1" --target 2026-06-01
-cliban milestone edit "v0.1" --status completed   # or --rename / --target / --clear-target
-cliban project add PROJ --name "Cliban" --description "..."
+cliban milestone edit "v0.1" --status completed   # or --name (rename) / --target / --clear-target
+cliban project add PROJ "Cliban"                  # display name optional (default: the key)
 ```
 
 Multi-line text: `--description-file ./x.md`, or `-` for stdin. Safe on
@@ -207,9 +209,9 @@ Durable lessons live under `## Notes` on the *project*, one `###` per lesson
 — not in tickets, not in placeholder issues.
 
 ```bash
-cliban project search PROJ "sqlite wal" --limit 5   # NDJSON {project,heading,content,score}; search before loading
-cliban project cat PROJ --section notes
-cliban project note add PROJ --title "cargo test needs --test-threads=1" --body - <<'EOF'
+cliban project search "sqlite wal" --limit 5   # NDJSON {project,heading,content,score}; search before loading
+cliban project cat --section notes             # explicit KEY first positional addresses another project
+cliban project note add "cargo test needs --test-threads=1" --body - <<'EOF'
 Fixtures share a tempdir; parallel runs corrupt it.
 EOF
 ```

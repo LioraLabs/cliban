@@ -52,7 +52,7 @@ One section, one answer, then the next. Lead each with the recommended answer so
 If exploration matched a cliban project, propose it. Otherwise propose creating one keyed from the repo basename (uppercase, 2-10 chars, letters/digits):
 
 ```bash
-cliban project add <KEY> --name "<Repo Name>" --description-file - <<'EOF'
+cliban project add <KEY> "<Repo Name>" --description-file - <<'EOF'
 <one-line purpose>
 
 ## Notes

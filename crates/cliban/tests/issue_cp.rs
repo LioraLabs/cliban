@@ -88,7 +88,7 @@ const SOURCE_DESC: &str = "## Spec\n\nthe spec body\n\n## Plan\n\n### Task 1: bu
 /// priority, milestone, due date, a relation, and a live claim.
 fn seeded(tag: &str) -> String {
     let db = tmp_db(tag);
-    ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
+    ok(&db, &["project", "add", "CLI", "Cliban"]);
     ok(&db, &["milestone", "add", "v1", "--project", "CLI"]);
     ok(&db, &["label", "add", "feature", "--project", "CLI"]);
     ok(
@@ -196,7 +196,7 @@ fn cp_title_overrides_and_table_mode_confirms() {
 #[test]
 fn cp_cross_project_drops_the_milestone() {
     let db = seeded("xproj");
-    ok(&db, &["project", "add", "OPS", "--name", "Ops"]);
+    ok(&db, &["project", "add", "OPS", "Ops"]);
     let out = ok(&db, &["issue", "cp", "CLI-1", "--project", "OPS", "--json"]);
     let copy: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(copy["key"], "OPS-1");
@@ -219,7 +219,7 @@ fn cp_records_provenance_on_the_copy() {
         "audit entry missing: {activity:?}"
     );
     // Cross-project: the drop reason is part of the record.
-    ok(&db, &["project", "add", "OPS", "--name", "Ops"]);
+    ok(&db, &["project", "add", "OPS", "Ops"]);
     ok(&db, &["issue", "cp", "CLI-1", "--project", "OPS", "--json"]);
     let activity = ok(&db, &["activity", "--issue", "OPS-1", "--table"]);
     assert!(
@@ -233,7 +233,7 @@ fn cp_records_provenance_on_the_copy() {
 #[test]
 fn cp_of_a_missing_issue_is_not_found() {
     let db = tmp_db("missing");
-    ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
+    ok(&db, &["project", "add", "CLI", "Cliban"]);
     let r = run_env(&db, &["issue", "cp", "CLI-99", "--json"], &[]);
     assert_ne!(r.code, 0);
     assert!(r.stderr.contains("not found"), "{}", r.stderr);

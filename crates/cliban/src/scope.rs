@@ -34,6 +34,18 @@ pub fn required_project(flag: Option<String>) -> CliResult<String> {
         .ok_or_else(|| CliError::validation("no project scope: pass -p KEY or set $CLIBAN_PROJECT"))
 }
 
+/// A project addressed by positional KEY where the ambient scope may stand
+/// in: reads (`show`, `cat`, `search`) and memory appends (`note add`).
+/// Structural writes (`edit`, `archive`, `rm`) never come here — they name
+/// their target explicitly.
+pub fn project_identity(pos: Option<String>) -> CliResult<String> {
+    match pos {
+        Some(k) if !k.trim().is_empty() && k.trim() != "*" => Ok(k.trim().to_uppercase()),
+        _ => project(None)
+            .ok_or_else(|| CliError::validation("no project: pass a KEY or set $CLIBAN_PROJECT")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

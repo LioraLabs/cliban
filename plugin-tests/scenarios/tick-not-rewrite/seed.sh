@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -eu
 DB="$1"
-cliban --db "$DB" project add ACME --name "Acme" --description "test fixture project"
+cliban --db "$DB" project add ACME "Acme" --description "test fixture project"
 cliban --db "$DB" issue add "Rate-limit the login endpoint" --project ACME \
   --status in-progress --description-file - --json >/dev/null <<'EOF'
 ## Spec

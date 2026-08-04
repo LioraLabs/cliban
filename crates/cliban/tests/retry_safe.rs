@@ -90,7 +90,7 @@ const TABLE: &[(&str, &str)] = &[("CLIBAN_OUTPUT", "table")];
 /// A board with one planned issue (CLI-1) and one plain issue (CLI-2).
 fn seeded(tag: &str) -> String {
     let db = tmp_db(tag);
-    ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
+    ok(&db, &["project", "add", "CLI", "Cliban"]);
     ok(
         &db,
         &[

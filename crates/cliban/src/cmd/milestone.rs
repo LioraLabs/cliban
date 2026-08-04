@@ -101,7 +101,7 @@ pub enum MilestoneCmd {
         #[arg(long, short = 'p')]
         project: Option<String>,
         /// new name
-        #[arg(long)]
+        #[arg(long = "name")]
         rename: Option<String>,
         #[arg(long, allow_hyphen_values = true)]
         description: Option<String>,
