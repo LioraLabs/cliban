@@ -415,6 +415,7 @@ dependencies = [
  "cliban-core",
  "cliban-sync",
  "cliban-tui",
+ "libc",
  "regex",
  "rusqlite",
  "serde",
