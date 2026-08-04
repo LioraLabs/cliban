@@ -101,6 +101,13 @@ write it.
 **Tick plan steps as you finish them** — `cliban issue tick PROJ-42 --task 1
 --step 2` — so progress is visible without reading the code.
 
+**Mutations are retry-safe.** Re-running a mutation whose desired state
+already holds succeeds with an explicit note instead of erroring: a re-tick
+says "(already checked — nothing to do)", `mv` to the current status and
+re-archive likewise. JSON echoes carry `"noop": true` on those paths, and a
+noop writes nothing — no timeline entry, no `updated_at` churn. Retry freely
+after a timeout; only genuinely wrong targets (no such task/step/key) fail.
+
 **Promote scope you discover** rather than silently widening the ticket:
 `cliban issue promote PROJ-42 --task 1 --step 3 --title "..."`, or file a fresh
 issue and link it with `--blocked-by` / `--related-to`.
@@ -122,6 +129,8 @@ available on every read and every write (piped stdout already defaults to the
 |---|---|
 | `project add\|ls\|show\|edit\|search\|archive\|unarchive` | projects + project memory |
 | `issue add\|ls\|show\|edit\|mv` | the core loop |
+| `issue cat` | the raw stored description, verbatim — never formatted |
+| `issue cp` | duplicate an issue's shape (plan reset) — never its history |
 | `issue archive\|unarchive\|archive-done` | keep the board clean |
 | `issue log\|tick\|promote` | plan + activity-log mechanics (see below) |
 | `issue append-section` | atomic append to the end of one H2 section |
@@ -359,6 +368,35 @@ cliban milestone waves --project PROJ "v0.1" --json
 Wave N is safe to dispatch once waves 1..N-1 are done. `external_blocked`
 lists issues gated by open work *outside* the milestone — finishing the waves
 won't unblock them. A dependency cycle exits 2 naming the issues in it.
+
+### Duplicate an issue's shape (templates for recurring work)
+```bash
+cliban issue cp PROJ-12 --json                      # same project, fresh backlog issue
+cliban issue cp PROJ-12 --project OTHER --title "Q3 edition"
+```
+Copies title, `## Spec`, `## Plan` (every checkbox reset to `- [ ]`,
+promotion suffixes stripped), `## Notes`, labels, and priority; milestone
+only within the same project. Never copied: activity log, claims, relations,
+due date, archived state. The copy's timeline starts with "copied from KEY".
+
+### Read the raw description
+```bash
+cliban issue cat PROJ-12 > body.md        # verbatim, never JSON, even piped
+cliban issue cat PROJ-12 | grep -n "^## " # what sections exist
+```
+
+### Unix reflexes (spares)
+The issue is the default noun: bare `cliban ls|mv|rm|show|log|tick|cat` are
+exact hidden synonyms of `issue <verb>` — same flags, output, exit codes.
+GitHub reflexes exist too, hidden: `issue close [--note]` (= `mv done`),
+`issue reopen [--note]` (= `mv in-progress`), `issue comment` (= `log`,
+stdin fallback included), `issue delete` (= archives, never deletes, names
+the undo). Every alias states its canonical form once in the confirmation
+(`closed PROJ-4 (mv done): backlog → done`) and its JSON echo adds a
+`"canonical"` field on the otherwise-identical shape — ignore unknown JSON
+fields as a rule. Prefer the canonical forms in anything you write down.
+There is no `ln` and no `touch`, deliberately: `ln` can't know blocks from
+related_to, and keys are generated.
 
 ### Sub-issues, parents, relations
 ```bash
