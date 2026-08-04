@@ -1,10 +1,20 @@
 import type { IssueDetailMsg } from '../shared/protocol';
+import type { Label, MetaPatch, Milestone, Priority } from '../shared/model';
+import { PRIORITIES } from '../shared/model';
 import { parsePlan } from '../shared/plan';
 import { renderMarkdown } from './md';
 
 export interface DrawerHandlers {
   onClose(): void;
   onOpenIssue(key: string): void;
+  onTickStep(key: string, task: number, step: number): void;
+  onAddLog(key: string, message: string): void;
+  onEditMeta(key: string, ifUpdatedAt: string, patch: MetaPatch): void;
+}
+
+export interface DrawerContext {
+  milestones: Milestone[];
+  labels: Label[];
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -31,7 +41,7 @@ function mdSection(title: string, md: string | null): HTMLElement {
   return section;
 }
 
-function planSection(md: string | null): HTMLElement {
+function planSection(key: string, md: string | null, handlers: DrawerHandlers): HTMLElement {
   const section = el('section', 'drawer-section');
   section.append(el('h3', 'drawer-section-title', 'Plan'));
   if (md === null || md.trim() === '') {
@@ -54,9 +64,12 @@ function planSection(md: string | null): HTMLElement {
       const box = el('input') as HTMLInputElement;
       box.type = 'checkbox';
       box.checked = step.done;
-      box.disabled = true; // ticking arrives with drawer mutations
-      box.dataset['task'] = String(task.task);
-      box.dataset['step'] = String(step.step);
+      // ticking is one-way: done steps stay done (the CLI has no untick)
+      box.disabled = step.done;
+      box.addEventListener('change', () => {
+        box.disabled = true;
+        handlers.onTickStep(key, task.task, step.step);
+      });
       item.append(box, el('span', step.done ? 'plan-step-done' : undefined, ` ${step.text}`));
       list.append(item);
     }
@@ -66,9 +79,92 @@ function planSection(md: string | null): HTMLElement {
   return section;
 }
 
+function logInput(key: string, handlers: DrawerHandlers): HTMLElement {
+  const row = el('div', 'log-input-row');
+  const input = el('input', 'log-input') as HTMLInputElement;
+  input.type = 'text';
+  input.placeholder = 'Add a note to the activity log…';
+  const send = () => {
+    const message = input.value.trim();
+    if (!message) return;
+    input.value = '';
+    handlers.onAddLog(key, message);
+  };
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') send();
+  });
+  const btn = el('button', 'toolbar-btn', 'Log');
+  btn.addEventListener('click', send);
+  row.append(input, btn);
+  return row;
+}
+
+function metaEditors(
+  detail: IssueDetailMsg,
+  ctx: DrawerContext,
+  handlers: DrawerHandlers,
+): HTMLElement {
+  const { issue } = detail;
+  const cas = issue.updated_at;
+  const row = el('div', 'meta-editors');
+
+  const prio = el('select', 'meta-select') as HTMLSelectElement;
+  for (const p of PRIORITIES) {
+    const opt = el('option', undefined, p === 'none' ? 'priority: none' : `priority: ${p}`);
+    opt.value = p;
+    if ((issue.priority ?? 'none') === p) opt.selected = true;
+    prio.append(opt);
+  }
+  prio.addEventListener('change', () =>
+    handlers.onEditMeta(issue.key, cas, { priority: prio.value as Priority }),
+  );
+  row.append(prio);
+
+  const ms = el('select', 'meta-select') as HTMLSelectElement;
+  const noneOpt = el('option', undefined, 'milestone: none');
+  noneOpt.value = '';
+  ms.append(noneOpt);
+  for (const m of ctx.milestones) {
+    const opt = el('option', undefined, `◇ ${m.name}`);
+    opt.value = m.name;
+    if (issue.milestone === m.name) opt.selected = true;
+    ms.append(opt);
+  }
+  ms.addEventListener('change', () => {
+    const patch: MetaPatch = ms.value === '' ? { clearMilestone: true } : { milestone: ms.value };
+    handlers.onEditMeta(issue.key, cas, patch);
+  });
+  row.append(ms);
+
+  const labelSel = el('select', 'meta-select') as HTMLSelectElement;
+  const head = el('option', undefined, 'labels…');
+  head.value = '';
+  head.disabled = false;
+  labelSel.append(head);
+  const attached = new Set(issue.labels ?? []);
+  for (const l of ctx.labels) {
+    const opt = el('option', undefined, `${attached.has(l.name) ? '✓ ' : ''}${l.name}`);
+    opt.value = l.name;
+    labelSel.append(opt);
+  }
+  labelSel.addEventListener('change', () => {
+    const name = labelSel.value;
+    if (!name) return;
+    labelSel.value = '';
+    const patch: MetaPatch = attached.has(name)
+      ? { removeLabels: [name] }
+      : { addLabels: [name] };
+    handlers.onEditMeta(issue.key, cas, patch);
+  });
+  row.append(labelSel);
+
+  return row;
+}
+
 export function renderDrawer(
   host: HTMLElement,
   detail: IssueDetailMsg,
+  ctx: DrawerContext,
   handlers: DrawerHandlers,
 ): void {
   closeDrawer(host);
@@ -104,12 +200,15 @@ export function renderDrawer(
     meta.append(parent);
   }
   drawer.append(meta);
+  drawer.append(metaEditors(detail, ctx, handlers));
 
   const body = el('div', 'drawer-body');
   body.append(mdSection('Spec', sections.spec));
-  body.append(planSection(sections.plan));
+  body.append(planSection(issue.key, sections.plan, handlers));
   if (sections.notes !== null) body.append(mdSection('Notes', sections.notes));
-  body.append(mdSection('Activity', sections.activity));
+  const activity = mdSection('Activity', sections.activity);
+  activity.append(logInput(issue.key, handlers));
+  body.append(activity);
   drawer.append(body);
 
   overlay.append(drawer);

@@ -2,7 +2,7 @@
 // Every optimistic mutation carries a requestId so the webview can correlate
 // mutationOk/mutationFailed back to the pending local change.
 
-import type { ActivityEvent, Issue, Label, Milestone, Status } from './model';
+import type { ActivityEvent, Issue, Label, MetaPatch, Milestone, Status } from './model';
 
 export type ErrorKind = 'not-found' | 'validation' | 'conflict' | 'internal' | 'cli-missing';
 
@@ -74,6 +74,34 @@ export interface MoveIssueMsg {
   toStatus: Status;
 }
 
-export type WebviewMsg = ReadyMsg | RefreshMsg | PickProjectMsg | OpenIssueMsg | MoveIssueMsg;
+export interface TickStepMsg {
+  type: 'tickStep';
+  key: string;
+  task: number;
+  step: number;
+}
+
+export interface AddLogMsg {
+  type: 'addLog';
+  key: string;
+  message: string;
+}
+
+export interface EditMetaMsg {
+  type: 'editMeta';
+  key: string;
+  ifUpdatedAt: string;
+  patch: MetaPatch;
+}
+
+export type WebviewMsg =
+  | ReadyMsg
+  | RefreshMsg
+  | PickProjectMsg
+  | OpenIssueMsg
+  | MoveIssueMsg
+  | TickStepMsg
+  | AddLogMsg
+  | EditMetaMsg;
 
 export type { ActivityEvent, Issue, Label, Milestone, Status };

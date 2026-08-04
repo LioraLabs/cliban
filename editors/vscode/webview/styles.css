@@ -318,3 +318,38 @@ body.busy {
   opacity: 0.6;
   text-decoration: line-through;
 }
+
+/* drawer editors */
+
+.meta-editors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+}
+
+.meta-select {
+  background: var(--vscode-dropdown-background);
+  color: var(--vscode-dropdown-foreground);
+  border: 1px solid var(--vscode-dropdown-border);
+  border-radius: 3px;
+  padding: 0.15rem 0.3rem;
+  font-family: inherit;
+  font-size: 0.85em;
+}
+
+.log-input-row {
+  display: flex;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+
+.log-input {
+  flex: 1;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border);
+  border-radius: 3px;
+  padding: 0.3rem 0.5rem;
+  font-family: inherit;
+}

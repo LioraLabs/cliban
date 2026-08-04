@@ -3,7 +3,8 @@ import * as crypto from 'node:crypto';
 import type { HostMsg, WebviewMsg } from '../shared/protocol';
 import type { Status } from '../shared/model';
 import { BoardStore } from './store';
-import { ClibanClient, ClibanError, CliMissingError } from './client/client';
+import { ClibanClient, ClibanError, CliMissingError, ConflictError } from './client/client';
+import type { Issue } from '../shared/model';
 import { readSettings } from './settings';
 
 const PROJECT_STATE_KEY = 'cliban.project';
@@ -95,7 +96,45 @@ export class BoardPanel {
       case 'moveIssue':
         await this.moveIssue(msg.requestId, msg.key, msg.toStatus);
         break;
+      case 'tickStep':
+        await this.mutateAndReload(msg.key, () => this.client.tick(msg.key, msg.task, msg.step));
+        break;
+      case 'addLog':
+        await this.mutateAndReload(msg.key, async () => {
+          await this.client.log(msg.key, msg.message);
+          return undefined;
+        });
+        break;
+      case 'editMeta':
+        await this.mutateAndReload(msg.key, () =>
+          this.client.editMeta(msg.key, msg.patch, msg.ifUpdatedAt),
+        );
+        break;
     }
+  }
+
+  /**
+   * Run a drawer mutation, fold any echo into the board, and push a fresh
+   * issueDetail so the drawer reflects reality (including after a conflict,
+   * where the reload IS the recovery).
+   */
+  private async mutateAndReload(key: string, op: () => Promise<Issue | undefined>): Promise<void> {
+    try {
+      const echo = await op();
+      if (echo) this.store.applyEcho(echo);
+    } catch (err) {
+      if (err instanceof ConflictError) {
+        this.post({
+          type: 'toast',
+          level: 'error',
+          message: `${key} changed since you opened it — reloaded`,
+        });
+      } else {
+        const message = err instanceof Error ? err.message : String(err);
+        this.post({ type: 'toast', level: 'error', message });
+      }
+    }
+    await this.openIssue(key);
   }
 
   private async openIssue(key: string): Promise<void> {
