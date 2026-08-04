@@ -1,0 +1,112 @@
+import type { BoardMsg } from '../shared/protocol';
+import type { Issue, Status } from '../shared/model';
+import { STATUSES } from '../shared/model';
+
+const COLUMN_TITLES: Record<Status, string> = {
+  backlog: 'Backlog',
+  'in-progress': 'In Progress',
+  blocked: 'Blocked',
+  'in-review': 'In Review',
+  done: 'Done',
+};
+
+export interface BoardHandlers {
+  onOpenIssue(key: string): void;
+  onPickProject(): void;
+  onRefresh(): void;
+}
+
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  className?: string,
+  text?: string,
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function renderCard(issue: Issue, handlers: BoardHandlers): HTMLElement {
+  const card = el('div', 'card');
+  card.dataset['key'] = issue.key;
+
+  const head = el('div', 'card-head');
+  const key = el('span', 'card-key', issue.key);
+  head.append(key);
+  if (issue.priority && issue.priority !== 'none') {
+    const dot = el('span', `prio prio-${issue.priority}`);
+    dot.title = issue.priority;
+    head.append(dot);
+  }
+  if (issue.claimed_by) {
+    const claim = el('span', 'claim-badge', '⛿');
+    claim.title = `claimed by ${issue.claimed_by}`;
+    head.append(claim);
+  }
+  card.append(head);
+
+  card.append(el('div', 'card-title', issue.title));
+
+  const chips = el('div', 'card-chips');
+  if (issue.parent) {
+    const parent = el('button', 'chip chip-parent', `↳ ${issue.parent}`);
+    parent.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      handlers.onOpenIssue(issue.parent!);
+    });
+    chips.append(parent);
+  }
+  for (const label of issue.labels ?? []) chips.append(el('span', 'chip', label));
+  if (issue.milestone) chips.append(el('span', 'chip chip-milestone', `◇ ${issue.milestone}`));
+  if (chips.childElementCount > 0) card.append(chips);
+
+  card.addEventListener('click', () => handlers.onOpenIssue(issue.key));
+  return card;
+}
+
+export function renderBoard(root: HTMLElement, msg: BoardMsg, handlers: BoardHandlers): void {
+  root.replaceChildren();
+
+  const toolbar = el('div', 'toolbar');
+  const projectBtn = el('button', 'toolbar-btn project-btn', msg.project);
+  projectBtn.title = 'Switch project';
+  projectBtn.addEventListener('click', () => handlers.onPickProject());
+  const refreshBtn = el('button', 'toolbar-btn', '↻');
+  refreshBtn.title = 'Refresh';
+  refreshBtn.addEventListener('click', () => handlers.onRefresh());
+  toolbar.append(projectBtn, refreshBtn);
+  root.append(toolbar);
+
+  const board = el('div', 'board');
+  for (const status of STATUSES) {
+    const issues = msg.issues.filter((i) => i.status === status);
+    const column = el('div', 'column');
+    column.dataset['status'] = status;
+    const head = el('div', 'column-head');
+    head.append(el('span', 'column-title', COLUMN_TITLES[status]));
+    head.append(el('span', 'column-count', String(issues.length)));
+    column.append(head);
+    const body = el('div', 'column-body');
+    for (const issue of issues) body.append(renderCard(issue, handlers));
+    column.append(body);
+    board.append(column);
+  }
+  root.append(board);
+}
+
+export function renderErrorState(root: HTMLElement, kind: string, message: string): void {
+  root.replaceChildren();
+  const pane = el('div', 'empty-state');
+  if (kind === 'cli-missing') {
+    pane.append(el('h2', undefined, 'cliban not found'));
+    pane.append(
+      el('p', undefined, 'The cliban CLI is not installed or not on PATH.'),
+      el('p', undefined, 'Install it with: cargo install cliban  ·  brew install lioralabs/tap/cliban  ·  AUR: cliban'),
+      el('p', undefined, 'Or point the cliban.executablePath setting at the binary.'),
+    );
+  } else {
+    pane.append(el('h2', undefined, 'Board unavailable'), el('p', undefined, message));
+  }
+  root.append(pane);
+}

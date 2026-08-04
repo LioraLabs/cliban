@@ -6,6 +6,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('cliban.openBoard', () => {
       BoardPanel.createOrShow(context);
     }),
+    vscode.commands.registerCommand('cliban.switchProject', () => {
+      void BoardPanel.get(context).switchProject();
+    }),
+    vscode.commands.registerCommand('cliban.refreshBoard', () => {
+      void BoardPanel.get(context).refresh();
+    }),
   );
 }
 

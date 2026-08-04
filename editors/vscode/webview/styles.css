@@ -4,5 +4,185 @@ body {
   color: var(--vscode-foreground);
   background-color: var(--vscode-editor-background);
   margin: 0;
-  padding: 0.5rem;
+  padding: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+body.busy {
+  cursor: progress;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* toolbar */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  flex: none;
+}
+
+.toolbar-btn {
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  border: none;
+  border-radius: 3px;
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+}
+
+.toolbar-btn:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.project-btn {
+  font-weight: 600;
+}
+
+/* board */
+
+.board {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  flex: 1;
+  overflow-x: auto;
+  min-height: 0;
+}
+
+.column {
+  flex: 1 1 0;
+  min-width: 11rem;
+  display: flex;
+  flex-direction: column;
+  background: var(--vscode-sideBar-background);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  min-height: 0;
+}
+
+.column-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  flex: none;
+}
+
+.column-title {
+  font-weight: 600;
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.85;
+}
+
+.column-count {
+  font-size: 0.85em;
+  opacity: 0.6;
+}
+
+.column-body {
+  padding: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 2rem;
+}
+
+/* cards */
+
+.card {
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  padding: 0.45rem 0.55rem;
+  cursor: pointer;
+}
+
+.card:hover {
+  border-color: var(--vscode-focusBorder);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.card-key {
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.8em;
+  opacity: 0.65;
+}
+
+.prio {
+  width: 0.55em;
+  height: 0.55em;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.prio-low { background: var(--vscode-charts-blue); }
+.prio-medium { background: var(--vscode-charts-yellow); }
+.prio-high { background: var(--vscode-charts-orange); }
+.prio-urgent { background: var(--vscode-charts-red); }
+
+.claim-badge {
+  margin-left: auto;
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
+.card-title {
+  margin-top: 0.2rem;
+  line-height: 1.3;
+}
+
+.card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+}
+
+.chip {
+  font-size: 0.75em;
+  padding: 0.05rem 0.4rem;
+  border-radius: 8px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  border: none;
+}
+
+.chip-parent {
+  cursor: pointer;
+}
+
+.chip-milestone {
+  background: transparent;
+  border: 1px solid var(--vscode-panel-border);
+  color: var(--vscode-foreground);
+}
+
+/* empty / error state */
+
+.empty-state {
+  margin: auto;
+  max-width: 30rem;
+  text-align: center;
+  opacity: 0.85;
 }
