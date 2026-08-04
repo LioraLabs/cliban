@@ -50,7 +50,33 @@ enum Command {
     Sync(cmd::sync::SyncArgs),
 }
 
+/// Restore SIGPIPE's default disposition, which Rust's runtime sets to
+/// ignored before `main`.
+///
+/// With SIGPIPE ignored, a write past a closed pipe (`cliban activity --json |
+/// head -3` on a busy board) returns EPIPE and `println!` panics with "failed
+/// printing to stdout: Broken pipe". With the default disposition the process
+/// dies quietly on that write, exactly like cat/grep/git — and the shell
+/// reports the last pipeline stage's status, so the pipeline still succeeds.
+///
+/// Done here, once, rather than mapping `BrokenPipe` errors to exit 0 at
+/// every stdout write site: one line covers every command and every current
+/// and future print path.
+#[cfg(unix)]
+fn reset_sigpipe() {
+    // SAFETY: signal(2) with SIG_DFL only resets a signal disposition; it is
+    // called before any threads are spawned and cannot violate memory safety.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn reset_sigpipe() {}
+
 fn main() {
+    reset_sigpipe();
+
     let cli = Cli::parse();
 
     // The TUI is synchronous and owns its own runtime (see cliban-tui::data),
