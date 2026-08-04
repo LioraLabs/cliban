@@ -67,6 +67,14 @@ jobs:
           cp "target/${{ matrix.target }}/release/cliban" "target/${{ matrix.target }}/release/cliband" "$ARCHIVE/"
           cp README.md LICENSE "$ARCHIVE/"
           tar czf "$ARCHIVE.tar.gz" "$ARCHIVE"
+          # The same contents under a versionless name, so that a consumer can
+          # fetch releases/latest/download/cliban-<target>.tar.gz without first
+          # asking an API which version "latest" is. The top directory inside
+          # is versionless too: a consumer that cannot know the version cannot
+          # know a versioned member name either. SHA256SUMS covers both names.
+          ALIAS="cliban-${{ matrix.target }}"
+          mv "$ARCHIVE" "$ALIAS"
+          tar czf "$ALIAS.tar.gz" "$ALIAS"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
