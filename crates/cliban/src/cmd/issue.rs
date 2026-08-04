@@ -55,24 +55,31 @@ pub enum IssueCmd {
     /// Bulk-create issues from an NDJSON file (or stdin with '-')
     Import(ImportArgs),
     /// Move an issue to a new status
-    Mv {
-        key: String,
-        status: String,
-        /// why — recorded on the issue's timeline with the transition
-        #[arg(long, allow_hyphen_values = true)]
-        note: Option<String>,
-        /// JSON output (echo the moved issue)
-        #[arg(long)]
-        json: bool,
-        /// human output (one-line confirmation)
-        #[arg(long, conflicts_with = "json")]
-        table: bool,
-    },
+    Mv(MvArgs),
+    /// Print the raw description exactly as stored — no header, no JSON, no
+    /// formatting, ever. The read-side spare for piping a ticket's markdown
+    /// into anything that wants bytes.
+    Cat(CatArgs),
     /// A unix reflex, not a real deleter (hidden): archives, says so, names
     /// the undo. An agent that guesses `rm` gets the closest safe thing
     /// instead of losing a turn to a usage error.
     #[command(hide = true)]
-    Rm { key: String },
+    Rm(RmArgs),
+    /// GitHub reflex (hidden): `close` is `mv done`. The confirmation states
+    /// the canonical form once, so the guess teaches itself out of use.
+    #[command(hide = true)]
+    Close(StatusAliasArgs),
+    /// GitHub reflex (hidden): `reopen` is `mv in-progress`.
+    #[command(hide = true)]
+    Reopen(StatusAliasArgs),
+    /// GitHub reflex (hidden): `comment` is `log` — same args, same
+    /// positional/--message-file/piped-stdin resolution.
+    #[command(hide = true)]
+    Comment(LogArgs),
+    /// GitHub reflex (hidden): `delete` gets rm's behavior — archive, say so,
+    /// name the undo — teaching `archive` as the canonical form.
+    #[command(hide = true)]
+    Delete(RmArgs),
     /// Archive an issue (hides it from the default board and lists)
     Archive {
         key: String,
@@ -408,6 +415,63 @@ pub struct LogArgs {
 }
 
 #[derive(clap::Args)]
+pub struct MvArgs {
+    /// issue key
+    key: String,
+    /// new status
+    status: String,
+    /// why — recorded on the issue's timeline with the transition
+    #[arg(long, allow_hyphen_values = true)]
+    note: Option<String>,
+    /// JSON output (echo the moved issue)
+    #[arg(long)]
+    json: bool,
+    /// human output (one-line confirmation)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
+}
+
+#[derive(clap::Args)]
+pub struct RmArgs {
+    /// issue key
+    key: String,
+}
+
+#[derive(clap::Args)]
+pub struct CatArgs {
+    /// issue key
+    key: String,
+}
+
+/// Shared shape of the `close`/`reopen` reflexes: a fixed-status `mv` — same
+/// `--note`, same output modes, minus the status argument the alias implies.
+#[derive(clap::Args)]
+pub struct StatusAliasArgs {
+    /// issue key
+    key: String,
+    /// why — recorded on the issue's timeline with the transition
+    #[arg(long, allow_hyphen_values = true)]
+    note: Option<String>,
+    /// JSON output (echo the moved issue)
+    #[arg(long)]
+    json: bool,
+    /// human output (one-line confirmation)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
+}
+
+/// How a reflex alias teaches: `verb` replaces the canonical confirmation
+/// verb on the human line — `closed CLI-4 (mv done): backlog → done` — and
+/// `canonical` names the real command there and in a `"canonical"` field on
+/// the JSON echo (the same add-a-marker pattern as the `"noop"` retry flag,
+/// so the canonical shape is untouched).
+#[derive(Clone, Copy)]
+struct Teach {
+    verb: &'static str,
+    canonical: &'static str,
+}
+
+#[derive(clap::Args)]
 pub struct TickArgs {
     /// issue key
     key: String,
@@ -510,34 +574,69 @@ pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
         IssueCmd::Show(a) => show(db, a).await,
         IssueCmd::Ls(a) => ls(db, a).await,
         IssueCmd::Edit(a) => edit(db, a).await,
-        IssueCmd::Log(a) => log(db, a).await,
+        IssueCmd::Log(a) => log(db, a, None).await,
         IssueCmd::AppendSection(a) => append_section_cmd(db, a).await,
         IssueCmd::Tick(a) => tick(db, a).await,
         IssueCmd::Promote(a) => promote(db, a).await,
         IssueCmd::Cp(a) => cp(db, a).await,
         IssueCmd::ArchiveDone(a) => archive_done(db, a).await,
         IssueCmd::Import(a) => import(db, a).await,
-        IssueCmd::Mv {
-            key,
-            status,
-            note,
-            json,
-            table,
-        } => mv(db, key, status, note, crate::output::mode(json, table)).await,
-        IssueCmd::Rm { key } => {
-            // Do the closest safe thing rather than spending a turn refusing.
-            // The message IS the point of this alias — it prints in every
-            // mode, so the caller always learns nothing was deleted.
-            let key = parse_issue_key(&key)?;
-            let store = store_open::open(db).await?;
-            // Desired state = archived; already-archived is the same success.
-            set_archived_on(&store, key.clone(), true).await?;
-            println!(
-                "archived {key} — cliban archives instead of deleting \
-                 (undo: cliban issue unarchive {key})"
-            );
-            Ok(())
+        IssueCmd::Mv(a) => {
+            mv(
+                db,
+                a.key,
+                a.status,
+                a.note,
+                crate::output::mode(a.json, a.table),
+                None,
+            )
+            .await
         }
+        IssueCmd::Cat(a) => cat(db, a).await,
+        IssueCmd::Rm(a) => rm_reflex(db, a.key, None).await,
+        // The reflex aliases forward onto the canonical handlers — mv's
+        // retry-safe noop, log's stdin fallback, and every output-mode rule
+        // come along for free; the `Teach` only decorates the confirmation.
+        IssueCmd::Close(a) => {
+            mv(
+                db,
+                a.key,
+                "done".to_string(),
+                a.note,
+                crate::output::mode(a.json, a.table),
+                Some(Teach {
+                    verb: "closed",
+                    canonical: "mv done",
+                }),
+            )
+            .await
+        }
+        IssueCmd::Reopen(a) => {
+            mv(
+                db,
+                a.key,
+                "in-progress".to_string(),
+                a.note,
+                crate::output::mode(a.json, a.table),
+                Some(Teach {
+                    verb: "reopened",
+                    canonical: "mv in-progress",
+                }),
+            )
+            .await
+        }
+        IssueCmd::Comment(a) => {
+            log(
+                db,
+                a,
+                Some(Teach {
+                    verb: "commented",
+                    canonical: "log",
+                }),
+            )
+            .await
+        }
+        IssueCmd::Delete(a) => rm_reflex(db, a.key, Some("archive")).await,
         IssueCmd::Archive { key, json, table } => {
             let store = store_open::open(db).await?;
             let (issue, noop) = set_archived_on(&store, key, true).await?;
@@ -1783,7 +1882,7 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
     print_issue_result(&store, &issue, "updated", crate::output::mode(a.json, a.table)).await
 }
 
-async fn log(db: &Option<String>, a: LogArgs) -> CliResult<()> {
+async fn log(db: &Option<String>, a: LogArgs, teach: Option<Teach>) -> CliResult<()> {
     let key = parse_issue_key(&a.key)?;
     let mut msg = a.message.clone().unwrap_or_default();
     if let Some(file) = &a.message_file {
@@ -1836,6 +1935,12 @@ async fn log(db: &Option<String>, a: LogArgs) -> CliResult<()> {
 
     if crate::output::mode(a.json, a.table).is_json() {
         let mut m = serde_json::Map::new();
+        if let Some(t) = teach {
+            m.insert(
+                "canonical".into(),
+                serde_json::json!(format!("issue {}", t.canonical)),
+            );
+        }
         m.insert("entry".into(), serde_json::json!(msg));
         m.insert("key".into(), serde_json::json!(a.key));
         m.insert("timestamp".into(), serde_json::json!(format_usec(now)));
@@ -1843,6 +1948,8 @@ async fn log(db: &Option<String>, a: LogArgs) -> CliResult<()> {
             "{}",
             serde_json::to_string_pretty(&serde_json::Value::Object(m)).unwrap()
         );
+    } else if let Some(t) = teach {
+        println!("{} {} ({}): {}", t.verb, a.key, t.canonical, msg);
     } else {
         println!("logged on {}: {}", a.key, msg);
     }
@@ -2437,6 +2544,7 @@ async fn mv(
     status: String,
     note: Option<String>,
     mode: Mode,
+    teach: Option<Teach>,
 ) -> CliResult<()> {
     let key = parse_issue_key(&key)?;
     let status = parse_status(&status)?;
@@ -2478,17 +2586,67 @@ async fn mv(
             .ok_or(cliban_core::Error::NotFound)?;
         let inputs = issue_json_inputs(&store, &issue).await?;
         let mut v = build_issue_json(inputs, Detail::Full);
-        if noop {
-            if let serde_json::Value::Object(m) = &mut v {
+        if let serde_json::Value::Object(m) = &mut v {
+            if noop {
                 m.insert("noop".into(), serde_json::json!(true));
+            }
+            if let Some(t) = teach {
+                m.insert(
+                    "canonical".into(),
+                    serde_json::json!(format!("issue {}", t.canonical)),
+                );
             }
         }
         println!("{}", serde_json::to_string_pretty(&v).unwrap());
-    } else if noop {
-        println!("{key} already {status} (nothing to do)");
     } else {
-        println!("moved {key}: {from} → {status}");
+        match (teach, noop) {
+            (None, true) => println!("{key} already {status} (nothing to do)"),
+            (None, false) => println!("moved {key}: {from} → {status}"),
+            (Some(t), true) => println!(
+                "{} {key} ({}): already {status} (nothing to do)",
+                t.verb, t.canonical
+            ),
+            (Some(t), false) => {
+                println!("{} {key} ({}): {from} → {status}", t.verb, t.canonical)
+            }
+        }
     }
+    Ok(())
+}
+
+/// `issue cat`: the stored description, verbatim — the one read that never
+/// formats. No `--json`/`--table`, no mode branch, no trailing decoration:
+/// its whole contract is "the bytes, exactly".
+async fn cat(db: &Option<String>, a: CatArgs) -> CliResult<()> {
+    let key = parse_issue_key(&a.key)?;
+    let store = store_open::open(db).await?;
+    let issue = store
+        .call(move |conn| issues::get_by_key(conn, &key))
+        .await?
+        .ok_or(cliban_core::Error::NotFound)?;
+    print!("{}", issue.description);
+    Ok(())
+}
+
+/// The shared body of `issue rm` and `issue delete`: do the closest safe
+/// thing rather than spending a turn refusing. The message IS the point of
+/// these reflexes — it prints in every mode, so the caller always learns
+/// nothing was deleted. `delete` additionally states the canonical form
+/// (`archive`) once, per the alias contract.
+async fn rm_reflex(
+    db: &Option<String>,
+    key: String,
+    canonical: Option<&str>,
+) -> CliResult<()> {
+    let key = parse_issue_key(&key)?;
+    let store = store_open::open(db).await?;
+    // Desired state = archived; already-archived is the same success.
+    set_archived_on(&store, key.clone(), true).await?;
+    let teach = canonical.map(|c| format!(" ({c})")).unwrap_or_default();
+    println!(
+        "archived {key}{teach} — cliban archives instead of deleting \
+         (undo: cliban issue unarchive {key})"
+    );
     Ok(())
 }
 
