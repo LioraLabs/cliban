@@ -235,6 +235,93 @@ pub fn rewrite_step_line(
     ))
 }
 
+/// The `issue cp` description transform: duplicate the shape, never the
+/// history. Keeps only the contract sections `## Spec`, `## Plan`, and
+/// `## Notes` — in the order they appear in the source — with the plan body
+/// passed through [`reset_plan_body`]. `## Activity Log` and any non-contract
+/// H2 section are dropped: they record what happened to the original, not
+/// what the work is.
+pub fn copy_description(desc: &str) -> String {
+    let mut kept: Vec<(usize, &str, &str)> = Vec::new();
+    for anchor in ["Spec", "Plan", "Notes"] {
+        let (start, end, ok) = find_section(desc, anchor);
+        if ok {
+            kept.push((start, anchor, desc[start..end].trim_matches('\n')));
+        }
+    }
+    kept.sort_by_key(|(start, _, _)| *start);
+    let mut out = String::new();
+    for (_, anchor, body) in kept {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str("## ");
+        out.push_str(anchor);
+        out.push('\n');
+        let body = if anchor == "Plan" {
+            reset_plan_body(body)
+        } else {
+            body.to_string()
+        };
+        if !body.trim().is_empty() {
+            out.push('\n');
+            out.push_str(body.trim_matches('\n'));
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Reset a plan body to its unstarted shape. Pure transform, two rules:
+///   * a column-zero `- [x] ` step becomes `- [ ] ` (indented child boxes are
+///     not steps and pass through untouched),
+///   * a step's trailing promotion marker ` → KEY` is stripped — but only
+///     when the suffix is actually issue-key-shaped, so a step titled
+///     "map a → b" keeps its arrow. The marker records that the *original*
+///     split that step into an issue; the copy carries no relations, so the
+///     pointer would dangle.
+pub fn reset_plan_body(plan_body: &str) -> String {
+    let mut out = String::with_capacity(plan_body.len());
+    for line in plan_body.split_inclusive('\n') {
+        if line.starts_with("- [ ] ") || line.starts_with("- [x] ") {
+            let rest = &line["- [x] ".len()..];
+            out.push_str("- [ ] ");
+            out.push_str(&strip_promotion_suffix(rest));
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+/// Strip a trailing ` → KEY` (issue-key-shaped only) from a step line,
+/// preserving the line's original newline (if any).
+fn strip_promotion_suffix(line: &str) -> String {
+    let (body, newline) = match line.strip_suffix('\n') {
+        Some(b) => (b.strip_suffix('\r').unwrap_or(b), &line[b.len()..]),
+        None => (line, ""),
+    };
+    let stripped = match body.rfind(" → ") {
+        Some(idx) if is_issue_key_shaped(body[idx + " → ".len()..].trim()) => &body[..idx],
+        _ => body,
+    };
+    format!("{}{}", stripped.trim_end(), newline)
+}
+
+/// `PROJECT-N`: letters/digits (starting with a letter) before the last dash,
+/// a positive integer after it.
+fn is_issue_key_shaped(s: &str) -> bool {
+    let Some(idx) = s.rfind('-') else {
+        return false;
+    };
+    let (project, seq) = (&s[..idx], &s[idx + 1..]);
+    !project.is_empty()
+        && project.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && project.chars().all(|c| c.is_ascii_alphanumeric())
+        && !seq.is_empty()
+        && seq.chars().all(|c| c.is_ascii_digit())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,6 +347,79 @@ mod tests {
     fn tick_already_checked_errors() {
         let d = "## Plan\n\n### Task 1: x\n\n- [x] Step 1\n";
         assert!(tick_step(d, 1, 1).is_err());
+    }
+
+    #[test]
+    fn reset_unticks_column_zero_steps_only() {
+        let body = "### Task 1: x\n\n- [x] **Step 1: done**\n  - [x] child stays\n- [ ] **Step 2: open**\n  prose\n";
+        let out = reset_plan_body(body);
+        assert!(out.contains("- [ ] **Step 1: done**"), "got {out:?}");
+        assert!(
+            out.contains("  - [x] child stays"),
+            "indented boxes are not steps: {out:?}"
+        );
+        assert!(out.contains("- [ ] **Step 2: open**"));
+        assert!(out.contains("### Task 1: x"));
+    }
+
+    #[test]
+    fn reset_strips_key_shaped_promotion_suffixes_only() {
+        let body = "- [x] split me → CLI-53\n- [ ] map a → b\n- [x] pipeline x → y → COOK-7\n";
+        let out = reset_plan_body(body);
+        assert_eq!(
+            out,
+            "- [ ] split me\n- [ ] map a → b\n- [ ] pipeline x → y\n"
+        );
+    }
+
+    #[test]
+    fn reset_handles_last_line_without_newline() {
+        assert_eq!(reset_plan_body("- [x] tail → ABC-12"), "- [ ] tail");
+    }
+
+    #[test]
+    fn key_shaped_suffix_rules() {
+        assert!(is_issue_key_shaped("CLI-53"));
+        assert!(is_issue_key_shaped("cook2-101"));
+        assert!(!is_issue_key_shaped("b"));
+        assert!(!is_issue_key_shaped("a-"));
+        assert!(!is_issue_key_shaped("-7"));
+        assert!(!is_issue_key_shaped("7-7"));
+        assert!(!is_issue_key_shaped("two words-3"));
+    }
+
+    #[test]
+    fn copy_keeps_contract_sections_in_source_order_and_resets_plan() {
+        let d = "## Notes\n\nlesson\n\n## Spec\n\nthe spec\n\n## Plan\n\n### Task 1: t\n\n- [x] done → CLI-9\n- [ ] open\n\n## Activity Log\n\n- 2026-01-01T00:00Z — history\n";
+        let out = copy_description(d);
+        assert_eq!(
+            out,
+            "## Notes\n\nlesson\n\n## Spec\n\nthe spec\n\n## Plan\n\n### Task 1: t\n\n- [x] done → CLI-9\n- [ ] open\n"
+                .replace("- [x] done → CLI-9", "- [ ] done"),
+            "got {out:?}"
+        );
+        assert!(!out.contains("Activity Log"));
+        assert!(!out.contains("history"));
+    }
+
+    #[test]
+    fn copy_drops_non_contract_sections() {
+        let d = "## Spec\n\ns\n\n## Decisions so far\n\n- deliberation\n\n## Plan\n\n- [ ] step\n";
+        let out = copy_description(d);
+        assert!(!out.contains("Decisions so far"));
+        assert!(!out.contains("deliberation"));
+        assert!(out.contains("## Spec\n\ns\n"));
+        assert!(out.contains("## Plan\n\n- [ ] step\n"));
+    }
+
+    #[test]
+    fn copy_tolerates_missing_and_empty_sections() {
+        assert_eq!(copy_description("free text, no sections\n"), "");
+        assert_eq!(copy_description(""), "");
+        // An empty section keeps its heading without growing blank runs.
+        let out = copy_description("## Spec\n\n## Plan\n\n- [ ] s\n");
+        assert_eq!(out, "## Spec\n\n## Plan\n\n- [ ] s\n");
+        assert!(!out.contains("\n\n\n"));
     }
 
     #[test]
