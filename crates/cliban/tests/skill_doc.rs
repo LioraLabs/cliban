@@ -32,7 +32,9 @@ fn skill_md() -> String {
     md
 }
 
-/// Subcommand paths named in the doc. cliban's tree is at most two deep
+/// Subcommand paths named in the doc: `cliban ...` invocations in shell
+/// blocks, plus the command-map table rows (`| \`noun v1|v2\` | ... |`),
+/// which are the skill's actual inventory. cliban's tree is at most two deep
 /// (`group subcommand`), so take up to two leading non-flag words.
 fn documented_paths(md: &str) -> BTreeSet<Vec<String>> {
     let mut out = BTreeSet::new();
@@ -42,24 +44,51 @@ fn documented_paths(md: &str) -> BTreeSet<Vec<String>> {
             in_code = !in_code;
             continue;
         }
-        // Only shell blocks — prose can legitimately start a sentence with
-        // "cliban records ...".
-        if !in_code {
+        let line = line.trim();
+        if in_code {
+            let Some(rest) = line.strip_prefix("cliban ") else {
+                continue;
+            };
+            let path: Vec<String> = rest
+                // Stop at the first flag, trailing `# comment`, or shell operator.
+                .split_whitespace()
+                .take_while(|w| !w.starts_with(['-', '#', '<', '>', '|', '$']))
+                .take(2)
+                .map(str::to_string)
+                .collect();
+            if !path.is_empty() {
+                out.insert(path);
+            }
             continue;
         }
-        let line = line.trim();
-        let Some(rest) = line.strip_prefix("cliban ") else {
+        // A command-map row: the FIRST backtick span holds `noun v1|v2|...`
+        // (escaped as \| inside the table); later spans are prose.
+        if !line.starts_with('|') {
+            continue;
+        }
+        let Some(span) = line.trim_start_matches('|').trim().strip_prefix('`') else {
             continue;
         };
-        let path: Vec<String> = rest
-            // Stop at the first flag, trailing `# comment`, or shell operator.
-            .split_whitespace()
-            .take_while(|w| !w.starts_with(['-', '#', '<', '>', '|', '$']))
-            .take(2)
-            .map(str::to_string)
-            .collect();
-        if !path.is_empty() {
-            out.insert(path);
+        let Some((span, _)) = span.split_once('`') else {
+            continue;
+        };
+        let cleaned = span.replace("\\|", "|");
+        let mut words = cleaned.split_whitespace();
+        let Some(noun) = words.next() else { continue };
+        // A command noun is a bare lowercase word — anything else (`## Spec`,
+        // `--flag`, `$VAR`) is prose that happens to sit in a table.
+        if noun.is_empty() || !noun.chars().all(|c| c.is_ascii_lowercase()) {
+            continue;
+        }
+        match words.next() {
+            None => {
+                out.insert(vec![noun.to_string()]);
+            }
+            Some(verbs) => {
+                for v in verbs.split('|').filter(|v| !v.is_empty()) {
+                    out.insert(vec![noun.to_string(), v.to_string()]);
+                }
+            }
         }
     }
     out
