@@ -2,6 +2,7 @@ import './styles.css';
 import type { HostMsg, WebviewMsg } from '../shared/protocol';
 import type { Status } from '../shared/model';
 import { renderBoard, renderErrorState } from './board';
+import { closeDrawer, renderDrawer } from './drawer';
 import { toast } from './toast';
 
 declare function acquireVsCodeApi(): { postMessage(msg: WebviewMsg): void };
@@ -30,6 +31,12 @@ function onMessage(msg: HostMsg): void {
       break;
     case 'toast':
       toast(msg.level, msg.message);
+      break;
+    case 'issueDetail':
+      renderDrawer(document.body, msg, {
+        onClose: () => closeDrawer(document.body),
+        onOpenIssue: handlers.onOpenIssue,
+      });
       break;
   }
 }

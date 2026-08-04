@@ -33,7 +33,20 @@ export interface ToastMsg {
   message: string;
 }
 
-export type HostMsg = BoardMsg | ErrorStateMsg | BusyMsg | ToastMsg;
+export interface IssueSections {
+  spec: string | null;
+  plan: string | null;
+  notes: string | null;
+  activity: string | null;
+}
+
+export interface IssueDetailMsg {
+  type: 'issueDetail';
+  issue: Issue;
+  sections: IssueSections;
+}
+
+export type HostMsg = BoardMsg | ErrorStateMsg | BusyMsg | ToastMsg | IssueDetailMsg;
 
 // ---- webview → host ----
 

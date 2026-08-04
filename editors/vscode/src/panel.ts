@@ -90,11 +90,30 @@ export class BoardPanel {
         await this.switchProject();
         break;
       case 'openIssue':
-        // detail drawer lands in a later task
+        await this.openIssue(msg.key);
         break;
       case 'moveIssue':
         await this.moveIssue(msg.requestId, msg.key, msg.toStatus);
         break;
+    }
+  }
+
+  private async openIssue(key: string): Promise<void> {
+    this.post({ type: 'busy', on: true });
+    try {
+      const [issue, spec, plan, notes, activity] = await Promise.all([
+        this.client.showIssue(key),
+        this.client.showSection(key, 'spec'),
+        this.client.showSection(key, 'plan'),
+        this.client.showSection(key, 'notes'),
+        this.client.showSection(key, 'activity'),
+      ]);
+      this.post({ type: 'issueDetail', issue, sections: { spec, plan, notes, activity } });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.post({ type: 'toast', level: 'error', message });
+    } finally {
+      this.post({ type: 'busy', on: false });
     }
   }
 
