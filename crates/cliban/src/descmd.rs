@@ -97,11 +97,24 @@ pub fn find_step(task_body: &str, m: i32) -> Option<Step> {
     None
 }
 
+/// The two success shapes of [`tick_step`]: the step was flipped, or it was
+/// already in the desired state. An already-checked step is NOT an error — a
+/// caller retrying after a timeout is asking for a state the plan already has —
+/// but it is a distinct, detectable case so the CLI can say "nothing to do"
+/// instead of pretending it wrote.
+pub enum TickOutcome {
+    /// The step was unchecked; here is the rewritten description.
+    Ticked(String),
+    /// The step is already checked — the description is untouched.
+    AlreadyChecked,
+}
+
 /// Flips the M-th step of task N in the description from "- [ ] ..." to
-/// "- [x] ...". Returns the rewritten description. Returns an error if the
-/// `## Plan` section is missing, the task is missing, the step is missing, or
-/// the step is already checked.
-pub fn tick_step(desc: &str, task_n: i32, step_m: i32) -> Result<String, String> {
+/// "- [x] ...". Returns [`TickOutcome::Ticked`] with the rewritten description,
+/// or [`TickOutcome::AlreadyChecked`] when the box is already ticked (desired
+/// state, no rewrite). Returns an error only for genuinely wrong targets: the
+/// `## Plan` section is missing, the task is missing, or the step is missing.
+pub fn tick_step(desc: &str, task_n: i32, step_m: i32) -> Result<TickOutcome, String> {
     let (plan_start, plan_end, ok) = find_section(desc, "Plan");
     if !ok {
         return Err(errf("no ## Plan section".to_string()));
@@ -117,20 +130,18 @@ pub fn tick_step(desc: &str, task_n: i32, step_m: i32) -> Result<String, String>
         None => return Err(errf(format!("no Step {step_m} in Task {task_n}"))),
     };
     if step.checked {
-        return Err(errf(format!(
-            "Step {step_m} of Task {task_n} already checked"
-        )));
+        return Ok(TickOutcome::AlreadyChecked);
     }
     // Absolute offset of the step line inside the original desc.
     let abs = plan_start + task_start + step.line_start;
     // The step line is guaranteed to start with "- [ ] ".
     let new_line = format!("- [x] {}", &step.raw["- [ ] ".len()..]);
-    Ok(format!(
+    Ok(TickOutcome::Ticked(format!(
         "{}{}{}",
         &desc[..abs],
         new_line,
         &desc[abs + step.raw.len()..]
-    ))
+    )))
 }
 
 /// Appends a chronological entry to the "## Activity Log" section. The entry is
@@ -338,15 +349,29 @@ mod tests {
     #[test]
     fn tick_step_checks_box() {
         let d = "## Plan\n\n### Task 1: x\n\n- [ ] Step 1\n- [ ] Step 2\n";
-        let out = tick_step(d, 1, 1).unwrap();
+        let out = match tick_step(d, 1, 1).unwrap() {
+            TickOutcome::Ticked(out) => out,
+            TickOutcome::AlreadyChecked => panic!("unchecked step must tick"),
+        };
         assert!(out.contains("- [x] Step 1"));
         assert!(out.contains("- [ ] Step 2"));
     }
 
     #[test]
-    fn tick_already_checked_errors() {
+    fn tick_already_checked_is_a_detectable_noop_not_an_error() {
         let d = "## Plan\n\n### Task 1: x\n\n- [x] Step 1\n";
-        assert!(tick_step(d, 1, 1).is_err());
+        assert!(matches!(
+            tick_step(d, 1, 1),
+            Ok(TickOutcome::AlreadyChecked)
+        ));
+    }
+
+    #[test]
+    fn tick_wrong_targets_stay_errors() {
+        let d = "## Plan\n\n### Task 1: x\n\n- [x] Step 1\n";
+        assert!(tick_step(d, 1, 2).is_err(), "no such step");
+        assert!(tick_step(d, 2, 1).is_err(), "no such task");
+        assert!(tick_step("no plan here\n", 1, 1).is_err(), "no ## Plan");
     }
 
     #[test]
