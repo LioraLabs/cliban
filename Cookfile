@@ -31,6 +31,13 @@ probe rust:toolchain
 probe shell:linter
     tools { shellcheck }
 
+probe node:toolchain
+    tools { node npm }
+
+# Build/test configuration the extension check reads but never iterates.
+probe vscode:config
+    files { "editors/vscode/package.json" "editors/vscode/package-lock.json" "editors/vscode/tsconfig.json" "editors/vscode/esbuild.mjs" "editors/vscode/webview/styles.css" "editors/vscode/test/fixtures/fake-cliban.js" }
+
 # ---------------------------------------------------------------- gates
 
 # The drift guard. v0.1.0 shipped a binary reporting the wrong version because
@@ -59,9 +66,18 @@ recipe clippy
     seal rust:manifests rust:toolchain
     test { cargo clippy --workspace --all-targets -- -D warnings }
 
+# No $<in> in the body: one unit over the whole extension source set, like
+# test-workspace. `npm ci` keeps node_modules honest to the lockfile.
+recipe vscode-ext
+    ingredients "editors/vscode/src/**/*.ts" "editors/vscode/shared/**/*.ts"
+        "editors/vscode/webview/**/*.ts" "editors/vscode/test/**/*.ts"
+    seal node:toolchain vscode:config
+    test { npm --prefix editors/vscode ci --no-audit --no-fund }
+    test { npm --prefix editors/vscode run check }
+
 # The whole gate, and what `release` and `publish` hang off. Red here means
 # `skipped (upstream-failed)` there, with the body never running.
-chore check: version-sync lint-install test-workspace clippy
+chore check: version-sync lint-install test-workspace clippy vscode-ext
 
 # ---------------------------------------------------------------- mutating
 
