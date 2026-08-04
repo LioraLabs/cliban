@@ -135,10 +135,13 @@ fn cp_copies_the_shape_and_never_the_history() {
     assert_eq!(copy["labels"], serde_json::json!(["feature"]));
     assert_eq!(copy["milestone"], "v1");
     assert_eq!(copy["status"], "backlog");
-    assert_eq!(copy["archived"], false);
+    // Echo shape: absent means default, and the body lives behind `show`.
+    assert!(copy.get("archived").is_none(), "{copy}");
+    assert!(copy.get("description").is_none(), "{copy}");
 
     // Description: Spec + reset Plan + Notes, nothing else.
-    let desc = copy["description"].as_str().unwrap();
+    let shown = show_json(&db, "CLI-3");
+    let desc = shown["description"].as_str().unwrap();
     assert!(desc.contains("## Spec\n\nthe spec body\n"), "{desc:?}");
     assert!(
         desc.contains("- [ ] **Step 1: done step**\n"),
@@ -158,11 +161,11 @@ fn cp_copies_the_shape_and_never_the_history() {
         "dangling promotion pointer: {desc:?}"
     );
 
-    // History: never copied.
-    assert_eq!(copy["relations"], serde_json::json!([]));
+    // History: never copied (absent in the lean echo means empty/unset).
+    assert!(copy.get("relations").is_none(), "{copy}");
     assert!(copy.get("claimed_by").is_none(), "copy must be unclaimed");
-    assert_eq!(copy["due_date"], serde_json::Value::Null);
-    assert_eq!(copy["completed_at"], serde_json::Value::Null);
+    assert!(copy.get("due_date").is_none(), "{copy}");
+    assert!(copy.get("completed_at").is_none(), "{copy}");
 
     // The source is untouched (only updated_at-invariant fields compared).
     let after = show_json(&db, "CLI-1");

@@ -119,7 +119,12 @@ pub enum Detail {
     /// Every field except `description`. The default for query commands that
     /// return many rows.
     Brief,
-    /// Every field. Single-issue output, mutation echoes, and `--full`.
+    /// The Brief shape with one exception: `updated_at` keeps its stored
+    /// microsecond precision, because a mutation echo is a valid CAS token —
+    /// an agent chains `edit --if-updated-at` from the previous echo without
+    /// a re-`show`.
+    Echo,
+    /// Every field. Single-entity reads (`show`, `current`) and `--full`.
     Full,
 }
 
@@ -144,9 +149,19 @@ pub fn trim_usec(ts: &str) -> String {
     }
 }
 
+/// `updated_at` for a non-Full row: trimmed in a list, stored-precision in a
+/// mutation echo (the CAS-token exception — see [`Detail::Echo`]).
+fn row_ts(ts: &str, detail: Detail) -> String {
+    if detail == Detail::Echo {
+        ts.to_string()
+    } else {
+        trim_usec(ts)
+    }
+}
+
 pub fn build_issue_json(i: IssueJsonInputs, detail: Detail) -> Value {
     let mut m = Map::new();
-    if detail == Detail::Brief {
+    if detail != Detail::Full {
         // The list-row diet: a field that is null, empty, or the default is
         // absent, and per-row constants an agent never reads from a list
         // (`created_at`, `git_branch_name`, `position`) stay in `Full`.
@@ -180,7 +195,7 @@ pub fn build_issue_json(i: IssueJsonInputs, detail: Detail) -> Value {
         }
         m.insert("status".into(), json!(i.status));
         m.insert("title".into(), json!(i.title));
-        m.insert("updated_at".into(), json!(trim_usec(&i.updated_at)));
+        m.insert("updated_at".into(), json!(row_ts(&i.updated_at, detail)));
         return Value::Object(m);
     }
     m.insert("archived".into(), json!(i.archived));
@@ -282,7 +297,7 @@ pub fn build_project_json(
     detail: Detail,
 ) -> Value {
     let mut m = Map::new();
-    if detail == Detail::Brief {
+    if detail != Detail::Full {
         if archived {
             m.insert("archived".into(), json!(true));
         }
@@ -291,7 +306,7 @@ pub fn build_project_json(
         }
         m.insert("key".into(), json!(key));
         m.insert("name".into(), json!(name));
-        m.insert("updated_at".into(), json!(trim_usec(updated_at)));
+        m.insert("updated_at".into(), json!(row_ts(updated_at, detail)));
         return Value::Object(m);
     }
     m.insert("archived".into(), json!(archived));
@@ -327,7 +342,7 @@ pub fn build_milestone_json(
     detail: Detail,
 ) -> Value {
     let mut m = Map::new();
-    if detail == Detail::Brief {
+    if detail != Detail::Full {
         m.insert("issue_count".into(), json!(issue_count));
         m.insert("name".into(), json!(name));
         if let Some(p) = &project {
@@ -337,7 +352,7 @@ pub fn build_milestone_json(
         if let Some(t) = &target_date {
             m.insert("target_date".into(), json!(t));
         }
-        m.insert("updated_at".into(), json!(trim_usec(updated_at)));
+        m.insert("updated_at".into(), json!(row_ts(updated_at, detail)));
         return Value::Object(m);
     }
     m.insert("created_at".into(), json!(created_at));

@@ -887,13 +887,14 @@ async fn add(db: &Option<String>, a: AddArgs) -> CliResult<()> {
     .await
 }
 
-/// Echo a mutated issue: human `{verb} {KEY}: {title}\n`; json pretty.
+/// Echo a mutated issue: human `{verb} {KEY}: {title}\n`; json one compact
+/// Echo-shape line (the lean row + a CAS-precision `updated_at`).
 async fn print_issue_result(store: &Store, issue: &Issue, verb: &str, mode: Mode) -> CliResult<()> {
     if mode.is_json() {
         let inputs = issue_json_inputs(store, issue).await?;
         println!(
             "{}",
-            serde_json::to_string_pretty(&build_issue_json(inputs, Detail::Full)).unwrap()
+            serde_json::to_string(&build_issue_json(inputs, Detail::Echo)).unwrap()
         );
     } else {
         println!("{verb} {}: {}", issue.key, issue.title);
@@ -1844,7 +1845,7 @@ async fn log(db: &Option<String>, a: LogArgs, teach: Option<Teach>) -> CliResult
         m.insert("timestamp".into(), serde_json::json!(format_usec(now)));
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::Value::Object(m)).unwrap()
+            serde_json::to_string(&serde_json::Value::Object(m)).unwrap()
         );
     } else if let Some(t) = teach {
         println!("{} {} ({}): {}", t.verb, a.key, t.canonical, msg);
@@ -1901,7 +1902,7 @@ async fn tick(db: &Option<String>, a: TickArgs) -> CliResult<()> {
         m.insert("updated_at".into(), serde_json::json!(updated_at));
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::Value::Object(m)).unwrap()
+            serde_json::to_string(&serde_json::Value::Object(m)).unwrap()
         );
     } else if noop {
         println!(
@@ -2065,7 +2066,7 @@ async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
         m.insert("task".into(), serde_json::json!(a.task));
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::Value::Object(m)).unwrap()
+            serde_json::to_string(&serde_json::Value::Object(m)).unwrap()
         );
     } else {
         println!(
@@ -2249,7 +2250,7 @@ async fn archive_done(db: &Option<String>, a: ArchiveDoneArgs) -> CliResult<()> 
             m.insert("mode".into(), serde_json::json!("auto"));
             println!(
                 "{}",
-                serde_json::to_string_pretty(&serde_json::Value::Object(m)).unwrap()
+                serde_json::to_string(&serde_json::Value::Object(m)).unwrap()
             );
         } else {
             println!("archived {n} done issue(s) (auto sweep)");
@@ -2284,7 +2285,7 @@ async fn archive_done(db: &Option<String>, a: ArchiveDoneArgs) -> CliResult<()> 
         m.insert("archived".into(), serde_json::json!(n));
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::Value::Object(m)).unwrap()
+            serde_json::to_string(&serde_json::Value::Object(m)).unwrap()
         );
     } else {
         println!("archived {n} done issue(s) in {project}");
@@ -2410,7 +2411,7 @@ async fn import(db: &Option<String>, a: ImportArgs) -> CliResult<()> {
             let inputs = issue_json_inputs(&store, &issue).await?;
             println!(
                 "{}",
-                serde_json::to_string(&build_issue_json(inputs, Detail::Full)).unwrap()
+                serde_json::to_string(&build_issue_json(inputs, Detail::Echo)).unwrap()
             );
         }
     }
@@ -2488,7 +2489,7 @@ async fn mv(
             .await?
             .ok_or(cliban_core::Error::NotFound)?;
         let inputs = issue_json_inputs(&store, &issue).await?;
-        let mut v = build_issue_json(inputs, Detail::Full);
+        let mut v = build_issue_json(inputs, Detail::Echo);
         if let serde_json::Value::Object(m) = &mut v {
             if noop {
                 m.insert("noop".into(), serde_json::json!(true));
@@ -2500,7 +2501,7 @@ async fn mv(
                 );
             }
         }
-        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+        println!("{}", serde_json::to_string(&v).unwrap());
     } else {
         match (teach, noop) {
             (None, true) => println!("{key} already {status} (nothing to do)"),
@@ -2609,13 +2610,13 @@ async fn confirm_issue(
 ) -> CliResult<()> {
     if mode.is_json() {
         let inputs = issue_json_inputs(store, issue).await?;
-        let mut v = build_issue_json(inputs, Detail::Full);
+        let mut v = build_issue_json(inputs, Detail::Echo);
         if noop {
             if let serde_json::Value::Object(m) = &mut v {
                 m.insert("noop".into(), serde_json::json!(true));
             }
         }
-        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+        println!("{}", serde_json::to_string(&v).unwrap());
     } else if noop {
         println!("{} already {verb} (nothing to do)", issue.key);
     } else {

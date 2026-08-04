@@ -27,8 +27,8 @@ surface:
   `--section X`), never formatted.
 - **Output follows the reader**: piped stdout → JSON/NDJSON, TTY → tables;
   `--json`/`--table` force it, `$CLIBAN_OUTPUT` pins it. Mutations echo the
-  changed entity as JSON when piped, confirm in one line on a TTY. `cat` is
-  the exception: always bytes, every mode.
+  changed entity as one compact lean JSON line when piped, confirm in one
+  line on a TTY. `cat` is the exception: always bytes, every mode.
 
 ## Traps
 
@@ -105,14 +105,17 @@ the key, relations, and recorded past.
 
 **List rows are lean; single-entity output is complete.**
 
-- **Lean** (`issue ls`, `project ls`, `milestone ls`): a field that is null,
-  empty, or the default is **absent** — no `"milestone":null`, no
-  `"labels":[]`, no `"archived":false`. Also never in list rows:
-  `description`, `git_branch_name`, `position`, `created_at`.
-  Second-precision timestamps. Read with `.get()` / jq; never destructure by
-  fixed keys.
-- **Full** (`issue show`, `issue current`, every mutation echo, `--full` on
-  any list): all fields, optional ones `null`, microsecond timestamps.
+- **Lean** (`issue ls`, `project ls`, `milestone ls`, and every mutation
+  echo): a field that is null, empty, or the default is **absent** — no
+  `"milestone":null`, no `"labels":[]`, no `"archived":false`. Never
+  present: `description`, `git_branch_name`, `position`, `created_at`.
+  Second-precision timestamps, except a mutation echo's `updated_at`, which
+  keeps microsecond precision — **the echo is a valid `--if-updated-at` CAS
+  token**, so you can chain edits without a re-`show`. Echoes also carry
+  `"noop":true` on retry no-ops. Read with `.get()` / jq; never destructure
+  by fixed keys.
+- **Full** (`issue show`, `issue current`, `--full` on any list): all
+  fields, optional ones `null`, microsecond timestamps.
   Fields: key, title, description, status, priority, position, archived,
   milestone, parent, due_date, labels, relations `[{type,target}]`,
   git_branch_name, created_at, updated_at, plus completed_at/claimed_by when
@@ -195,8 +198,8 @@ cliban issue log PROJ-12 "note"         # writes ## Activity Log AND the durable
 - Racy round-trips: pin the read —
   `TS=$(cliban issue show PROJ-12 --json | jq -r .updated_at)` then
   `cliban issue edit PROJ-12 ... --if-updated-at "$TS"` (exit 2 = stale;
-  re-read and retry). `project edit` takes the same flag. CAS timestamps come
-  from `show`, never from list rows.
+  re-read and retry). `project edit` takes the same flag. CAS timestamps
+  come from `show` or a mutation echo's `updated_at` — never from list rows.
 
 ## Project memory
 

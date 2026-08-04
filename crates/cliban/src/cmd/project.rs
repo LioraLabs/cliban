@@ -283,7 +283,7 @@ fn confirm_project(p: &cliban_core::schema::Project, verb: &str, mode: Mode) -> 
     if mode.is_json() {
         println!(
             "{}",
-            serde_json::to_string_pretty(&project_json(p)).unwrap()
+            serde_json::to_string(&project_json_detail(p, crate::output::Detail::Echo)).unwrap()
         );
     } else {
         println!("{verb} {}", p.key);
@@ -337,8 +337,8 @@ async fn add(
         })
         .await?;
     if mode.is_json() {
-        let v = project_json(&p);
-        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+        let v = project_json_detail(&p, crate::output::Detail::Echo);
+        println!("{}", serde_json::to_string(&v).unwrap());
     } else {
         println!("created project {} ({})", p.key, p.name);
     }

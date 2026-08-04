@@ -216,8 +216,8 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             .await?;
             let mode = crate::output::mode(json, table);
             if mode.is_json() {
-                let v = milestone_json(&m, &project_key, count, Detail::Full);
-                println!("{}", serde_json::to_string_pretty(&v).unwrap());
+                let v = milestone_json(&m, &project_key, count, Detail::Echo);
+                println!("{}", serde_json::to_string(&v).unwrap());
             } else {
                 println!("updated milestone {} in {}", m.name, project_key);
             }
@@ -369,8 +369,8 @@ async fn add(
 
     if mode.is_json() {
         let count = issue_count(&store, project_key.clone(), m.name.clone()).await?;
-        let v = milestone_json(&m, &project_key, count, Detail::Full);
-        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+        let v = milestone_json(&m, &project_key, count, Detail::Echo);
+        println!("{}", serde_json::to_string(&v).unwrap());
     } else {
         println!("created milestone {} in {}", m.name, project_key);
     }

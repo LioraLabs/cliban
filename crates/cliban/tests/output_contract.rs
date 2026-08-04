@@ -224,12 +224,16 @@ fn show_section_stays_raw_markdown_in_every_mode() {
 fn mv_echoes_json_when_piped_and_confirms_in_table_mode() {
     let db = seeded("mv");
     let echo = ok(&db, &["issue", "mv", "CLI-1", "in-progress"]);
+    assert_eq!(echo.lines().count(), 1, "echoes are one compact line: {echo}");
     let v: serde_json::Value = serde_json::from_str(&echo).expect("mv echoes the issue as JSON");
     assert_eq!(v["key"], "CLI-1");
     assert_eq!(v["status"], "in-progress");
-    // The echo is the `show --json` shape (modulo updated_at churn between
-    // the calls being zero here — nothing wrote in between).
-    assert_eq!(echo, ok(&db, &["issue", "show", "CLI-1", "--json"]));
+    // The echo is the lean row shape — no body — but its updated_at keeps
+    // stored precision, so it IS a valid --if-updated-at CAS token.
+    assert!(v.get("description").is_none(), "{v}");
+    let shown: serde_json::Value =
+        serde_json::from_str(&ok(&db, &["issue", "show", "CLI-1", "--json"])).unwrap();
+    assert_eq!(v["updated_at"], shown["updated_at"], "echo must be a CAS token");
 
     let confirm = ok_env(&db, &["issue", "mv", "CLI-1", "in-review"], TABLE);
     assert_eq!(confirm, "moved CLI-1: in-progress → in-review\n");

@@ -75,7 +75,7 @@ fn env_scope_is_the_default_project_and_is_upcased() {
     let db = seeded("default");
     // Writes land in the scoped project without -p (lowercase env upcased).
     let echo = ok_scoped(&db, Some("aa"), &["issue", "add", "scoped", "--json"]);
-    assert!(echo.contains(r#""key": "AA-2""#), "got {echo}");
+    assert!(echo.contains(r#""key":"AA-2""#), "got {echo}");
     // Reads are scoped the same way.
     let rows = ok_scoped(&db, Some("AA"), &["issue", "ls", "--json"]);
     assert!(rows.lines().all(|l| l.contains(r#""key":"AA-"#)), "{rows}");

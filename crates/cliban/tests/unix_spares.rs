@@ -304,11 +304,12 @@ fn close_json_echo_keeps_the_mv_shape_and_adds_canonical() {
     assert_eq!(v["status"], serde_json::json!("done"));
     assert_eq!(v["key"], serde_json::json!("UX-1"));
     assert_eq!(v["canonical"], serde_json::json!("issue mv done"));
-    // The echo is the `show --json` shape (plus the teach marker), so a piped
-    // caller can chain without a follow-up read.
-    for field in ["title", "priority", "labels", "relations", "updated_at"] {
+    // The echo is the lean mutation shape (plus the teach marker); updated_at
+    // keeps CAS precision so a piped caller can chain without a re-read.
+    for field in ["title", "priority", "updated_at"] {
         assert!(v.get(field).is_some(), "echo lost the {field} field: {v}");
     }
+    assert!(v.get("description").is_none(), "echoes carry no body: {v}");
     // Noop retry keeps the CLI-49 marker alongside the teach marker.
     let v: serde_json::Value =
         serde_json::from_str(&ok(&db, &["issue", "close", "UX-1", "--json"])).expect("json echo");

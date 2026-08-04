@@ -275,7 +275,7 @@ fn unarchive_of_an_unarchived_issue_succeeds_noting_the_noop() {
     let echo = ok(&db, &["issue", "unarchive", "CLI-2"]);
     let v: serde_json::Value = serde_json::from_str(&echo).unwrap();
     assert_eq!(v["noop"], true);
-    assert_eq!(v["archived"], false);
+    assert!(v.get("archived").is_none(), "absent means unarchived: {v}");
     assert_eq!(activity_count(&db), audits_before);
 
     // The real flips still confirm without a noop marker.
