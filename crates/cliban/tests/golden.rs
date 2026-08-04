@@ -68,6 +68,13 @@ fn run_env(
     // env_clear gives us a clean env; we then set only what we need.
     cmd.env_clear();
     cmd.env("CLIBAN_DB", db);
+    // These tests pipe stdout, and the Rust binary's piped default is JSON
+    // (the isatty-aware output contract). The Go oracle predates the
+    // contract and always prints tables when no --json is passed, so pin the
+    // Rust side to the same historical default. Go ignores the variable. A
+    // case that needs the auto-detection itself belongs in
+    // tests/output_contract.rs, not here.
+    cmd.env("CLIBAN_OUTPUT", "table");
     // A few binaries need HOME/PATH-ish bits to be sane; keep PATH for safety.
     if let Ok(path) = std::env::var("PATH") {
         cmd.env("PATH", path);
@@ -405,7 +412,9 @@ fn test_issue_mutation_parity() {
             ],
             &["issue", "edit", "CLI-1", "--priority", "urgent", "--json"],
             &["issue", "edit", "CLI-1", "--title", "Renamed", "--json"],
-            &["issue", "mv", "CLI-1", "in-progress"], // no output; empty + exit 0
+            // `issue mv` is deliberately absent: the output contract ended
+            // silent success, so Rust now confirms where the frozen Go oracle
+            // says nothing. Its output lives in tests/output_contract.rs.
             &["issue", "blocked", "--json"],
             &["issue", "archive-done", "--auto", "--json"],
         ],

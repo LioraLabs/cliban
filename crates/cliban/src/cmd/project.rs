@@ -7,7 +7,7 @@ use cliban_core::contexts::projects::{CreateProject, UpdateProject};
 use cliban_core::time::format_usec;
 
 use crate::errors::{CliError, CliResult};
-use crate::output::build_project_json;
+use crate::output::{build_project_json, Mode};
 use crate::search::fuzzy_find;
 use crate::store_open;
 
@@ -30,6 +30,9 @@ pub enum ProjectCmd {
         description_file: Option<String>,
         #[arg(long)]
         json: bool,
+        /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
     },
     /// List projects
     Ls {
@@ -37,6 +40,9 @@ pub enum ProjectCmd {
         archived: bool,
         #[arg(long)]
         json: bool,
+        /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
     },
     /// Show a project
     Show {
@@ -45,6 +51,9 @@ pub enum ProjectCmd {
         section: Option<String>,
         #[arg(long)]
         json: bool,
+        /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
     },
     /// Fuzzy-search Markdown subsections in a project description
     Search {
@@ -56,6 +65,9 @@ pub enum ProjectCmd {
         limit: usize,
         #[arg(long)]
         json: bool,
+        /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
     },
     /// Edit a project
     Edit {
@@ -72,6 +84,12 @@ pub enum ProjectCmd {
         /// read from a prior --json); closes the read-modify-write race
         #[arg(long = "if-updated-at")]
         if_updated_at: Option<String>,
+        /// JSON output (echo the updated project)
+        #[arg(long)]
+        json: bool,
+        /// human output (one-line confirmation)
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
     },
     /// Project `## Notes` operations
     Note {
@@ -79,9 +97,25 @@ pub enum ProjectCmd {
         cmd: NoteCmd,
     },
     /// Archive a project
-    Archive { key: String },
+    Archive {
+        key: String,
+        /// JSON output (echo the archived project)
+        #[arg(long)]
+        json: bool,
+        /// human output (one-line confirmation)
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
+    },
     /// Unarchive a project
-    Unarchive { key: String },
+    Unarchive {
+        key: String,
+        /// JSON output (echo the unarchived project)
+        #[arg(long)]
+        json: bool,
+        /// human output (one-line confirmation)
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
+    },
     /// A unix reflex, not a real deleter (hidden): archives, says so, names
     /// the undo.
     #[command(hide = true)]
@@ -110,6 +144,9 @@ pub enum NoteCmd {
         body_file: Option<String>,
         #[arg(long)]
         json: bool,
+        /// human output (one-line confirmation)
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
     },
 }
 
@@ -121,16 +158,47 @@ pub async fn run(db: &Option<String>, args: ProjectArgs) -> CliResult<()> {
             description,
             description_file,
             json,
-        } => add(db, key, name, description, description_file, json).await,
-        ProjectCmd::Ls { archived, json } => ls(db, archived, json).await,
-        ProjectCmd::Show { key, section, json } => show(db, key, section, json).await,
+            table,
+        } => {
+            add(
+                db,
+                key,
+                name,
+                description,
+                description_file,
+                crate::output::mode(json, table),
+            )
+            .await
+        }
+        ProjectCmd::Ls {
+            archived,
+            json,
+            table,
+        } => ls(db, archived, crate::output::mode(json, table)).await,
+        ProjectCmd::Show {
+            key,
+            section,
+            json,
+            table,
+        } => show(db, key, section, json, table).await,
         ProjectCmd::Search {
             key,
             query,
             section,
             limit,
             json,
-        } => search(db, key, query, section, limit, json).await,
+            table,
+        } => {
+            search(
+                db,
+                key,
+                query,
+                section,
+                limit,
+                crate::output::mode(json, table),
+            )
+            .await
+        }
         ProjectCmd::Edit {
             key,
             name,
@@ -138,6 +206,8 @@ pub async fn run(db: &Option<String>, args: ProjectArgs) -> CliResult<()> {
             description_file,
             auto_archive_done_after,
             if_updated_at,
+            json,
+            table,
         } => {
             edit(
                 db,
@@ -147,6 +217,7 @@ pub async fn run(db: &Option<String>, args: ProjectArgs) -> CliResult<()> {
                 description_file,
                 auto_archive_done_after,
                 if_updated_at,
+                crate::output::mode(json, table),
             )
             .await
         }
@@ -157,12 +228,30 @@ pub async fn run(db: &Option<String>, args: ProjectArgs) -> CliResult<()> {
                 body,
                 body_file,
                 json,
-            } => note_add(db, key, title, body, body_file, json).await,
+                table,
+            } => {
+                note_add(
+                    db,
+                    key,
+                    title,
+                    body,
+                    body_file,
+                    crate::output::mode(json, table),
+                )
+                .await
+            }
         },
-        ProjectCmd::Archive { key } => set_archived(db, key, true).await,
-        ProjectCmd::Unarchive { key } => set_archived(db, key, false).await,
+        ProjectCmd::Archive { key, json, table } => {
+            let p = set_archived(db, key, true).await?;
+            confirm_project(&p, "archived project", crate::output::mode(json, table))
+        }
+        ProjectCmd::Unarchive { key, json, table } => {
+            let p = set_archived(db, key, false).await?;
+            confirm_project(&p, "unarchived project", crate::output::mode(json, table))
+        }
         ProjectCmd::Rm { key, force: _ } => {
             // Do the closest safe thing rather than spending a turn refusing.
+            // The message IS the point — it prints in every mode.
             let key = key.to_uppercase();
             set_archived(db, key.clone(), true).await?;
             println!(
@@ -172,6 +261,17 @@ pub async fn run(db: &Option<String>, args: ProjectArgs) -> CliResult<()> {
             Ok(())
         }
     }
+}
+
+/// The mutation contract's success report for a project: one line in table
+/// mode, the `show --json` shape in json mode. Never silent.
+fn confirm_project(p: &cliban_core::schema::Project, verb: &str, mode: Mode) -> CliResult<()> {
+    if mode.is_json() {
+        println!("{}", serde_json::to_string_pretty(&project_json(p)).unwrap());
+    } else {
+        println!("{verb} {}", p.key);
+    }
+    Ok(())
 }
 
 fn project_json(p: &cliban_core::schema::Project) -> serde_json::Value {
@@ -193,7 +293,7 @@ async fn add(
     name: String,
     description: Option<String>,
     description_file: Option<String>,
-    json: bool,
+    mode: Mode,
 ) -> CliResult<()> {
     let key = key.to_uppercase();
     let description = resolve_description(description, description_file)?;
@@ -211,7 +311,7 @@ async fn add(
             )
         })
         .await?;
-    if json {
+    if mode.is_json() {
         let v = project_json(&p);
         println!("{}", serde_json::to_string_pretty(&v).unwrap());
     } else {
@@ -220,13 +320,13 @@ async fn add(
     Ok(())
 }
 
-async fn ls(db: &Option<String>, archived: bool, json: bool) -> CliResult<()> {
+async fn ls(db: &Option<String>, archived: bool, mode: Mode) -> CliResult<()> {
     let store = store_open::open(db).await?;
     let mut ps = store.call(projects::list).await?;
     if !archived {
         ps.retain(|p| !p.archived);
     }
-    if json {
+    if mode.is_json() {
         for p in &ps {
             let v = project_json(p);
             println!("{}", serde_json::to_string(&v).unwrap());
@@ -245,6 +345,7 @@ async fn show(
     key: String,
     section: Option<String>,
     json: bool,
+    table: bool,
 ) -> CliResult<()> {
     let key = key.to_uppercase();
     let store = store_open::open(db).await?;
@@ -252,6 +353,9 @@ async fn show(
         .call(move |conn| projects::fetch_by_key(conn, &key))
         .await?;
     if let Some(section) = section {
+        // The section content IS the machine format: raw markdown always,
+        // regardless of $CLIBAN_OUTPUT or piping. Only the explicit --json
+        // flag is an error here.
         if json {
             return Err(CliError::validation(
                 "--section and --json are mutually exclusive",
@@ -261,7 +365,7 @@ async fn show(
         print!("{body}");
         return Ok(());
     }
-    if json {
+    if crate::output::mode(json, table).is_json() {
         let v = project_json(&p);
         println!("{}", serde_json::to_string_pretty(&v).unwrap());
     } else {
@@ -283,7 +387,7 @@ async fn search(
     query: String,
     section: String,
     limit: usize,
-    json: bool,
+    mode: Mode,
 ) -> CliResult<()> {
     let terms = query.split_whitespace().collect::<Vec<_>>();
     if terms.is_empty() {
@@ -321,7 +425,7 @@ async fn search(
     hits.truncate(limit);
 
     for hit in hits {
-        if json {
+        if mode.is_json() {
             println!(
                 "{}",
                 serde_json::json!({
@@ -496,6 +600,7 @@ fn parse_duration_days(s: &str) -> CliResult<i64> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn edit(
     db: &Option<String>,
     key: String,
@@ -504,6 +609,7 @@ async fn edit(
     description_file: Option<String>,
     auto_archive_done_after: Option<String>,
     if_updated_at: Option<String>,
+    mode: Mode,
 ) -> CliResult<()> {
     let key = key.to_uppercase();
     let description = resolve_description(description, description_file)?;
@@ -515,7 +621,7 @@ async fn edit(
         None => None,
     };
     let store = store_open::open(db).await?;
-    store
+    let p = store
         .call(move |conn| {
             let cur = projects::fetch_by_key(conn, &key)?;
             if let Some(expected) = if_updated_at.as_deref() {
@@ -554,16 +660,23 @@ async fn edit(
                     },
                 )?;
             }
-            Ok(())
+            projects::fetch_by_key(conn, &key)
         })
         .await?;
-    Ok(())
+    confirm_project(&p, "updated project", mode)
 }
 
-async fn set_archived(db: &Option<String>, key: String, archived: bool) -> CliResult<()> {
+/// Flip a project's archived bit and return the updated row. Prints nothing:
+/// `archive`/`unarchive` confirm via [`confirm_project`], while `rm` keeps
+/// its own always-on message.
+async fn set_archived(
+    db: &Option<String>,
+    key: String,
+    archived: bool,
+) -> CliResult<cliban_core::schema::Project> {
     let key = key.to_uppercase();
     let store = store_open::open(db).await?;
-    store
+    let p = store
         .call(move |conn| {
             let cur = projects::fetch_by_key(conn, &key)?;
             projects::update(
@@ -574,10 +687,10 @@ async fn set_archived(db: &Option<String>, key: String, archived: bool) -> CliRe
                     ..Default::default()
                 },
             )?;
-            Ok(())
+            projects::fetch_by_key(conn, &key)
         })
         .await?;
-    Ok(())
+    Ok(p)
 }
 
 /// `project note add`: append one `### <title>` subsection under `## Notes`,
@@ -590,7 +703,7 @@ async fn note_add(
     title: String,
     body: Option<String>,
     body_file: Option<String>,
-    json: bool,
+    mode: Mode,
 ) -> CliResult<()> {
     let key = key.to_uppercase();
     let title = title.trim().to_string();
@@ -633,7 +746,7 @@ async fn note_add(
             Ok(())
         })
         .await?;
-    if json {
+    if mode.is_json() {
         println!(
             "{}",
             serde_json::json!({ "key": key, "note": title, "section": "Notes" })

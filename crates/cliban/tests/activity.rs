@@ -31,11 +31,13 @@ fn run_as(db: &str, actor: Option<&str>, args: &[&str]) -> Run {
     cmd.arg("--db")
         .arg(db)
         // A clean env: never inherit the developer's CLIBAN_DB — nor the
-        // ambient Claude session, which would auto-attribute every entry.
+        // ambient Claude session, which would auto-attribute every entry —
+        // nor a CLIBAN_OUTPUT pin that would defeat the piped-JSON default.
         .env_remove("CLIBAN_DB")
         .env_remove("XDG_DATA_HOME")
         .env_remove("CLIBAN_ACTOR")
         .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env_remove("CLIBAN_OUTPUT")
         .args(args);
     if let Some(a) = actor {
         cmd.env("CLIBAN_ACTOR", a);
@@ -172,9 +174,10 @@ fn an_old_window_reports_nothing_rather_than_everything() {
     assert!(!evs.is_empty(), "a wide window sees the seeded work");
 
     // A window that starts in the future excludes everything: empty NDJSON,
-    // and a plain-language line in the human form.
+    // and a plain-language line in the human form (piped, so the human form
+    // needs an explicit --table under the output contract).
     assert!(events(&db, &["--since", "2099-01-01"]).is_empty());
-    let text = ok(&db, &["activity", "--since", "2099-01-01"]);
+    let text = ok(&db, &["activity", "--since", "2099-01-01", "--table"]);
     assert!(text.contains("no activity since"), "{text}");
 }
 
