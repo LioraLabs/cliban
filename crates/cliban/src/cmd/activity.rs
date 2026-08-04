@@ -51,10 +51,10 @@ pub struct ActivityArgs {
     #[arg(long, default_value = "1d")]
     since: String,
     /// project key filter
-    #[arg(long)]
+    #[arg(long, short = 'p')]
     project: Option<String>,
     /// milestone name filter
-    #[arg(long)]
+    #[arg(long, short = 'm')]
     milestone: Option<String>,
     /// include archived issues
     #[arg(long)]

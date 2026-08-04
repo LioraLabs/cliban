@@ -110,7 +110,7 @@ pub enum IssueCmd {
     },
     /// List issues that have at least one open blocker
     Blocked {
-        #[arg(long)]
+        #[arg(long, short = 'p')]
         project: Option<String>,
         #[arg(long)]
         json: bool,
@@ -123,13 +123,13 @@ pub enum IssueCmd {
     },
     /// List takeable issues: backlog status, no open blocker, unclaimed
     Ready {
-        #[arg(long)]
+        #[arg(long, short = 'p')]
         project: Option<String>,
         /// only sub-issues of this parent key
         #[arg(long)]
         parent: Option<String>,
         /// milestone name (requires --project; names are project-scoped)
-        #[arg(long)]
+        #[arg(long, short = 'm')]
         milestone: Option<String>,
         #[arg(long)]
         json: bool,
@@ -197,16 +197,16 @@ pub struct ShowArgs {
 #[derive(clap::Args)]
 pub struct LsArgs {
     /// project key filter
-    #[arg(long)]
+    #[arg(long, short = 'p')]
     project: Option<String>,
     /// status filter
-    #[arg(long)]
+    #[arg(long, short = 's')]
     status: Option<String>,
     /// priority filter
     #[arg(long)]
     priority: Option<String>,
     /// milestone filter
-    #[arg(long)]
+    #[arg(long, short = 'm')]
     milestone: Option<String>,
     /// list sub-issues of this parent key
     #[arg(long)]
@@ -246,7 +246,7 @@ pub struct LsArgs {
 #[derive(clap::Args)]
 pub struct AddArgs {
     /// project key (required)
-    #[arg(long)]
+    #[arg(long, short = 'p')]
     project: String,
     /// issue title
     #[arg(long, allow_hyphen_values = true)]
@@ -261,13 +261,13 @@ pub struct AddArgs {
     #[arg(long)]
     parent: Option<String>,
     /// milestone name
-    #[arg(long)]
+    #[arg(long, short = 'm')]
     milestone: Option<String>,
     /// priority
     #[arg(long)]
     priority: Option<String>,
     /// status
-    #[arg(long)]
+    #[arg(long, short = 's')]
     status: Option<String>,
     /// due date YYYY-MM-DD
     #[arg(long)]
@@ -312,7 +312,7 @@ pub struct EditArgs {
     #[arg(long)]
     priority: Option<String>,
     /// new milestone
-    #[arg(long)]
+    #[arg(long, short = 'm')]
     milestone: Option<String>,
     /// clear milestone
     #[arg(long = "clear-milestone")]
@@ -519,7 +519,7 @@ pub struct CpArgs {
     key: String,
     /// create the copy in this project (default: the source's project);
     /// cross-project copies drop the milestone — names are project-scoped
-    #[arg(long)]
+    #[arg(long, short = 'p')]
     project: Option<String>,
     /// title for the copy (default: the source's title, unchanged)
     #[arg(long, allow_hyphen_values = true)]
@@ -536,7 +536,7 @@ pub struct CpArgs {
 #[derive(clap::Args)]
 pub struct ArchiveDoneArgs {
     /// project key
-    #[arg(long)]
+    #[arg(long, short = 'p')]
     project: Option<String>,
     /// sweep every project per its auto_archive_done_after_days policy
     #[arg(long)]
@@ -557,7 +557,7 @@ pub struct ImportArgs {
     #[arg(long)]
     file: Option<String>,
     /// default project key for records that omit it
-    #[arg(long)]
+    #[arg(long, short = 'p')]
     project: Option<String>,
     /// emit each created issue as a JSON line
     #[arg(long)]

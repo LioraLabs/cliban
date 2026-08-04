@@ -392,3 +392,93 @@ fn confirmations_name_the_entity_and_the_change() {
         }
     }
 }
+
+// --- the list-row diet ------------------------------------------------------
+
+/// List rows are lean (absent means default), single-entity output is
+/// complete, and `--full` restores the complete shape on a list.
+#[test]
+fn list_rows_are_lean_and_full_detail_is_complete() {
+    let db = seeded("lean");
+    let row: serde_json::Value =
+        serde_json::from_str(ok(&db, &["issue", "ls", "-p", "CLI"]).lines().next().unwrap())
+            .unwrap();
+    for absent in [
+        "description",
+        "git_branch_name",
+        "position",
+        "created_at",
+        "milestone",
+        "parent",
+        "due_date",
+        "labels",
+        "relations",
+        "archived",
+    ] {
+        assert!(row.get(absent).is_none(), "lean row leaked {absent}: {row}");
+    }
+    let full: serde_json::Value = serde_json::from_str(
+        ok(&db, &["issue", "ls", "-p", "CLI", "--full"])
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    for present in ["description", "git_branch_name", "position", "created_at"] {
+        assert!(full.get(present).is_some(), "--full missing {present}");
+    }
+    // show stays the complete shape with null-not-absent optionals.
+    let shown: serde_json::Value =
+        serde_json::from_str(&ok(&db, &["issue", "show", "CLI-1"])).unwrap();
+    assert!(shown.get("milestone").is_some_and(|v| v.is_null()));
+}
+
+/// Unscoped `milestone ls` is a per-project count summary; detail flags
+/// require `--project`.
+#[test]
+fn unscoped_milestone_ls_is_a_summary() {
+    let db = seeded("mssum");
+    let out = ok(&db, &["milestone", "ls"]);
+    assert_eq!(
+        out.trim(),
+        r#"{"milestones":1,"open":1,"project":"CLI"}"#,
+        "got {out}"
+    );
+    for flags in [["--stats"], ["--full"]] {
+        let r = run(&db, &[&["milestone", "ls"], &flags[..]].concat());
+        assert_eq!(r.code, 2, "unscoped {} should be exit 2", flags[0]);
+        assert!(r.stderr.contains("--project"), "got {}", r.stderr);
+    }
+    // Scoped, the row form works and stays lean.
+    let row: serde_json::Value =
+        serde_json::from_str(ok(&db, &["milestone", "ls", "-p", "CLI"]).lines().next().unwrap())
+            .unwrap();
+    assert!(row.get("created_at").is_none() && row.get("description").is_none());
+    // --stats rows follow the same diet.
+    let stat: serde_json::Value = serde_json::from_str(
+        ok(&db, &["milestone", "ls", "-p", "CLI", "--stats"])
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(stat.get("done_count").is_some() && stat.get("description").is_none());
+}
+
+/// `-p` / `-s` / `-m` are exact synonyms of the long filter flags.
+#[test]
+fn short_filter_flags_match_their_long_forms() {
+    let db = seeded("shorts");
+    assert_eq!(
+        ok(&db, &["issue", "ls", "-p", "CLI", "-s", "backlog"]),
+        ok(&db, &["issue", "ls", "--project", "CLI", "--status", "backlog"])
+    );
+    assert_eq!(
+        ok(&db, &["issue", "ls", "-p", "CLI", "-m", "v1"]),
+        ok(&db, &["issue", "ls", "--project", "CLI", "--milestone", "v1"])
+    );
+    assert_eq!(
+        ok(&db, &["activity", "-p", "CLI"]),
+        ok(&db, &["activity", "--project", "CLI"])
+    );
+}

@@ -48,10 +48,10 @@ pub struct ImportLinearArgs {
     #[arg(long, conflicts_with_all = ["key", "link_to"])]
     pub mine: bool,
     /// cliban project KEY the issue lands in
-    #[arg(long)]
+    #[arg(long, short = 'p')]
     pub project: String,
     /// Attach the imported issue to this milestone
-    #[arg(long)]
+    #[arg(long, short = 'm')]
     pub milestone: Option<String>,
     /// Adopt an existing cliban issue instead of creating one
     #[arg(long)]
@@ -120,7 +120,7 @@ pub enum SyncProvider {
 #[derive(clap::Args)]
 pub struct SyncLinearArgs {
     /// Only refresh issues in this cliban project
-    #[arg(long)]
+    #[arg(long, short = 'p')]
     pub project: Option<String>,
     /// Report what would change and write nothing
     #[arg(long)]

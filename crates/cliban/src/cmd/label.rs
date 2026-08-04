@@ -17,7 +17,7 @@ pub enum LabelCmd {
     /// Add a label to a project
     Add {
         name: String,
-        #[arg(long)]
+        #[arg(long, short = 'p')]
         project: String,
         /// JSON output (echo the created label)
         #[arg(long)]
@@ -28,7 +28,7 @@ pub enum LabelCmd {
     },
     /// List labels for a project
     Ls {
-        #[arg(long)]
+        #[arg(long, short = 'p')]
         project: String,
         #[arg(long)]
         json: bool,
@@ -39,7 +39,7 @@ pub enum LabelCmd {
     /// Delete a label (detaches it from all issues)
     Rm {
         name: String,
-        #[arg(long)]
+        #[arg(long, short = 'p')]
         project: String,
         /// JSON output (echo the removal)
         #[arg(long)]

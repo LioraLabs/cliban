@@ -27,7 +27,7 @@ pub enum MilestoneCmd {
     /// safe to start once waves 1..N-1 are done)
     Waves {
         /// project key
-        #[arg(long)]
+        #[arg(long, short = 'p')]
         project: String,
         /// milestone name
         name: String,
@@ -39,7 +39,7 @@ pub enum MilestoneCmd {
     },
     /// Add a milestone
     Add {
-        #[arg(long)]
+        #[arg(long, short = 'p')]
         project: String,
         #[arg(long)]
         name: String,
@@ -58,11 +58,11 @@ pub enum MilestoneCmd {
     },
     /// List milestones
     Ls {
-        /// project key; omit to list milestones across every project
-        #[arg(long)]
+        /// project key; omit for a per-project summary (counts only, no rows)
+        #[arg(long, short = 'p')]
         project: Option<String>,
         /// filter by status (open|completed|cancelled)
-        #[arg(long)]
+        #[arg(long, short = 's')]
         status: Option<String>,
         /// order: activity (most recently worked on) | name | target
         #[arg(long, default_value = "name")]
@@ -83,7 +83,7 @@ pub enum MilestoneCmd {
     Show {
         /// milestone name (or pass via --name)
         name: Option<String>,
-        #[arg(long)]
+        #[arg(long, short = 'p')]
         project: String,
         #[arg(long = "name")]
         name_flag: Option<String>,
@@ -100,7 +100,7 @@ pub enum MilestoneCmd {
     },
     /// Edit a milestone
     Edit {
-        #[arg(long)]
+        #[arg(long, short = 'p')]
         project: String,
         #[arg(long)]
         name: String,
@@ -112,7 +112,7 @@ pub enum MilestoneCmd {
         #[arg(long = "description-file")]
         description_file: Option<String>,
         /// new status (open|completed|cancelled)
-        #[arg(long)]
+        #[arg(long, short = 's')]
         status: Option<String>,
         /// new target date YYYY-MM-DD
         #[arg(long)]
@@ -131,7 +131,7 @@ pub enum MilestoneCmd {
     /// the undo.
     #[command(hide = true)]
     Rm {
-        #[arg(long)]
+        #[arg(long, short = 'p')]
         project: String,
         #[arg(long)]
         name: String,
@@ -412,6 +412,22 @@ async fn ls(
     })?;
     let status = status.filter(|s| !s.is_empty());
 
+    // Unscoped, milestone rows would span every project on the machine —
+    // 90 rows on a real box, none of which the caller can address without
+    // knowing the project anyway (milestones are named per project). So the
+    // unscoped form answers the only question it can: which projects have
+    // milestones, and how many. Detail flags without a scope are a mistake
+    // worth naming, not silently reinterpreting.
+    if project_key.is_none() {
+        if stats || full || status.is_some() {
+            return Err(CliError::validation(
+                "--stats/--full/--status need --project; unscoped milestone ls \
+                 is a per-project summary",
+            ));
+        }
+        return ls_summary(db, mode).await;
+    }
+
     let store = store_open::open(db).await?;
     let (key, st) = (project_key.clone(), status.clone());
     let ms = store
@@ -484,19 +500,61 @@ async fn ls(
     Ok(())
 }
 
-/// `--stats` JSON: the plain milestone object plus the rollups, keys kept in
-/// alphabetical order like the parity form.
+/// The unscoped form: one row per project that has milestones —
+/// `{"milestones":N,"open":N,"project":KEY}` — nothing an agent has to pay
+/// for and then not read. Projects without milestones don't appear.
+async fn ls_summary(db: &Option<String>, mode: Mode) -> CliResult<()> {
+    let store = store_open::open(db).await?;
+    let ms = store
+        .call(move |conn| {
+            milestones::summaries(
+                conn,
+                milestones::SummaryOpts {
+                    project: None,
+                    status: None,
+                    sort: milestones::Sort::Name,
+                },
+            )
+        })
+        .await?;
+    let mut by_project: std::collections::BTreeMap<String, (i64, i64)> =
+        std::collections::BTreeMap::new();
+    for s in &ms {
+        let e = by_project.entry(s.project_key.clone()).or_insert((0, 0));
+        e.0 += 1;
+        if s.milestone.status == "open" {
+            e.1 += 1;
+        }
+    }
+    for (project, (total, open)) in &by_project {
+        if mode.is_json() {
+            let mut m = Map::new();
+            m.insert("milestones".into(), json!(total));
+            m.insert("open".into(), json!(open));
+            m.insert("project".into(), json!(project));
+            println!("{}", serde_json::to_string(&Value::Object(m)).unwrap());
+        } else {
+            println!("{project:<8} {total} milestone(s), {open} open");
+        }
+    }
+    Ok(())
+}
+
+/// `--stats` JSON: the lean list row plus the rollups. A stats row is still a
+/// list row, so it follows the Brief contract — no `description` body, no
+/// `created_at`, absent `target_date` when unset, second-precision stamps.
 fn milestone_stats_json(
     s: &milestones::MilestoneSummary,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Value {
     let m = &s.milestone;
     let mut map = Map::new();
-    map.insert("created_at".into(), json!(format_usec(m.inserted_at)));
-    map.insert("description".into(), json!(m.description));
     map.insert("done_count".into(), json!(s.done));
     map.insert("issue_count".into(), json!(s.total));
-    map.insert("last_activity".into(), json!(format_usec(s.last_activity)));
+    map.insert(
+        "last_activity".into(),
+        json!(crate::output::trim_usec(&format_usec(s.last_activity))),
+    );
     map.insert(
         "last_activity_human".into(),
         json!(cliban_core::time::relative(s.last_activity, now)),
@@ -504,14 +562,13 @@ fn milestone_stats_json(
     map.insert("name".into(), json!(m.name));
     map.insert("project".into(), json!(s.project_key));
     map.insert("status".into(), json!(m.status));
+    if let Some(t) = m.target_date.map(format_date) {
+        map.insert("target_date".into(), json!(t));
+    }
     map.insert(
-        "target_date".into(),
-        match m.target_date.map(format_date) {
-            Some(t) => json!(t),
-            None => Value::Null,
-        },
+        "updated_at".into(),
+        json!(crate::output::trim_usec(&format_usec(m.updated_at))),
     );
-    map.insert("updated_at".into(), json!(format_usec(m.updated_at)));
     Value::Object(map)
 }
 
