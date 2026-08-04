@@ -2,7 +2,15 @@
 // Every optimistic mutation carries a requestId so the webview can correlate
 // mutationOk/mutationFailed back to the pending local change.
 
-import type { ActivityEvent, Issue, Label, MetaPatch, Milestone, Status } from './model';
+import type {
+  ActivityEvent,
+  Issue,
+  IssueDraft,
+  Label,
+  MetaPatch,
+  Milestone,
+  Status,
+} from './model';
 
 export type ErrorKind = 'not-found' | 'validation' | 'conflict' | 'internal' | 'cli-missing';
 
@@ -46,7 +54,25 @@ export interface IssueDetailMsg {
   sections: IssueSections;
 }
 
-export type HostMsg = BoardMsg | ErrorStateMsg | BusyMsg | ToastMsg | IssueDetailMsg;
+export interface MutationFailedMsg {
+  type: 'mutationFailed';
+  requestId: string;
+  kind: ErrorKind;
+  message: string;
+}
+
+export interface OpenCreateFormMsg {
+  type: 'openCreateForm';
+}
+
+export type HostMsg =
+  | BoardMsg
+  | ErrorStateMsg
+  | BusyMsg
+  | ToastMsg
+  | IssueDetailMsg
+  | MutationFailedMsg
+  | OpenCreateFormMsg;
 
 // ---- webview → host ----
 
@@ -94,6 +120,21 @@ export interface EditMetaMsg {
   patch: MetaPatch;
 }
 
+export interface CreateIssueMsg {
+  type: 'createIssue';
+  requestId: string;
+  draft: IssueDraft;
+}
+
+export interface EditSectionMsg {
+  type: 'editSection';
+  requestId: string;
+  key: string;
+  section: 'spec' | 'plan' | 'notes';
+  content: string;
+  ifUpdatedAt: string;
+}
+
 export type WebviewMsg =
   | ReadyMsg
   | RefreshMsg
@@ -102,6 +143,8 @@ export type WebviewMsg =
   | MoveIssueMsg
   | TickStepMsg
   | AddLogMsg
-  | EditMetaMsg;
+  | EditMetaMsg
+  | CreateIssueMsg
+  | EditSectionMsg;
 
 export type { ActivityEvent, Issue, Label, Milestone, Status };

@@ -353,3 +353,98 @@ body.busy {
   padding: 0.3rem 0.5rem;
   font-family: inherit;
 }
+
+/* modal + form */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+
+.modal {
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  width: min(32rem, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.modal h2 {
+  margin: 0;
+  font-size: 1.05em;
+}
+
+.form-error {
+  color: var(--vscode-errorForeground);
+  font-size: 0.9em;
+}
+
+.form-input,
+.form-textarea {
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border);
+  border-radius: 3px;
+  padding: 0.35rem 0.5rem;
+  font-family: inherit;
+  font-size: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.form-textarea {
+  font-family: var(--vscode-editor-font-family);
+  resize: vertical;
+}
+
+.form-row {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.form-actions {
+  justify-content: flex-end;
+}
+
+.form-submit {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+.form-submit:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.chip-toggle {
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.chip-on {
+  opacity: 1;
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+.section-edit-btn {
+  margin-left: 0.5rem;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.section-editor {
+  margin-top: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}

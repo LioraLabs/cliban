@@ -15,6 +15,7 @@ export interface BoardHandlers {
   onPickProject(): void;
   onRefresh(): void;
   onMoveIssue(key: string, toStatus: Status): void;
+  onNewIssue(): void;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -83,7 +84,10 @@ export function renderBoard(root: HTMLElement, msg: BoardMsg, handlers: BoardHan
   const refreshBtn = el('button', 'toolbar-btn', '↻');
   refreshBtn.title = 'Refresh';
   refreshBtn.addEventListener('click', () => handlers.onRefresh());
-  toolbar.append(projectBtn, refreshBtn);
+  const newBtn = el('button', 'toolbar-btn', '+ New');
+  newBtn.title = 'New issue';
+  newBtn.addEventListener('click', () => handlers.onNewIssue());
+  toolbar.append(projectBtn, newBtn, refreshBtn);
   root.append(toolbar);
 
   const board = el('div', 'board');

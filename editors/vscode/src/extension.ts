@@ -12,6 +12,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('cliban.refreshBoard', () => {
       void BoardPanel.get(context).refresh();
     }),
+    vscode.commands.registerCommand('cliban.newIssue', () => {
+      BoardPanel.get(context).newIssue();
+    }),
   );
 }
 

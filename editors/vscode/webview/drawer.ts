@@ -4,17 +4,66 @@ import { PRIORITIES } from '../shared/model';
 import { parsePlan } from '../shared/plan';
 import { renderMarkdown } from './md';
 
+export type EditableSection = 'spec' | 'plan' | 'notes';
+
 export interface DrawerHandlers {
   onClose(): void;
   onOpenIssue(key: string): void;
   onTickStep(key: string, task: number, step: number): void;
   onAddLog(key: string, message: string): void;
   onEditMeta(key: string, ifUpdatedAt: string, patch: MetaPatch): void;
+  onEditSection(key: string, section: EditableSection, content: string, ifUpdatedAt: string): void;
 }
 
 export interface DrawerContext {
   milestones: Milestone[];
   labels: Label[];
+  /** Unsent editor text to restore (e.g. after a stale-write conflict), by section. */
+  drafts?: Partial<Record<EditableSection, string>>;
+}
+
+function sectionEditor(
+  section: HTMLElement,
+  initial: string,
+  onSave: (content: string) => void,
+): void {
+  const existing = section.querySelector('.md, .drawer-empty, .plan-task');
+  const editor = el('div', 'section-editor');
+  const area = el('textarea', 'form-textarea') as HTMLTextAreaElement;
+  area.value = initial;
+  area.rows = Math.min(20, Math.max(6, initial.split('\n').length + 2));
+  const actions = el('div', 'form-row form-actions');
+  const cancel = el('button', 'toolbar-btn', 'Cancel');
+  cancel.addEventListener('click', () => editor.remove());
+  const save = el('button', 'toolbar-btn form-submit', 'Save');
+  save.addEventListener('click', () => onSave(area.value));
+  actions.append(cancel, save);
+  editor.append(area, actions);
+  existing?.after(editor);
+  if (!existing) section.append(editor);
+  area.focus();
+}
+
+function editButton(
+  section: HTMLElement,
+  key: string,
+  name: EditableSection,
+  currentMd: string | null,
+  cas: string,
+  handlers: DrawerHandlers,
+  draft?: string,
+): void {
+  const title = section.querySelector('.drawer-section-title');
+  const btn = el('button', 'chip section-edit-btn', 'edit');
+  btn.addEventListener('click', () =>
+    sectionEditor(section, currentMd ?? '', (content) =>
+      handlers.onEditSection(key, name, content, cas),
+    ),
+  );
+  title?.append(btn);
+  if (draft !== undefined) {
+    sectionEditor(section, draft, (content) => handlers.onEditSection(key, name, content, cas));
+  }
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -202,10 +251,23 @@ export function renderDrawer(
   drawer.append(meta);
   drawer.append(metaEditors(detail, ctx, handlers));
 
+  const cas = issue.updated_at;
   const body = el('div', 'drawer-body');
-  body.append(mdSection('Spec', sections.spec));
-  body.append(planSection(issue.key, sections.plan, handlers));
-  if (sections.notes !== null) body.append(mdSection('Notes', sections.notes));
+  const spec = mdSection('Spec', sections.spec);
+  if (sections.spec !== null) {
+    editButton(spec, issue.key, 'spec', sections.spec, cas, handlers, ctx.drafts?.spec);
+  }
+  body.append(spec);
+  const plan = planSection(issue.key, sections.plan, handlers);
+  if (sections.plan !== null) {
+    editButton(plan, issue.key, 'plan', sections.plan, cas, handlers, ctx.drafts?.plan);
+  }
+  body.append(plan);
+  if (sections.notes !== null) {
+    const notes = mdSection('Notes', sections.notes);
+    editButton(notes, issue.key, 'notes', sections.notes, cas, handlers, ctx.drafts?.notes);
+    body.append(notes);
+  }
   const activity = mdSection('Activity', sections.activity);
   activity.append(logInput(issue.key, handlers));
   body.append(activity);

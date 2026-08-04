@@ -3,8 +3,16 @@ import * as crypto from 'node:crypto';
 import type { HostMsg, WebviewMsg } from '../shared/protocol';
 import type { Status } from '../shared/model';
 import { BoardStore } from './store';
-import { ClibanClient, ClibanError, CliMissingError, ConflictError } from './client/client';
-import type { Issue } from '../shared/model';
+import {
+  ClibanClient,
+  ClibanError,
+  CliMissingError,
+  ConflictError,
+  NotFoundError,
+  ValidationError,
+} from './client/client';
+import type { Issue, IssueDraft } from '../shared/model';
+import type { EditSectionMsg, ErrorKind } from '../shared/protocol';
 import { readSettings } from './settings';
 
 const PROJECT_STATE_KEY = 'cliban.project';
@@ -110,7 +118,51 @@ export class BoardPanel {
           this.client.editMeta(msg.key, msg.patch, msg.ifUpdatedAt),
         );
         break;
+      case 'createIssue':
+        await this.createIssue(msg.requestId, msg.draft);
+        break;
+      case 'editSection':
+        await this.editSection(msg);
+        break;
     }
+  }
+
+  private async createIssue(requestId: string, draft: IssueDraft): Promise<void> {
+    try {
+      const echo = await this.client.addIssue(draft);
+      this.store.applyEcho(echo);
+      this.post({ type: 'toast', level: 'info', message: `created ${echo.key}` });
+    } catch (err) {
+      this.postMutationFailed(requestId, err);
+    }
+  }
+
+  private async editSection(msg: EditSectionMsg): Promise<void> {
+    try {
+      const echo = await this.client.editSection(
+        msg.key,
+        msg.section,
+        msg.content,
+        msg.ifUpdatedAt,
+      );
+      this.store.applyEcho(echo);
+      await this.openIssue(msg.key);
+    } catch (err) {
+      // push the failure first so the webview can stash the draft, then
+      // reload the detail so the drawer shows current reality
+      this.postMutationFailed(msg.requestId, err);
+      if (err instanceof ConflictError) await this.openIssue(msg.key);
+    }
+  }
+
+  private postMutationFailed(requestId: string, err: unknown): void {
+    const message = err instanceof Error ? err.message : String(err);
+    let kind: ErrorKind = 'internal';
+    if (err instanceof ConflictError) kind = 'conflict';
+    else if (err instanceof ValidationError) kind = 'validation';
+    else if (err instanceof NotFoundError) kind = 'not-found';
+    else if (err instanceof CliMissingError) kind = 'cli-missing';
+    this.post({ type: 'mutationFailed', requestId, kind, message });
   }
 
   /**
@@ -184,6 +236,10 @@ export class BoardPanel {
     } finally {
       this.post({ type: 'busy', on: false });
     }
+  }
+
+  newIssue(): void {
+    this.post({ type: 'openCreateForm' });
   }
 
   async switchProject(): Promise<void> {
