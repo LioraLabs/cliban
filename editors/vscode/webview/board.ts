@@ -12,6 +12,7 @@ const COLUMN_TITLES: Record<Status, string> = {
 
 export interface BoardHandlers {
   onOpenIssue(key: string): void;
+  onOpenIssueDoc(key: string): void;
   onPickProject(): void;
   onRefresh(): void;
   onMoveIssue(key: string, toStatus: Status): void;
@@ -55,6 +56,13 @@ function renderCard(issue: Issue, handlers: BoardHandlers): HTMLElement {
     claim.title = `claimed by ${issue.claimed_by}`;
     head.append(claim);
   }
+  const details = el('button', 'card-details-btn', '▤');
+  details.title = 'Quick view (tick steps, log, edit fields)';
+  details.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    handlers.onOpenIssue(issue.key);
+  });
+  head.append(details);
   card.append(head);
 
   card.append(el('div', 'card-title', issue.title));
@@ -72,7 +80,9 @@ function renderCard(issue: Issue, handlers: BoardHandlers): HTMLElement {
   if (issue.milestone) chips.append(el('span', 'chip chip-milestone', `◇ ${issue.milestone}`));
   if (chips.childElementCount > 0) card.append(chips);
 
-  card.addEventListener('click', () => handlers.onOpenIssue(issue.key));
+  // click = open as an editable document (the TUI `e` reflex);
+  // the ▤ button opens the quick-view drawer
+  card.addEventListener('click', () => handlers.onOpenIssueDoc(issue.key));
   return card;
 }
 

@@ -206,3 +206,19 @@ test('activity parses NDJSON events', async () => {
   assert.equal(events.length, 2);
   assert.equal(events[0]!.kind, 'status');
 });
+
+test('editDescription replaces the whole body with CAS and stdin', async () => {
+  const cap = withCapture();
+  const client = makeClient({
+    FAKE_CAPTURE: cap.file,
+    FAKE_STDOUT: '{"key":"CLI-9","status":"backlog","title":"x","updated_at":"u3"}',
+  });
+  const echo = await client.editDescription('CLI-9', '## Spec\n\nrewritten\n', 'T0');
+  assert.equal(echo.updated_at, 'u3');
+  const got = cap.read();
+  assert.deepEqual(got.argv, [
+    'issue', 'edit', 'CLI-9', '--description-file', '-', '--if-updated-at', 'T0', '--json',
+  ]);
+  assert.equal(got.stdin, '## Spec\n\nrewritten\n');
+  cap.cleanup();
+});

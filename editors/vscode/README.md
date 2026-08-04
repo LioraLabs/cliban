@@ -12,11 +12,16 @@ Mutations run the same atomic, timeline-recorded code paths agents use.
 - **Board** — the five cliban columns (backlog · in progress · blocked ·
   in review · done), cards with priority, labels, milestone, claim badge, and
   parent links. Drag a card between columns to move it (`cliban issue mv`).
-- **Issue drawer** — click a card: spec, plan, notes, and the merged activity
-  timeline. Tick plan steps live (`issue tick`), append log notes
-  (`issue log`), edit priority/labels/milestone, and edit sections raw —
-  every edit is compare-and-swap guarded, so a concurrent agent edit becomes
-  a "reloaded" toast instead of a silent overwrite.
+- **Edit as a document** — click a card and the issue's full description
+  opens as a real markdown editor tab (`cliban:/CLI-42.md`), the equivalent
+  of the TUI's `e`. Type, Ctrl+S, and the description is written back through
+  the CLI — compare-and-swap guarded, so if an agent edited the issue since
+  you opened it, the save fails with a "revert to load the latest" error
+  instead of overwriting.
+- **Issue drawer** — the ▤ button on a card opens a quick-view drawer: spec,
+  plan, notes, and the merged activity timeline. Tick plan steps live
+  (`issue tick`), append log notes (`issue log`), edit
+  priority/labels/milestone, and edit sections raw — all CAS-guarded too.
 - **Create issues** — title, status, priority, labels, milestone, markdown
   description.
 - **Live board** — the extension watches the SQLite files and refreshes when
@@ -40,6 +45,7 @@ cargo install cliban        # or: brew install lioralabs/tap/cliban · AUR: clib
 | `Cliban: New Issue` | open the create form |
 | `Cliban: Refresh Board` | re-read everything now |
 | `Cliban: Archive Done Issues` | sweep the Done column (reversible) |
+| `Cliban: Open Issue as Document` | open any issue key as an editable markdown tab |
 
 ## Settings
 

@@ -15,13 +15,14 @@ import type { Issue, IssueDraft } from '../shared/model';
 import type { EditSectionMsg, ErrorKind } from '../shared/protocol';
 import { readSettings } from './settings';
 import { DbWatcher, resolveDbPath } from './watcher';
+import { ClibanDocsProvider, openIssueDocument } from './docs';
 
 const PROJECT_STATE_KEY = 'cliban.project';
 
 export class BoardPanel {
   private static current: BoardPanel | undefined;
 
-  static createOrShow(context: vscode.ExtensionContext): BoardPanel {
+  static createOrShow(context: vscode.ExtensionContext, docs: ClibanDocsProvider): BoardPanel {
     if (BoardPanel.current) {
       BoardPanel.current.panel.reveal();
       return BoardPanel.current;
@@ -36,13 +37,17 @@ export class BoardPanel {
         localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'dist')],
       },
     );
-    BoardPanel.current = new BoardPanel(panel, context);
+    BoardPanel.current = new BoardPanel(panel, context, docs);
     return BoardPanel.current;
   }
 
   /** Command entry points act on the open panel, opening it if needed. */
-  static get(context: vscode.ExtensionContext): BoardPanel {
-    return BoardPanel.createOrShow(context);
+  static get(context: vscode.ExtensionContext, docs: ClibanDocsProvider): BoardPanel {
+    return BoardPanel.createOrShow(context, docs);
+  }
+
+  static refreshIfOpen(): void {
+    void BoardPanel.current?.refresh();
   }
 
   private client: ClibanClient;
@@ -51,6 +56,7 @@ export class BoardPanel {
   private constructor(
     private readonly panel: vscode.WebviewPanel,
     private readonly context: vscode.ExtensionContext,
+    private readonly docs: ClibanDocsProvider,
   ) {
     this.client = this.buildClient();
     this.panel.webview.html = this.render(context);
@@ -95,7 +101,10 @@ export class BoardPanel {
       dbPath: resolveDbPath(s.dbPath, process.env),
       mode: s.watchMode,
       pollIntervalMs: s.pollIntervalSeconds * 1000,
-      onFire: () => void this.refresh(),
+      onFire: () => {
+        this.docs.externalChange();
+        void this.refresh();
+      },
     });
   }
 
@@ -121,6 +130,9 @@ export class BoardPanel {
         break;
       case 'openIssue':
         await this.openIssue(msg.key);
+        break;
+      case 'openIssueDoc':
+        await openIssueDocument(msg.key);
         break;
       case 'moveIssue':
         await this.moveIssue(msg.requestId, msg.key, msg.toStatus);

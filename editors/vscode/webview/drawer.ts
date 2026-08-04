@@ -9,6 +9,7 @@ export type EditableSection = 'spec' | 'plan' | 'notes';
 export interface DrawerHandlers {
   onClose(): void;
   onOpenIssue(key: string): void;
+  onOpenIssueDoc(key: string): void;
   onTickStep(key: string, task: number, step: number): void;
   onAddLog(key: string, message: string): void;
   onEditMeta(key: string, ifUpdatedAt: string, patch: MetaPatch): void;
@@ -227,9 +228,14 @@ export function renderDrawer(
 
   const head = el('div', 'drawer-head');
   head.append(el('span', 'card-key', issue.key));
+  const actions = el('div', 'drawer-head-actions');
+  const openDoc = el('button', 'toolbar-btn', 'Open as document');
+  openDoc.title = 'Edit the full description in a text editor';
+  openDoc.addEventListener('click', () => handlers.onOpenIssueDoc(issue.key));
   const close = el('button', 'toolbar-btn drawer-close', '✕');
   close.addEventListener('click', () => handlers.onClose());
-  head.append(close);
+  actions.append(openDoc, close);
+  head.append(actions);
   drawer.append(head);
 
   drawer.append(el('h2', 'drawer-title', issue.title));

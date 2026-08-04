@@ -142,9 +142,27 @@ body.busy {
 .prio-urgent { background: var(--vscode-charts-red); }
 
 .claim-badge {
-  margin-left: auto;
   font-size: 0.85em;
   opacity: 0.8;
+}
+
+.card-details-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0;
+  font-size: 0.9em;
+  padding: 0 0.15rem;
+}
+
+.card:hover .card-details-btn {
+  opacity: 0.7;
+}
+
+.card-details-btn:hover {
+  opacity: 1 !important;
 }
 
 .card-title {
@@ -567,4 +585,9 @@ body.busy #app::before {
 @keyframes busy-slide {
   from { transform: translateX(-100%); }
   to { transform: translateX(100%); }
+}
+
+.drawer-head-actions {
+  display: flex;
+  gap: 0.35rem;
 }

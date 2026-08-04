@@ -25,6 +25,7 @@ let restoreDrafts: { key: string; drafts: Partial<Record<EditableSection, string
 
 const handlers = {
   onOpenIssue: (key: string) => vscode.postMessage({ type: 'openIssue', key }),
+  onOpenIssueDoc: (key: string) => vscode.postMessage({ type: 'openIssueDoc', key }),
   onPickProject: () => vscode.postMessage({ type: 'pickProject' }),
   onRefresh: () => vscode.postMessage({ type: 'refresh' }),
   onMoveIssue: (key: string, toStatus: Status) =>
@@ -93,6 +94,10 @@ function onMessage(msg: HostMsg): void {
         {
           onClose: () => closeDrawer(document.body),
           onOpenIssue: handlers.onOpenIssue,
+          onOpenIssueDoc: (key: string) => {
+            closeDrawer(document.body);
+            handlers.onOpenIssueDoc(key);
+          },
           onTickStep: handlers.onTickStep,
           onAddLog: handlers.onAddLog,
           onEditMeta: handlers.onEditMeta,

@@ -94,6 +94,11 @@ export interface OpenIssueMsg {
   key: string;
 }
 
+export interface OpenIssueDocMsg {
+  type: 'openIssueDoc';
+  key: string;
+}
+
 export interface MoveIssueMsg {
   type: 'moveIssue';
   requestId: string;
@@ -149,6 +154,7 @@ export type WebviewMsg =
   | RefreshMsg
   | PickProjectMsg
   | OpenIssueMsg
+  | OpenIssueDocMsg
   | MoveIssueMsg
   | TickStepMsg
   | AddLogMsg

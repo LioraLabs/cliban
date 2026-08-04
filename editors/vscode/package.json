@@ -38,6 +38,10 @@
       {
         "command": "cliban.archiveDone",
         "title": "Cliban: Archive Done Issues"
+      },
+      {
+        "command": "cliban.openIssueDocument",
+        "title": "Cliban: Open Issue as Document"
       }
     ],
     "configuration": {

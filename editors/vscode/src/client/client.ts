@@ -140,6 +140,16 @@ export class ClibanClient {
     return (await this.runJson(args, content)) as Issue;
   }
 
+  /**
+   * Replace the ENTIRE description — the document-editor path (TUI `e`
+   * equivalent). Always CAS-guarded: this is the one call that can destroy
+   * sections, so a stale token must fail it.
+   */
+  async editDescription(key: string, content: string, ifUpdatedAt: string): Promise<Issue> {
+    const args = ['issue', 'edit', key, '--description-file', '-', '--if-updated-at', ifUpdatedAt];
+    return (await this.runJson(args, content)) as Issue;
+  }
+
   async tick(key: string, task: number, step: number): Promise<Issue> {
     return (await this.runJson([
       'issue', 'tick', key, '--task', String(task), '--step', String(step),
