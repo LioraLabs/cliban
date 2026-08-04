@@ -44,6 +44,7 @@ fn run_env(db: &str, args: &[&str], extra_env: &[(&str, &str)]) -> Run {
         .env_remove("CLIBAN_ACTOR")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("CLIBAN_OUTPUT")
+        .env_remove("CLIBAN_PROJECT")
         .args(args);
     for (k, v) in extra_env {
         cmd.env(k, v);
@@ -63,7 +64,8 @@ fn run(db: &str, args: &[&str]) -> Run {
 fn ok(db: &str, args: &[&str]) -> String {
     let r = run(db, args);
     assert_eq!(
-        r.code, 0,
+        r.code,
+        0,
         "`cliban {}` failed: {}",
         args.join(" "),
         r.stderr
@@ -74,7 +76,8 @@ fn ok(db: &str, args: &[&str]) -> String {
 fn ok_env(db: &str, args: &[&str], extra_env: &[(&str, &str)]) -> String {
     let r = run_env(db, args, extra_env);
     assert_eq!(
-        r.code, 0,
+        r.code,
+        0,
         "`cliban {}` failed: {}",
         args.join(" "),
         r.stderr
@@ -87,21 +90,20 @@ const TABLE: &[(&str, &str)] = &[("CLIBAN_OUTPUT", "table")];
 /// A board with one planned issue (CLI-1) and one plain issue (CLI-2).
 fn seeded(tag: &str) -> String {
     let db = tmp_db(tag);
-    ok(&db, &["project", "add", "CLI", "--name", "Cliban"]);
+    ok(&db, &["project", "add", "CLI", "Cliban"]);
     ok(
         &db,
         &[
             "issue",
             "add",
+            "planned",
             "--project",
             "CLI",
-            "--title",
-            "planned",
             "--description",
             "## Plan\n\n### Task 1: t\n\n- [ ] Step 1\n- [ ] Step 2\n",
         ],
     );
-    ok(&db, &["issue", "add", "--project", "CLI", "--title", "plain"]);
+    ok(&db, &["issue", "add", "plain", "--project", "CLI"]);
     db
 }
 
@@ -119,7 +121,10 @@ fn activity_count(db: &str) -> usize {
 #[test]
 fn retick_of_a_checked_step_succeeds_and_says_nothing_to_do() {
     let db = seeded("retick");
-    let first = ok(&db, &["issue", "tick", "CLI-1", "--task", "1", "--step", "1"]);
+    let first = ok(
+        &db,
+        &["issue", "tick", "CLI-1", "--task", "1", "--step", "1"],
+    );
     let v: serde_json::Value = serde_json::from_str(&first).expect("tick echoes JSON");
     assert_eq!(v["checked"], true);
     assert!(
@@ -127,7 +132,7 @@ fn retick_of_a_checked_step_succeeds_and_says_nothing_to_do() {
         "a real tick carries no noop marker: {first}"
     );
 
-    let desc_before = ok(&db, &["issue", "show", "CLI-1", "--section", "plan"]);
+    let desc_before = ok(&db, &["issue", "cat", "CLI-1", "--section", "plan"]);
     let audits_before = activity_count(&db);
 
     // Table mode: exit 0 with the explicit note.
@@ -144,7 +149,10 @@ fn retick_of_a_checked_step_succeeds_and_says_nothing_to_do() {
     // JSON mode: same echo shape plus "noop": true, updated_at untouched.
     let show: serde_json::Value =
         serde_json::from_str(&ok(&db, &["issue", "show", "CLI-1", "--json"])).unwrap();
-    let echo = ok(&db, &["issue", "tick", "CLI-1", "--task", "1", "--step", "1"]);
+    let echo = ok(
+        &db,
+        &["issue", "tick", "CLI-1", "--task", "1", "--step", "1"],
+    );
     let v: serde_json::Value = serde_json::from_str(&echo).expect("noop tick echoes JSON");
     assert_eq!(v["noop"], true);
     assert_eq!(v["checked"], true);
@@ -158,7 +166,7 @@ fn retick_of_a_checked_step_succeeds_and_says_nothing_to_do() {
 
     // The plan text and the audit trail are exactly as they were.
     assert_eq!(
-        ok(&db, &["issue", "show", "CLI-1", "--section", "plan"]),
+        ok(&db, &["issue", "cat", "CLI-1", "--section", "plan"]),
         desc_before
     );
     assert_eq!(
@@ -181,7 +189,10 @@ fn tick_of_wrong_targets_stays_exit_2() {
         assert_eq!(r.code, 2, "`cliban {}`: {}", args.join(" "), r.stderr);
     }
     // A missing key is not-found, not validation.
-    let r = run(&db, &["issue", "tick", "CLI-99", "--task", "1", "--step", "1"]);
+    let r = run(
+        &db,
+        &["issue", "tick", "CLI-99", "--task", "1", "--step", "1"],
+    );
     assert_eq!(r.code, 1, "{}", r.stderr);
 }
 
@@ -264,7 +275,7 @@ fn unarchive_of_an_unarchived_issue_succeeds_noting_the_noop() {
     let echo = ok(&db, &["issue", "unarchive", "CLI-2"]);
     let v: serde_json::Value = serde_json::from_str(&echo).unwrap();
     assert_eq!(v["noop"], true);
-    assert_eq!(v["archived"], false);
+    assert!(v.get("archived").is_none(), "absent means unarchived: {v}");
     assert_eq!(activity_count(&db), audits_before);
 
     // The real flips still confirm without a noop marker.

@@ -120,10 +120,7 @@ fn read_request_body(stream: &mut TcpStream) -> Option<String> {
 /// `variables.id` when the request has one, for per-issue reply keys.
 fn request_id(body: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
-    v.get("variables")?
-        .get("id")?
-        .as_str()
-        .map(str::to_string)
+    v.get("variables")?.get("id")?.as_str().map(str::to_string)
 }
 
 /// `{"query":"query IssueByKey($team..."}` → `IssueByKey`.
@@ -274,7 +271,7 @@ impl Board {
         let _ = std::fs::remove_dir_all(&config_home);
         let board = Board { db, config_home };
         board
-            .run(&["project", "add", "PROJ", "--name", "Demo"], None)
+            .run(&["project", "add", "PROJ", "Demo"], None)
             .assert_ok();
         board
     }
@@ -354,7 +351,7 @@ fn import_creates_a_cliban_issue_from_a_linear_issue() {
     ));
 
     let run = board.run(
-        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        &["linear", "import", "ENG-412", "--project", "PROJ", "--json"],
         Some(&stub),
     );
     run.assert_ok();
@@ -394,7 +391,7 @@ fn reimport_refreshes_the_spec_and_preserves_a_ticked_plan() {
         "2026-07-29T12:00:00.000Z",
     ));
     let run = board.run(
-        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        &["linear", "import", "ENG-412", "--project", "PROJ", "--json"],
         Some(&stub),
     );
     run.assert_ok();
@@ -425,7 +422,7 @@ fn reimport_refreshes_the_spec_and_preserves_a_ticked_plan() {
         "2026-07-30T12:00:00.000Z",
     ));
     let run = board.run(
-        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        &["linear", "import", "ENG-412", "--project", "PROJ", "--json"],
         Some(&stub2),
     );
     run.assert_ok();
@@ -469,7 +466,7 @@ fn a_second_import_does_not_create_a_second_issue() {
         ));
         board
             .run(
-                &["import", "linear", "ENG-412", "--project", "PROJ"],
+                &["linear", "import", "ENG-412", "--project", "PROJ"],
                 Some(&stub),
             )
             .assert_ok();
@@ -489,7 +486,7 @@ fn a_cancelled_linear_issue_is_archived_rather_than_deleted() {
         "2026-07-29T12:00:00.000Z",
     ));
     let run = board.run(
-        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        &["linear", "import", "ENG-412", "--project", "PROJ", "--json"],
         Some(&stub),
     );
     run.assert_ok();
@@ -508,8 +505,8 @@ fn import_dry_run_writes_nothing() {
     ));
     let run = board.run(
         &[
-            "import",
             "linear",
+            "import",
             "ENG-412",
             "--project",
             "PROJ",
@@ -540,7 +537,7 @@ fn push_moves_the_linear_state_and_posts_a_comment() {
         "2026-07-29T12:00:00.000Z",
     ));
     let run = board.run(
-        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        &["linear", "import", "ENG-412", "--project", "PROJ", "--json"],
         Some(&stub),
     );
     run.assert_ok();
@@ -576,7 +573,7 @@ fn push_moves_the_linear_state_and_posts_a_comment() {
         ),
     ]));
 
-    let run = board.run(&["push", "linear", &key, "--json"], Some(&push_stub));
+    let run = board.run(&["linear", "push", &key, "--json"], Some(&push_stub));
     run.assert_ok();
     let out: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
     assert_eq!(out["action"], "pushed");
@@ -601,7 +598,7 @@ fn push_refuses_when_linear_moved_since_the_last_sync() {
         "2026-07-29T12:00:00.000Z",
     ));
     let run = board.run(
-        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        &["linear", "import", "ENG-412", "--project", "PROJ", "--json"],
         Some(&stub),
     );
     run.assert_ok();
@@ -639,7 +636,7 @@ fn push_refuses_when_linear_moved_since_the_last_sync() {
     ]);
 
     let stub2 = Stub::start(stale_replies.clone());
-    let run = board.run(&["push", "linear", &key], Some(&stub2));
+    let run = board.run(&["linear", "push", &key], Some(&stub2));
     assert_eq!(run.code, 2, "stale write should exit 2: {run:?}");
     assert!(
         run.stderr.contains("changed in Linear"),
@@ -656,7 +653,7 @@ fn push_refuses_when_linear_moved_since_the_last_sync() {
     // --force is the documented override.
     let stub3 = Stub::start(stale_replies);
     board
-        .run(&["push", "linear", &key, "--force"], Some(&stub3))
+        .run(&["linear", "push", &key, "--force"], Some(&stub3))
         .assert_ok();
     assert!(stub3.operations().contains(&"IssueUpdate".to_string()));
 }
@@ -670,7 +667,7 @@ fn push_dry_run_writes_nothing_and_shows_the_comment() {
         "2026-07-29T12:00:00.000Z",
     ));
     let run = board.run(
-        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        &["linear", "import", "ENG-412", "--project", "PROJ", "--json"],
         Some(&stub),
     );
     run.assert_ok();
@@ -690,7 +687,7 @@ fn push_dry_run_writes_nothing_and_shows_the_comment() {
         ),
         ("TeamByKey".to_string(), team_reply()),
     ]));
-    let run = board.run(&["push", "linear", &key, "--dry-run"], Some(&push_stub));
+    let run = board.run(&["linear", "push", &key, "--dry-run"], Some(&push_stub));
     run.assert_ok();
     assert!(run.stdout.contains("dry run"), "{}", run.stdout);
     assert!(run.stdout.contains("comment:"), "{}", run.stdout);
@@ -716,10 +713,7 @@ fn reimport_over_a_pushed_origin_link_keeps_the_local_spec() {
 
     // The issue is born on the board, spec and all — cliban owns that spec.
     board
-        .run(
-            &["issue", "add", "--project", "PROJ", "--title", "Local work"],
-            None,
-        )
+        .run(&["issue", "add", "Local work", "--project", "PROJ"], None)
         .assert_ok();
     let description = "## Spec\n\nThe LOCAL spec, written on the board.\n\n## Plan\n\n\
                        ### Task 1: do it\n\n- [ ] **Step 1: start**\n";
@@ -747,7 +741,7 @@ fn reimport_over_a_pushed_origin_link_keeps_the_local_spec() {
     ]));
     board
         .run(
-            &["push", "linear", "PROJ-1", "--create", "--team", "ENG"],
+            &["linear", "push", "PROJ-1", "--create", "--team", "ENG"],
             Some(&create_stub),
         )
         .assert_ok();
@@ -759,7 +753,7 @@ fn reimport_over_a_pushed_origin_link_keeps_the_local_spec() {
         "2026-07-30T12:00:00.000Z",
     ));
     let run = board.run(
-        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        &["linear", "import", "ENG-412", "--project", "PROJ", "--json"],
         Some(&stub),
     );
     run.assert_ok();
@@ -800,7 +794,7 @@ fn reimport_over_an_imported_origin_link_still_refreshes_the_spec() {
         "2026-07-29T12:00:00.000Z",
     ));
     let run = board.run(
-        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        &["linear", "import", "ENG-412", "--project", "PROJ", "--json"],
         Some(&stub),
     );
     run.assert_ok();
@@ -823,7 +817,7 @@ fn reimport_over_an_imported_origin_link_still_refreshes_the_spec() {
         "2026-07-30T12:00:00.000Z",
     ));
     let run = board.run(
-        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        &["linear", "import", "ENG-412", "--project", "PROJ", "--json"],
         Some(&stub2),
     );
     run.assert_ok();
@@ -875,7 +869,7 @@ fn import_eng412(board: &Board) -> String {
         "2026-07-29T12:00:00.000Z",
     ));
     let run = board.run(
-        &["import", "linear", "ENG-412", "--project", "PROJ", "--json"],
+        &["linear", "import", "ENG-412", "--project", "PROJ", "--json"],
         Some(&stub),
     );
     run.assert_ok();
@@ -893,7 +887,7 @@ fn a_second_push_updates_the_comment_instead_of_appending_another() {
     // First push: no comment exists yet, so it is created.
     let stub1 = Stub::start(living_comment_replies("comment-uuid-1"));
     board
-        .run(&["push", "linear", &key], Some(&stub1))
+        .run(&["linear", "push", &key], Some(&stub1))
         .assert_ok();
     let ops = stub1.operations();
     assert!(ops.contains(&"CommentCreate".to_string()), "{ops:?}");
@@ -905,7 +899,7 @@ fn a_second_push_updates_the_comment_instead_of_appending_another() {
     // Second push: the recorded comment is edited in place.
     let stub2 = Stub::start(living_comment_replies("comment-uuid-never-used"));
     board
-        .run(&["push", "linear", &key], Some(&stub2))
+        .run(&["linear", "push", &key], Some(&stub2))
         .assert_ok();
     let ops = stub2.operations();
     assert!(
@@ -951,7 +945,7 @@ fn the_digest_reflects_ticked_steps_logged_findings_and_test_status() {
 
     let stub = Stub::start(living_comment_replies("comment-uuid-1"));
     board
-        .run(&["push", "linear", &key], Some(&stub))
+        .run(&["linear", "push", &key], Some(&stub))
         .assert_ok();
 
     let body = stub.requests_for("CommentCreate").remove(0);
@@ -985,7 +979,7 @@ fn a_deleted_comment_is_recreated_once_and_the_new_id_sticks() {
     // Push 1 creates comment-uuid-1.
     let stub1 = Stub::start(living_comment_replies("comment-uuid-1"));
     board
-        .run(&["push", "linear", &key], Some(&stub1))
+        .run(&["linear", "push", &key], Some(&stub1))
         .assert_ok();
 
     // Push 2: someone deleted the comment in Linear. The update resolves to
@@ -1010,7 +1004,7 @@ fn a_deleted_comment_is_recreated_once_and_the_new_id_sticks() {
         ),
     ]));
     board
-        .run(&["push", "linear", &key], Some(&stub2))
+        .run(&["linear", "push", &key], Some(&stub2))
         .assert_ok();
     let ops = stub2.operations();
     let update_pos = ops.iter().position(|o| o == "CommentUpdate");
@@ -1023,7 +1017,7 @@ fn a_deleted_comment_is_recreated_once_and_the_new_id_sticks() {
     // Push 3 proves the recreated id was stored: the update addresses it.
     let stub3 = Stub::start(living_comment_replies("comment-uuid-never-used"));
     board
-        .run(&["push", "linear", &key], Some(&stub3))
+        .run(&["linear", "push", &key], Some(&stub3))
         .assert_ok();
     assert!(
         !stub3.operations().contains(&"CommentCreate".to_string()),
@@ -1060,7 +1054,7 @@ fn board_with_two_linked_issues(tag: &str) -> Board {
     ));
     board
         .run(
-            &["import", "linear", "ENG-412", "--project", "PROJ"],
+            &["linear", "import", "ENG-412", "--project", "PROJ"],
             Some(&stub),
         )
         .assert_ok();
@@ -1073,7 +1067,7 @@ fn board_with_two_linked_issues(tag: &str) -> Board {
     )));
     board
         .run(
-            &["import", "linear", "ENG-9", "--project", "PROJ"],
+            &["linear", "import", "ENG-9", "--project", "PROJ"],
             Some(&stub),
         )
         .assert_ok();
@@ -1093,7 +1087,10 @@ fn sync_linear_refreshes_every_linked_issue_and_keeps_plans() {
         .run(&["issue", "edit", "PROJ-1", "--description", plan], None)
         .assert_ok();
     board
-        .run(&["issue", "tick", "PROJ-1", "--task", "1", "--step", "1"], None)
+        .run(
+            &["issue", "tick", "PROJ-1", "--task", "1", "--step", "1"],
+            None,
+        )
         .assert_ok();
 
     let stub = Stub::start(HashMap::from([
@@ -1119,7 +1116,7 @@ fn sync_linear_refreshes_every_linked_issue_and_keeps_plans() {
         ),
     ]));
 
-    let run = board.run(&["sync", "linear", "--json"], Some(&stub));
+    let run = board.run(&["linear", "sync", "--json"], Some(&stub));
     run.assert_ok();
     let out: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
     assert_eq!(out["action"], "sync");
@@ -1146,10 +1143,7 @@ fn sync_linear_honors_per_link_origin() {
 
     // PROJ-1 is born on the board and pushed out: pushed origin, local spec.
     board
-        .run(
-            &["issue", "add", "--project", "PROJ", "--title", "Local work"],
-            None,
-        )
+        .run(&["issue", "add", "Local work", "--project", "PROJ"], None)
         .assert_ok();
     board
         .run(
@@ -1181,7 +1175,7 @@ fn sync_linear_honors_per_link_origin() {
     ]));
     board
         .run(
-            &["push", "linear", "PROJ-1", "--create", "--team", "ENG"],
+            &["linear", "push", "PROJ-1", "--create", "--team", "ENG"],
             Some(&create_stub),
         )
         .assert_ok();
@@ -1196,7 +1190,7 @@ fn sync_linear_honors_per_link_origin() {
     )));
     board
         .run(
-            &["import", "linear", "ENG-9", "--project", "PROJ"],
+            &["linear", "import", "ENG-9", "--project", "PROJ"],
             Some(&import_stub),
         )
         .assert_ok();
@@ -1223,7 +1217,7 @@ fn sync_linear_honors_per_link_origin() {
             )),
         ),
     ]));
-    board.run(&["sync", "linear"], Some(&stub)).assert_ok();
+    board.run(&["linear", "sync"], Some(&stub)).assert_ok();
 
     let pushed = board.show("PROJ-1");
     assert_eq!(
@@ -1252,7 +1246,7 @@ fn sync_linear_honors_per_link_origin() {
 fn sync_linear_scopes_to_a_project() {
     let board = Board::new("syncproj");
     board
-        .run(&["project", "add", "OTHER", "--name", "Elsewhere"], None)
+        .run(&["project", "add", "OTHER", "Elsewhere"], None)
         .assert_ok();
 
     let stub = Stub::start(import_replies(
@@ -1262,7 +1256,7 @@ fn sync_linear_scopes_to_a_project() {
     ));
     board
         .run(
-            &["import", "linear", "ENG-412", "--project", "PROJ"],
+            &["linear", "import", "ENG-412", "--project", "PROJ"],
             Some(&stub),
         )
         .assert_ok();
@@ -1275,7 +1269,7 @@ fn sync_linear_scopes_to_a_project() {
     )));
     board
         .run(
-            &["import", "linear", "ENG-9", "--project", "OTHER"],
+            &["linear", "import", "ENG-9", "--project", "OTHER"],
             Some(&stub),
         )
         .assert_ok();
@@ -1292,7 +1286,7 @@ fn sync_linear_scopes_to_a_project() {
         )),
     )]));
     let run = board.run(
-        &["sync", "linear", "--project", "PROJ", "--json"],
+        &["linear", "sync", "--project", "PROJ", "--json"],
         Some(&sync_stub),
     );
     run.assert_ok();
@@ -1326,7 +1320,7 @@ fn sync_linear_skips_an_issue_gone_upstream() {
             )),
         ),
     ]));
-    let run = board.run(&["sync", "linear", "--json"], Some(&stub));
+    let run = board.run(&["linear", "sync", "--json"], Some(&stub));
     run.assert_ok();
     let out: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
     assert_eq!(out["refreshed"], 1, "{out}");
@@ -1364,7 +1358,7 @@ fn sync_linear_dry_run_writes_nothing() {
             )),
         ),
     ]));
-    let run = board.run(&["sync", "linear", "--dry-run"], Some(&stub));
+    let run = board.run(&["linear", "sync", "--dry-run"], Some(&stub));
     run.assert_ok();
     assert!(run.stdout.contains("dry run"), "{}", run.stdout);
     assert_eq!(
@@ -1378,13 +1372,9 @@ fn sync_linear_dry_run_writes_nothing() {
 fn sync_linear_with_no_links_needs_no_token() {
     let board = Board::new("syncempty");
     // No stub, so no LINEAR_API_KEY: an empty board is knowable without one.
-    let run = board.run(&["sync", "linear"], None);
+    let run = board.run(&["linear", "sync"], None);
     run.assert_ok();
-    assert!(
-        run.stdout.contains("nothing linked"),
-        "{}",
-        run.stdout
-    );
+    assert!(run.stdout.contains("nothing linked"), "{}", run.stdout);
 }
 
 // ---- import --mine: the inbound queue ----
@@ -1401,7 +1391,7 @@ fn import_mine_creates_refreshes_and_skips_out_of_cycle_work() {
     ));
     board
         .run(
-            &["import", "linear", "ENG-412", "--project", "PROJ"],
+            &["linear", "import", "ENG-412", "--project", "PROJ"],
             Some(&stub),
         )
         .assert_ok();
@@ -1449,7 +1439,7 @@ fn import_mine_creates_refreshes_and_skips_out_of_cycle_work() {
     )]));
 
     let run = board.run(
-        &["import", "linear", "--mine", "--project", "PROJ", "--json"],
+        &["linear", "import", "--mine", "--project", "PROJ", "--json"],
         Some(&mine_stub),
     );
     run.assert_ok();
@@ -1462,7 +1452,11 @@ fn import_mine_creates_refreshes_and_skips_out_of_cycle_work() {
     let ls = board.run(&["issue", "ls", "--project", "PROJ", "--json"], None);
     ls.assert_ok();
     let count = ls.stdout.lines().filter(|l| !l.trim().is_empty()).count();
-    assert_eq!(count, 2, "created + refreshed, never the skipped one: {}", ls.stdout);
+    assert_eq!(
+        count, 2,
+        "created + refreshed, never the skipped one: {}",
+        ls.stdout
+    );
 
     let issue = board.show("PROJ-1");
     assert_eq!(
@@ -1490,7 +1484,7 @@ fn import_mine_in_an_active_cycle_is_in_scope() {
         )]),
     )]));
     let run = board.run(
-        &["import", "linear", "--mine", "--project", "PROJ", "--json"],
+        &["linear", "import", "--mine", "--project", "PROJ", "--json"],
         Some(&mine_stub),
     );
     run.assert_ok();
@@ -1517,7 +1511,14 @@ fn import_mine_dry_run_writes_nothing() {
         )]),
     )]));
     let run = board.run(
-        &["import", "linear", "--mine", "--project", "PROJ", "--dry-run"],
+        &[
+            "linear",
+            "import",
+            "--mine",
+            "--project",
+            "PROJ",
+            "--dry-run",
+        ],
         Some(&mine_stub),
     );
     run.assert_ok();
@@ -1551,7 +1552,7 @@ fn import_mine_into_a_missing_project_fails_before_writing() {
         )]),
     )]));
     let run = board.run(
-        &["import", "linear", "--mine", "--project", "NOPE"],
+        &["linear", "import", "--mine", "--project", "NOPE"],
         Some(&mine_stub),
     );
     assert_eq!(run.code, 1, "{run:?}");
@@ -1563,18 +1564,24 @@ fn import_linear_needs_exactly_one_of_key_and_mine() {
     let board = Board::new("minearg");
     // Both: clap rejects the conflict before anything runs.
     let run = board.run(
-        &["import", "linear", "ENG-412", "--mine", "--project", "PROJ"],
+        &["linear", "import", "ENG-412", "--mine", "--project", "PROJ"],
         None,
     );
     assert_ne!(run.code, 0, "{run:?}");
     // Neither: the error should name both ways forward.
-    let run = board.run(&["import", "linear", "--project", "PROJ"], None);
+    let run = board.run(&["linear", "import", "--project", "PROJ"], None);
     assert_eq!(run.code, 2, "{run:?}");
     assert!(run.stderr.contains("--mine"), "{}", run.stderr);
     // --mine adopts by link, never by --link-to.
     let run = board.run(
         &[
-            "import", "linear", "--mine", "--project", "PROJ", "--link-to", "PROJ-1",
+            "linear",
+            "import",
+            "--mine",
+            "--project",
+            "PROJ",
+            "--link-to",
+            "PROJ-1",
         ],
         None,
     );
@@ -1655,7 +1662,11 @@ fn a_failed_push_on_move_leaves_the_move_intact_and_records_it() {
         "the local move must survive a failed push"
     );
 
-    let warnings: Vec<&str> = run.stderr.lines().filter(|l| !l.trim().is_empty()).collect();
+    let warnings: Vec<&str> = run
+        .stderr
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
     assert_eq!(
         warnings.len(),
         1,
@@ -1668,7 +1679,7 @@ fn a_failed_push_on_move_leaves_the_move_intact_and_records_it() {
         warnings[0]
     );
 
-    let activity = board.run(&["issue", "show", &key, "--section", "activity"], None);
+    let activity = board.run(&["activity", "--issue", &key, "--table"], None);
     activity.assert_ok();
     assert!(
         activity.stdout.contains("push_on_move failed"),
@@ -1681,10 +1692,7 @@ fn a_failed_push_on_move_leaves_the_move_intact_and_records_it() {
 fn mv_on_an_unlinked_issue_makes_no_calls_and_reads_no_config() {
     let board = Board::new("moveunlinked");
     board
-        .run(
-            &["issue", "add", "--project", "PROJ", "--title", "Local only"],
-            None,
-        )
+        .run(&["issue", "add", "Local only", "--project", "PROJ"], None)
         .assert_ok();
     // A config file that cannot even parse: if the move read it, the error
     // would surface as a warning. An unlinked move must not get that far.
@@ -1748,13 +1756,10 @@ fn mv_to_the_same_status_does_not_push() {
 fn push_on_an_unlinked_issue_exits_1_without_needing_a_token() {
     let board = Board::new("unlinked");
     board
-        .run(
-            &["issue", "add", "--project", "PROJ", "--title", "Local work"],
-            None,
-        )
+        .run(&["issue", "add", "Local work", "--project", "PROJ"], None)
         .assert_ok();
 
-    let run = board.run(&["push", "linear", "PROJ-1"], None);
+    let run = board.run(&["linear", "push", "PROJ-1"], None);
     assert_eq!(run.code, 1, "{run:?}");
     assert!(
         run.stderr.contains("not linked to Linear"),
@@ -1776,7 +1781,7 @@ fn push_on_an_unlinked_issue_exits_1_without_needing_a_token() {
 #[test]
 fn push_on_a_missing_issue_exits_1() {
     let board = Board::new("missing");
-    let run = board.run(&["push", "linear", "PROJ-999"], None);
+    let run = board.run(&["linear", "push", "PROJ-999"], None);
     assert_eq!(run.code, 1, "{run:?}");
     assert!(run.stderr.contains("not found"), "{}", run.stderr);
 }
@@ -1785,7 +1790,7 @@ fn push_on_a_missing_issue_exits_1() {
 fn import_with_a_malformed_key_exits_1_before_touching_the_network() {
     let board = Board::new("badkey");
     for bad in ["ENG", "ENG-abc", "412"] {
-        let run = board.run(&["import", "linear", bad, "--project", "PROJ"], None);
+        let run = board.run(&["linear", "import", bad, "--project", "PROJ"], None);
         assert_eq!(run.code, 1, "{bad:?} should be rejected: {run:?}");
         assert!(
             run.stderr.contains("not a Linear issue key"),
@@ -1799,7 +1804,7 @@ fn import_with_a_malformed_key_exits_1_before_touching_the_network() {
 fn import_without_a_token_says_which_variable_to_set() {
     let board = Board::new("notoken");
     // No stub, so no LINEAR_API_KEY in the child environment.
-    let run = board.run(&["import", "linear", "ENG-412", "--project", "PROJ"], None);
+    let run = board.run(&["linear", "import", "ENG-412", "--project", "PROJ"], None);
     assert_eq!(run.code, 2, "{run:?}");
     assert!(run.stderr.contains("LINEAR_API_KEY"), "{}", run.stderr);
     assert!(
@@ -1813,13 +1818,10 @@ fn import_without_a_token_says_which_variable_to_set() {
 fn push_create_without_a_team_explains_the_two_ways_to_supply_one() {
     let board = Board::new("noteam");
     board
-        .run(
-            &["issue", "add", "--project", "PROJ", "--title", "Local work"],
-            None,
-        )
+        .run(&["issue", "add", "Local work", "--project", "PROJ"], None)
         .assert_ok();
     let stub = Stub::start(HashMap::new());
-    let run = board.run(&["push", "linear", "PROJ-1", "--create"], Some(&stub));
+    let run = board.run(&["linear", "push", "PROJ-1", "--create"], Some(&stub));
     assert_eq!(run.code, 2, "{run:?}");
     assert!(run.stderr.contains("--team"), "{}", run.stderr);
     assert!(run.stderr.contains("linear.toml"), "{}", run.stderr);

@@ -6,6 +6,7 @@ fn run(db: &std::path::Path, args: &[&str]) -> std::process::Output {
         .arg("--db")
         .arg(db)
         .env_remove("CLIBAN_OUTPUT")
+        .env_remove("CLIBAN_PROJECT")
         .args(args)
         .output()
         .expect("run cliban")
@@ -16,6 +17,7 @@ fn run_stdin(db: &std::path::Path, args: &[&str], stdin: &str) -> std::process::
         .arg("--db")
         .arg(db)
         .env_remove("CLIBAN_OUTPUT")
+        .env_remove("CLIBAN_PROJECT")
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -49,7 +51,6 @@ fn project_notes_support_targeted_reads_and_progressive_search() {
             "project",
             "add",
             "MEM",
-            "--name",
             "Memory",
             "--description-file",
             description.to_str().unwrap(),
@@ -58,7 +59,7 @@ fn project_notes_support_targeted_reads_and_progressive_search() {
     .status
     .success());
 
-    let notes = run(&db, &["project", "show", "MEM", "--section", "notes"]);
+    let notes = run(&db, &["project", "cat", "MEM", "--section", "notes"]);
     let notes_stdout = String::from_utf8_lossy(&notes.stdout);
     assert!(notes.status.success());
     assert!(notes_stdout.contains("### Database"));
@@ -184,7 +185,6 @@ fn project_notes_support_targeted_reads_and_progressive_search() {
             "project",
             "add",
             "LIT",
-            "--name",
             "Literal",
             "--description",
             "-",

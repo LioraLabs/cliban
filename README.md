@@ -26,7 +26,7 @@ project memory. All of it sits in SQLite behind atomic CLI commands, so the
 plan outlives the context window that wrote it.
 
 ```console
-$ cliban issue show PROJ-42 --section plan   # two steps ticked, three to go
+$ cliban issue cat PROJ-42 --section plan   # two steps ticked, three to go
 $ # ...session crashes, /clear, compaction, lunch...
 $ cliban issue current --json                # which issue is this branch again?
 $ cliban activity --since 1d                 # what happened while nobody was looking
@@ -73,8 +73,8 @@ and `SHA256SUMS` are on the
 Then:
 
 ```bash
-cliban project add PROJ --name "My project"
-cliban issue add --project PROJ --title "First issue" --priority high
+cliban project add PROJ "My project"
+cliban issue add "First issue" --project PROJ --priority high
 cliban             # opens the TUI
 ```
 
@@ -106,7 +106,7 @@ One agent forgetting is a nuisance. Five agents working the same board in
 parallel is a coordination problem, and cliban treats it as one:
 
 ```console
-$ cliban issue ready --project PROJ --json     # the frontier: unblocked, unclaimed, takeable
+$ cliban issue ls --ready --project PROJ --json     # the frontier: unblocked, unclaimed, takeable
 $ cliban issue claim PROJ-42                   # claimed by session:ea8a9c5e — others skip it
 $ cliban milestone waves --project PROJ "v0.4" --json
 {"waves":[["PROJ-40"],["PROJ-41","PROJ-42"],["PROJ-43"]],"done":[],"external_blocked":[]}
@@ -116,7 +116,7 @@ $ cliban milestone waves --project PROJ "v0.4" --json
   `$CLIBAN_ACTOR` when set, else the ambient Claude Code session id — so a
   shared timeline stays readable with zero setup.
 - **Claims are ownership, not status.** `issue claim` marks a ticket as one
-  session's before the first status move lands; `issue ready` stops offering
+  session's before the first status move lands; `issue ls --ready` stops offering
   it to everyone else; `--force` takes over a dead session's claim.
 - **`milestone waves`** partitions a milestone's open issues into dependency
   layers from its `blocks` edges: wave N is safe to dispatch when waves
@@ -147,7 +147,7 @@ agent re-derives its entire working state from the board:
 
 ```bash
 cliban issue current --json                   # the issue for this git branch
-cliban issue show PROJ-42 --section plan      # ticked steps ARE the progress file
+cliban issue cat PROJ-42 --section plan      # ticked steps ARE the progress file
 cliban activity --since 1d --json             # the timeline since yesterday
 cliban project search PROJ "wal mode" --json  # durable lessons, fuzzy-searched
 ```
@@ -187,7 +187,7 @@ cliban issue tick PROJ-42 --task 1 --step 2                     # [ ] → [x]
 cliban issue log PROJ-42 "found it: positions collapse after ~50 reorders"
 cliban issue promote PROJ-42 --task 1 --step 3 --title "CSRF middleware"
 cliban issue lint PROJ-42                                       # does it parse?
-cliban issue show PROJ-42 --section plan
+cliban issue cat PROJ-42 --section plan
 ```
 
 Section writes replace exactly one section and leave every other byte alone.
@@ -210,7 +210,7 @@ narrate it:
 
 ```bash
 cliban issue mv PROJ-42 blocked --note "upstream fix needed"
-cliban issue show PROJ-42 --section activity
+cliban activity --issue PROJ-42
 #   - 15:10Z — [session:ea8a9c5e] found it: positions collapse after ~50 reorders
 #   - 15:12Z — [session:ea8a9c5e] in-progress → blocked: upstream fix needed
 cliban activity --since 3d --project PROJ --json   # the whole board's feed, NDJSON
@@ -234,12 +234,12 @@ Durable lessons live under `## Notes` in the *project* description, one
 `###` subsection per independently useful lesson:
 
 ```bash
-cliban project note add PROJ --title "cargo test needs --test-threads=1" --body - <<'EOF'
+cliban project note add PROJ "cargo test needs --test-threads=1" --body - <<'EOF'
 The fixtures share a tempdir; parallel runs corrupt it and the failures look
 like flaky assertions, not contention.
 EOF
 cliban project search PROJ "flaky tempdir" --json   # retrieval is progressive:
-cliban project show PROJ --section notes            # search first, load later
+cliban project cat PROJ --section notes            # search first, load later
 ```
 
 `note add` appends one subsection and touches nothing else. `search`
@@ -293,11 +293,11 @@ coming in and reported progress going out.
 ```sh
 export LINEAR_API_KEY=lin_api_...
 
-cliban import linear --mine --project PROJ     # everything assigned to you
-cliban import linear ENG-412 --project PROJ    # or borrow one ticket
+cliban linear import --mine --project PROJ     # everything assigned to you
+cliban linear import ENG-412 --project PROJ    # or borrow one ticket
 cliban issue tick PROJ-42 --task 1 --step 1    # work it (plans stay local)
-cliban push linear PROJ-42                     # state + the living progress comment
-cliban sync linear                             # refresh every borrowed issue at once
+cliban linear push PROJ-42                     # state + the living progress comment
+cliban linear sync                             # refresh every borrowed issue at once
 ```
 
 `push` maintains **one living progress comment** per issue and edits it in

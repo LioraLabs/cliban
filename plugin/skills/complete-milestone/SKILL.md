@@ -147,7 +147,7 @@ cliban issue mv <KEY> done
 cliban issue log <KEY> "merged to milestone/$SLUG as $(git rev-parse --short HEAD)"
 # If the ticket was imported from Linear (activity log shows a `sync` entry),
 # hand it back — additive, and a failure here never blocks the milestone:
-cliban push linear <KEY> || true
+cliban linear push <KEY> || true
 git worktree remove "$ROOT/.worktrees/<ticket-branch>"
 git branch -d "<ticket-branch>" || git branch -D "<ticket-branch>"   # -d fails after conflict-resolved --no-ff; -D once verified merged
 ```
@@ -160,7 +160,7 @@ If the build or tests fail on the merge result, the ticket is not done — fix i
 
 When every issue is `done` and `milestone/$SLUG` is green, first **sweep the milestone for durable lessons** — this is the moment the knowledge exists and is about to be forgotten:
 
-1. Re-read what the tickets recorded: `cliban issue show <KEY> --section activity` (and `--section notes` where present) for each issue, plus your own integration experience — cross-ticket conflicts, hazards that fired, invariants you had to enforce by hand.
+1. Re-read what the tickets recorded: `cliban issue cat <KEY> --section activity` (and `--section notes` where present) for each issue, plus your own integration experience — cross-ticket conflicts, hazards that fired, invariants you had to enforce by hand.
 2. Keep only what outlives this milestone: repo conventions discovered the hard way, non-obvious tool behavior, recurring hazards, decisions whose rationale will matter again. Drop narration and anything scoped to a single ticket.
 3. Promote each survivor to the *project's* `## Notes` per the cliban-workflow round-trip: search first (`cliban project search <KEY> "<terms>" --json`), update an existing `###` subsection when one covers it, add a new one otherwise.
 
@@ -204,4 +204,4 @@ The whole skill, graded. Each rule appears once.
 | **SHOULD** | Check the both-halves invariant when a path-based hook could pass on a half-done paired change | A completeness gap a per-file hook can't catch (hazard 4) |
 | **SHOULD** | Re-scan `git worktree list` for stragglers before finalizing; never remove a live agent's worktree | A late rebase resurrecting a branch/worktree you already cleaned up (hazard 6) |
 | **SHOULD** | Sweep issue activity/notes for durable lessons at finalize and promote them to project `## Notes` (search-first) | Milestone knowledge evaporating when its tickets archive |
-| **MAY** | `cliban push linear <KEY>` after a Linear-imported ticket moves to done (never fatal to the milestone) | Linear drifting behind the board that mirrors it |
+| **MAY** | `cliban linear push <KEY>` after a Linear-imported ticket moves to done (never fatal to the milestone) | Linear drifting behind the board that mirrors it |

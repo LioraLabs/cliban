@@ -11,13 +11,30 @@
 use std::collections::BTreeSet;
 use std::process::Command;
 
+/// SKILL.md plus every reference file it progressively discloses — a command
+/// documented only in `references/` must not drift either.
 fn skill_md() -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../plugin/skills/cliban/SKILL.md");
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugin/skills/cliban");
+    let mut md = std::fs::read_to_string(dir.join("SKILL.md"))
+        .unwrap_or_else(|e| panic!("read {}: {e}", dir.join("SKILL.md").display()));
+    if let Ok(refs) = std::fs::read_dir(dir.join("references")) {
+        for entry in refs.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "md") {
+                md.push('\n');
+                md.push_str(
+                    &std::fs::read_to_string(&path)
+                        .unwrap_or_else(|e| panic!("read {}: {e}", path.display())),
+                );
+            }
+        }
+    }
+    md
 }
 
-/// Subcommand paths named in the doc. cliban's tree is at most two deep
+/// Subcommand paths named in the doc: `cliban ...` invocations in shell
+/// blocks, plus the command-map table rows (`| \`noun v1|v2\` | ... |`),
+/// which are the skill's actual inventory. cliban's tree is at most two deep
 /// (`group subcommand`), so take up to two leading non-flag words.
 fn documented_paths(md: &str) -> BTreeSet<Vec<String>> {
     let mut out = BTreeSet::new();
@@ -27,24 +44,51 @@ fn documented_paths(md: &str) -> BTreeSet<Vec<String>> {
             in_code = !in_code;
             continue;
         }
-        // Only shell blocks — prose can legitimately start a sentence with
-        // "cliban records ...".
-        if !in_code {
+        let line = line.trim();
+        if in_code {
+            let Some(rest) = line.strip_prefix("cliban ") else {
+                continue;
+            };
+            let path: Vec<String> = rest
+                // Stop at the first flag, trailing `# comment`, or shell operator.
+                .split_whitespace()
+                .take_while(|w| !w.starts_with(['-', '#', '<', '>', '|', '$']))
+                .take(2)
+                .map(str::to_string)
+                .collect();
+            if !path.is_empty() {
+                out.insert(path);
+            }
             continue;
         }
-        let line = line.trim();
-        let Some(rest) = line.strip_prefix("cliban ") else {
+        // A command-map row: the FIRST backtick span holds `noun v1|v2|...`
+        // (escaped as \| inside the table); later spans are prose.
+        if !line.starts_with('|') {
+            continue;
+        }
+        let Some(span) = line.trim_start_matches('|').trim().strip_prefix('`') else {
             continue;
         };
-        let path: Vec<String> = rest
-            // Stop at the first flag, trailing `# comment`, or shell operator.
-            .split_whitespace()
-            .take_while(|w| !w.starts_with(['-', '#', '<', '>', '|', '$']))
-            .take(2)
-            .map(str::to_string)
-            .collect();
-        if !path.is_empty() {
-            out.insert(path);
+        let Some((span, _)) = span.split_once('`') else {
+            continue;
+        };
+        let cleaned = span.replace("\\|", "|");
+        let mut words = cleaned.split_whitespace();
+        let Some(noun) = words.next() else { continue };
+        // A command noun is a bare lowercase word — anything else (`## Spec`,
+        // `--flag`, `$VAR`) is prose that happens to sit in a table.
+        if noun.is_empty() || !noun.chars().all(|c| c.is_ascii_lowercase()) {
+            continue;
+        }
+        match words.next() {
+            None => {
+                out.insert(vec![noun.to_string()]);
+            }
+            Some(verbs) => {
+                for v in verbs.split('|').filter(|v| !v.is_empty()) {
+                    out.insert(vec![noun.to_string(), v.to_string()]);
+                }
+            }
         }
     }
     out
@@ -54,9 +98,7 @@ fn documented_paths(md: &str) -> BTreeSet<Vec<String>> {
 /// describes the default build, so under `--no-default-features` these are
 /// legitimately absent and must not be reported as drift.
 fn feature_gated(path: &[String]) -> bool {
-    let gated = cfg!(not(feature = "linear")) && matches!(path[0].as_str(), "import" | "push");
-    // `issue import` is unrelated to the Linear bridge and always present.
-    gated && path.len() > 1
+    cfg!(not(feature = "linear")) && path[0] == "linear"
 }
 
 #[test]

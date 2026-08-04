@@ -28,6 +28,7 @@ fn ok(db: &str, args: &[&str]) -> String {
         .env_remove("CLIBAN_ACTOR")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("CLIBAN_OUTPUT")
+        .env_remove("CLIBAN_PROJECT")
         .args(args)
         .output()
         .expect("run cliban");
@@ -43,15 +44,22 @@ fn ok(db: &str, args: &[&str]) -> String {
 #[test]
 fn hyphen_leading_values_survive_space_separated_form() {
     let db = tmp_db("main");
-    ok(&db, &["project", "add", "HY", "--name", "Hyphens"]);
+    ok(&db, &["project", "add", "HY", "Hyphens"]);
 
-    // --title and --description starting with "-" / "--".
+    // A flag-looking TITLE needs the standard `--` escape (a positional that
+    // swallowed hyphens would also swallow typo'd flags); hyphen-leading
+    // --description values still pass bare.
     ok(
         &db,
         &[
-            "issue", "add", "--project", "HY",
-            "--title", "--flag-looking title",
-            "--description", "- a markdown bullet",
+            "issue",
+            "add",
+            "--project",
+            "HY",
+            "--description",
+            "- a markdown bullet",
+            "--",
+            "--flag-looking title",
         ],
     );
     let shown = ok(&db, &["issue", "show", "HY-1", "--json"]);
@@ -61,21 +69,37 @@ fn hyphen_leading_values_survive_space_separated_form() {
     // mv --note with a bullet.
     ok(
         &db,
-        &["issue", "mv", "HY-1", "in-progress", "--note", "- because reasons"],
+        &[
+            "issue",
+            "mv",
+            "HY-1",
+            "in-progress",
+            "--note",
+            "- because reasons",
+        ],
     );
 
     // log message positional with a bullet.
     ok(&db, &["issue", "log", "HY-1", "- found a thing"]);
 
-    // project note add with a flag-looking title and bullet body.
+    // project note add with a flag-looking title (via the `--` escape, same
+    // as any flag-looking positional) and a bullet body.
     ok(
         &db,
         &[
-            "project", "note", "add", "HY",
-            "--title", "--section files carry the body only",
-            "--body", "- the lesson",
+            "project",
+            "note",
+            "add",
+            "--body",
+            "- the lesson",
+            "--",
+            "HY",
+            "--section files carry the body only",
         ],
     );
-    let notes = ok(&db, &["project", "show", "HY", "--section", "notes"]);
-    assert!(notes.contains("--section files carry the body only"), "{notes}");
+    let notes = ok(&db, &["project", "cat", "HY", "--section", "notes"]);
+    assert!(
+        notes.contains("--section files carry the body only"),
+        "{notes}"
+    );
 }

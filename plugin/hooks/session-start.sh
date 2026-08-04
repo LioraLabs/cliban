@@ -26,8 +26,8 @@ IP=$(cliban issue ls --project "$KEY" --status in-progress --json 2>/dev/null \
   | jq -r '"  \(.key) \(.title)"' | head -5)
 [ -n "$IP" ] && printf 'In progress:\n%s\n' "$IP"
 
-BL=$(cliban issue blocked --json 2>/dev/null \
-  | jq -r --arg k "$KEY" 'select(.key | startswith($k + "-")) | "  \(.key) \(.title)"' | head -3)
+BL=$(cliban issue ls --blocked --project "$KEY" --json 2>/dev/null \
+  | jq -r '"  \(.key) \(.title)"' | head -3)
 [ -n "$BL" ] && printf 'Blocked:\n%s\n' "$BL"
 
 LAST=$(cliban activity --project "$KEY" --since 7d --limit 1 --json 2>/dev/null \

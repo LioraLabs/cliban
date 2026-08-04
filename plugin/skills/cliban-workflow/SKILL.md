@@ -32,7 +32,7 @@ If the user is wiring up a new repo, point them at `setup-cliban`; don't improvi
 | PR merged / local merge | `mv KEY done --note "merged as <sha>"` |
 | Discarded / abandoned | keep status, `issue log KEY "work discarded: <why>"` |
 
-Move the ticket when the work moves, in the same breath — a board that lags reality is worse than no board. Linear-linked issues additionally get `cliban push linear KEY` after the `in-review` and `done` moves (linkage detection and field ownership: `cliban` skill, Linear bridge section).
+Move the ticket when the work moves, in the same breath — a board that lags reality is worse than no board. Linear-linked issues additionally get `cliban linear push KEY` after the `in-review` and `done` moves (linkage detection and field ownership: `cliban` skill, Linear bridge section).
 
 ## Where Artifacts Live
 
@@ -83,7 +83,7 @@ The bound stack owns the *craft* of each stage; this contract owns where its art
 - **Labels:** prefer the canonical set `bug`, `feature`, `refactor`, `chore` (auto-created on first `--label` use; orphans are never garbage-collected).
 - **Priority:** default `medium`; `high`/`urgent` only when explicitly indicated.
 - **Scope discovery:** promote oversized steps (`issue promote`) or file a linked issue; never silently widen a ticket.
-- **Take work via the frontier:** `issue ready` answers "what can I start"; `issue claim` before starting anything another session might also see (attribution is automatic per session).
+- **Take work via the frontier:** `issue ls --ready` answers "what can I start"; `issue claim` before starting anything another session might also see (attribution is automatic per session).
 - **Racy edits:** any read-modify-write of a description carries `--if-updated-at` from the read — but prefer the atomic tools (`--section`, `append-section`, `log`, `tick`, `note add`), which need no round-trip at all.
 - **Custom sections:** the four contract H2s are reserved, but any other H2 is fair game and addressable by verbatim anchor (`--section "Decisions so far"`).
 - **Promotion mirror:** when a promoted child reaches `done`, the skill that moved it also ticks the referencing step in the parent — cliban core deliberately does not auto-mirror.

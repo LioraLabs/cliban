@@ -10,9 +10,8 @@ use cliban_core::schema::Milestone;
 use cliban_core::time::{format_date, format_usec, parse_date};
 use cliban_core::Store;
 
-use crate::cmd::issue::issue_json_inputs;
 use crate::errors::{CliError, CliResult};
-use crate::output::{build_issue_json, write_issue_table, Detail, IssueRow, Mode};
+use crate::output::{Detail, Mode};
 use crate::store_open;
 
 #[derive(clap::Args)]
@@ -26,11 +25,11 @@ pub enum MilestoneCmd {
     /// Partition a milestone's open issues into dependency waves (wave N is
     /// safe to start once waves 1..N-1 are done)
     Waves {
-        /// project key
-        #[arg(long)]
-        project: String,
         /// milestone name
         name: String,
+        /// project key (default: $CLIBAN_PROJECT)
+        #[arg(long, short = 'p')]
+        project: Option<String>,
         #[arg(long)]
         json: bool,
         /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
@@ -39,10 +38,11 @@ pub enum MilestoneCmd {
     },
     /// Add a milestone
     Add {
-        #[arg(long)]
-        project: String,
-        #[arg(long)]
+        /// milestone name
         name: String,
+        /// project key (default: $CLIBAN_PROJECT)
+        #[arg(long, short = 'p')]
+        project: Option<String>,
         #[arg(long, allow_hyphen_values = true)]
         description: Option<String>,
         #[arg(long = "description-file")]
@@ -58,11 +58,12 @@ pub enum MilestoneCmd {
     },
     /// List milestones
     Ls {
-        /// project key; omit to list milestones across every project
-        #[arg(long)]
+        /// project key (default: $CLIBAN_PROJECT); unscoped (-p '*' or no
+        /// scope at all) is a per-project summary — counts only, no rows
+        #[arg(long, short = 'p')]
         project: Option<String>,
         /// filter by status (open|completed|cancelled)
-        #[arg(long)]
+        #[arg(long, short = 's')]
         status: Option<String>,
         /// order: activity (most recently worked on) | name | target
         #[arg(long, default_value = "name")]
@@ -75,44 +76,39 @@ pub enum MilestoneCmd {
         /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
         #[arg(long, conflicts_with = "json")]
         table: bool,
-        /// include each milestone's `description` body in --json output
+        /// full rows in --json output: description body plus the fields list rows omit
         #[arg(long)]
         full: bool,
     },
-    /// Show a milestone (accepts positional NAME or --name)
+    /// Show a milestone
     Show {
-        /// milestone name (or pass via --name)
-        name: Option<String>,
-        #[arg(long)]
-        project: String,
-        #[arg(long = "name")]
-        name_flag: Option<String>,
+        /// milestone name
+        name: String,
+        /// project key (default: $CLIBAN_PROJECT)
+        #[arg(long, short = 'p')]
+        project: Option<String>,
         #[arg(long)]
         json: bool,
         /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
         #[arg(long, conflicts_with = "json")]
         table: bool,
-        #[arg(long = "with-issues")]
-        with_issues: bool,
-        /// include each listed issue's `description` body (--with-issues)
-        #[arg(long)]
-        full: bool,
     },
     /// Edit a milestone
     Edit {
-        #[arg(long)]
-        project: String,
-        #[arg(long)]
+        /// milestone name
         name: String,
+        /// project key (default: $CLIBAN_PROJECT)
+        #[arg(long, short = 'p')]
+        project: Option<String>,
         /// new name
-        #[arg(long)]
+        #[arg(long = "name")]
         rename: Option<String>,
         #[arg(long, allow_hyphen_values = true)]
         description: Option<String>,
         #[arg(long = "description-file")]
         description_file: Option<String>,
         /// new status (open|completed|cancelled)
-        #[arg(long)]
+        #[arg(long, short = 's')]
         status: Option<String>,
         /// new target date YYYY-MM-DD
         #[arg(long)]
@@ -131,10 +127,11 @@ pub enum MilestoneCmd {
     /// the undo.
     #[command(hide = true)]
     Rm {
-        #[arg(long)]
-        project: String,
-        #[arg(long)]
+        /// milestone name
         name: String,
+        /// project key (default: $CLIBAN_PROJECT)
+        #[arg(long, short = 'p')]
+        project: Option<String>,
     },
 }
 
@@ -189,23 +186,9 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
         MilestoneCmd::Show {
             name,
             project,
-            name_flag,
             json,
             table,
-            with_issues,
-            full,
-        } => {
-            show(
-                db,
-                name,
-                project,
-                name_flag,
-                crate::output::mode(json, table),
-                with_issues,
-                full,
-            )
-            .await
-        }
+        } => show(db, name, project, crate::output::mode(json, table)).await,
         MilestoneCmd::Edit {
             project,
             name,
@@ -218,7 +201,7 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             json,
             table,
         } => {
-            let project_key = project.to_uppercase();
+            let project_key = crate::scope::required_project(project)?;
             let (m, count) = apply_edit(
                 db,
                 project_key.clone(),
@@ -233,8 +216,8 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             .await?;
             let mode = crate::output::mode(json, table);
             if mode.is_json() {
-                let v = milestone_json(&m, &project_key, count, Detail::Full);
-                println!("{}", serde_json::to_string_pretty(&v).unwrap());
+                let v = milestone_json(&m, &project_key, count, Detail::Echo);
+                println!("{}", serde_json::to_string(&v).unwrap());
             } else {
                 println!("updated milestone {} in {}", m.name, project_key);
             }
@@ -244,7 +227,7 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             // `cancelled` is a milestone's archived state, so that is what a
             // delete becomes — the closest safe thing, not a refusal. The
             // message IS the point — it prints in every mode.
-            let project_key = project.to_uppercase();
+            let project_key = crate::scope::required_project(project)?;
             apply_edit(
                 db,
                 project_key.clone(),
@@ -259,8 +242,7 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             .await?;
             println!(
                 "cancelled milestone {name} in {project_key} — cliban cancels instead of \
-                 deleting (undo: cliban milestone edit --project {project_key} --name {name} \
-                 --status open)"
+                 deleting (undo: cliban milestone edit {name:?} -p {project_key} --status open)"
             );
             Ok(())
         }
@@ -356,14 +338,14 @@ fn milestone_json(m: &Milestone, project: &str, count: i64, detail: Detail) -> V
 
 async fn add(
     db: &Option<String>,
-    project: String,
+    project: Option<String>,
     name: String,
     description: Option<String>,
     description_file: Option<String>,
     target: Option<String>,
     mode: Mode,
 ) -> CliResult<()> {
-    let project_key = project.to_uppercase();
+    let project_key = crate::scope::required_project(project)?;
     let target_date = parse_target(target.as_deref().unwrap_or(""))?;
     let (description, _set) = resolve_description(description, description_file)?;
 
@@ -387,8 +369,8 @@ async fn add(
 
     if mode.is_json() {
         let count = issue_count(&store, project_key.clone(), m.name.clone()).await?;
-        let v = milestone_json(&m, &project_key, count, Detail::Full);
-        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+        let v = milestone_json(&m, &project_key, count, Detail::Echo);
+        println!("{}", serde_json::to_string(&v).unwrap());
     } else {
         println!("created milestone {} in {}", m.name, project_key);
     }
@@ -404,13 +386,29 @@ async fn ls(
     mode: Mode,
     full: bool,
 ) -> CliResult<()> {
-    let project_key = project.map(|p| p.to_uppercase());
+    let project_key = crate::scope::project(project);
     let sort = milestones::Sort::parse(&sort).ok_or_else(|| {
         CliError::validation(format!(
             "invalid --sort {sort:?} (want activity, name or target)"
         ))
     })?;
     let status = status.filter(|s| !s.is_empty());
+
+    // Unscoped, milestone rows would span every project on the machine —
+    // 90 rows on a real box, none of which the caller can address without
+    // knowing the project anyway (milestones are named per project). So the
+    // unscoped form answers the only question it can: which projects have
+    // milestones, and how many. Detail flags without a scope are a mistake
+    // worth naming, not silently reinterpreting.
+    if project_key.is_none() {
+        if stats || full || status.is_some() {
+            return Err(CliError::validation(
+                "--stats/--full/--status need --project; unscoped milestone ls \
+                 is a per-project summary",
+            ));
+        }
+        return ls_summary(db, mode).await;
+    }
 
     let store = store_open::open(db).await?;
     let (key, st) = (project_key.clone(), status.clone());
@@ -484,19 +482,61 @@ async fn ls(
     Ok(())
 }
 
-/// `--stats` JSON: the plain milestone object plus the rollups, keys kept in
-/// alphabetical order like the parity form.
+/// The unscoped form: one row per project that has milestones —
+/// `{"milestones":N,"open":N,"project":KEY}` — nothing an agent has to pay
+/// for and then not read. Projects without milestones don't appear.
+async fn ls_summary(db: &Option<String>, mode: Mode) -> CliResult<()> {
+    let store = store_open::open(db).await?;
+    let ms = store
+        .call(move |conn| {
+            milestones::summaries(
+                conn,
+                milestones::SummaryOpts {
+                    project: None,
+                    status: None,
+                    sort: milestones::Sort::Name,
+                },
+            )
+        })
+        .await?;
+    let mut by_project: std::collections::BTreeMap<String, (i64, i64)> =
+        std::collections::BTreeMap::new();
+    for s in &ms {
+        let e = by_project.entry(s.project_key.clone()).or_insert((0, 0));
+        e.0 += 1;
+        if s.milestone.status == "open" {
+            e.1 += 1;
+        }
+    }
+    for (project, (total, open)) in &by_project {
+        if mode.is_json() {
+            let mut m = Map::new();
+            m.insert("milestones".into(), json!(total));
+            m.insert("open".into(), json!(open));
+            m.insert("project".into(), json!(project));
+            println!("{}", serde_json::to_string(&Value::Object(m)).unwrap());
+        } else {
+            println!("{project:<8} {total} milestone(s), {open} open");
+        }
+    }
+    Ok(())
+}
+
+/// `--stats` JSON: the lean list row plus the rollups. A stats row is still a
+/// list row, so it follows the Brief contract — no `description` body, no
+/// `created_at`, absent `target_date` when unset, second-precision stamps.
 fn milestone_stats_json(
     s: &milestones::MilestoneSummary,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Value {
     let m = &s.milestone;
     let mut map = Map::new();
-    map.insert("created_at".into(), json!(format_usec(m.inserted_at)));
-    map.insert("description".into(), json!(m.description));
     map.insert("done_count".into(), json!(s.done));
     map.insert("issue_count".into(), json!(s.total));
-    map.insert("last_activity".into(), json!(format_usec(s.last_activity)));
+    map.insert(
+        "last_activity".into(),
+        json!(crate::output::trim_usec(&format_usec(s.last_activity))),
+    );
     map.insert(
         "last_activity_human".into(),
         json!(cliban_core::time::relative(s.last_activity, now)),
@@ -504,45 +544,24 @@ fn milestone_stats_json(
     map.insert("name".into(), json!(m.name));
     map.insert("project".into(), json!(s.project_key));
     map.insert("status".into(), json!(m.status));
+    if let Some(t) = m.target_date.map(format_date) {
+        map.insert("target_date".into(), json!(t));
+    }
     map.insert(
-        "target_date".into(),
-        match m.target_date.map(format_date) {
-            Some(t) => json!(t),
-            None => Value::Null,
-        },
+        "updated_at".into(),
+        json!(crate::output::trim_usec(&format_usec(m.updated_at))),
     );
-    map.insert("updated_at".into(), json!(format_usec(m.updated_at)));
     Value::Object(map)
 }
 
 async fn show(
     db: &Option<String>,
-    name: Option<String>,
-    project: String,
-    name_flag: Option<String>,
+    name: String,
+    project: Option<String>,
     mode: Mode,
-    with_issues: bool,
-    full: bool,
 ) -> CliResult<()> {
-    // name = positional XOR --name (equal is ok); none → validation error.
-    let mut resolved = name_flag.clone().unwrap_or_default();
-    if let Some(pos) = &name {
-        if !resolved.is_empty() && &resolved != pos {
-            return Err(CliError::validation(
-                "pass NAME positionally OR via --name, not both",
-            ));
-        }
-        resolved = pos.clone();
-    }
-    if resolved.is_empty() {
-        return Err(CliError::validation(
-            "milestone name required (positional or --name)",
-        ));
-    }
-    if project.is_empty() {
-        return Err(CliError::validation("--project is required"));
-    }
-    let project_key = project.to_uppercase();
+    let resolved = name;
+    let project_key = crate::scope::required_project(project)?;
 
     let store = store_open::open(db).await?;
     let get_key = project_key.clone();
@@ -577,14 +596,6 @@ async fn show(
         map.insert("created_at".into(), json!(format_usec(m.inserted_at)));
         map.insert("description".into(), json!(m.description));
         map.insert("issue_count".into(), json!(count));
-        if with_issues {
-            let mut arr = Vec::with_capacity(issue_list.len());
-            for i in &issue_list {
-                let inputs = issue_json_inputs(&store, i).await?;
-                arr.push(build_issue_json(inputs, Detail::from_full_flag(full)));
-            }
-            map.insert("issues".into(), Value::Array(arr));
-        }
         map.insert("name".into(), json!(m.name));
         map.insert("project".into(), json!(project_key));
         map.insert("status".into(), json!(m.status));
@@ -611,51 +622,9 @@ async fn show(
         "{} — {}\nstatus:  {}\ntarget:  {}\nissues:  {}\n{}\n",
         m.name, project_key, m.status, tgt, count, m.description
     );
-    if with_issues {
-        println!();
-        let mut rows = Vec::with_capacity(issue_list.len());
-        for i in &issue_list {
-            let (ms_name, parent_key) = resolve_refs(&store, i).await?;
-            rows.push(IssueRow {
-                key: i.key.clone(),
-                title: i.title.clone(),
-                status: i.status.clone(),
-                priority: i.priority.clone(),
-                milestone: ms_name,
-                parent: parent_key,
-            });
-        }
-        print!("{}", write_issue_table(&rows));
-    }
     Ok(())
 }
 
-/// Resolve milestone name + parent key for an issue (empty when unset).
-async fn resolve_refs(
-    store: &Store,
-    issue: &cliban_core::schema::Issue,
-) -> CliResult<(String, String)> {
-    let milestone_id = issue.milestone_id;
-    let parent_id = issue.parent_id;
-    let pair = store
-        .call(move |conn| {
-            let milestone = match milestone_id {
-                Some(mid) => milestones::get_by_id(conn, mid)?.map(|m| m.name),
-                None => None,
-            };
-            let parent = match parent_id {
-                Some(pid) => issues::get_by_id(conn, pid)?.map(|i| i.key),
-                None => None,
-            };
-            Ok((milestone.unwrap_or_default(), parent.unwrap_or_default()))
-        })
-        .await?;
-    Ok(pair)
-}
-
-/// Apply a milestone edit and return the updated row plus its (non-archived)
-/// issue count. Prints nothing: `edit` confirms per the output contract while
-/// `rm` keeps its own always-on message.
 #[allow(clippy::too_many_arguments)]
 async fn apply_edit(
     db: &Option<String>,
@@ -703,8 +672,13 @@ async fn apply_edit(
 /// `milestone waves`: print the dependency-wave partition the core computes —
 /// the deterministic answer to "what can run in parallel, in what order" that
 /// orchestrators previously derived by hand from the blocking graph.
-async fn waves(db: &Option<String>, project: String, name: String, mode: Mode) -> CliResult<()> {
-    let project = project.to_uppercase();
+async fn waves(
+    db: &Option<String>,
+    project: Option<String>,
+    name: String,
+    mode: Mode,
+) -> CliResult<()> {
+    let project = crate::scope::required_project(project)?;
     let store = store_open::open(db).await?;
     let w = store
         .call(move |conn| milestones::waves(conn, &project, &name))
