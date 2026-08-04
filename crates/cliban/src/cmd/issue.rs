@@ -1783,6 +1783,12 @@ async fn log(db: &Option<String>, a: LogArgs) -> CliResult<()> {
             std::fs::read_to_string(file).map_err(|e| CliError::validation(e.to_string()))?
         };
         msg = content.trim_end_matches('\n').to_string();
+    } else if a.message.is_none() {
+        // No positional, no --message-file: piped/redirected stdin IS the
+        // message (a TTY yields None and keeps the fast error below).
+        if let Some(piped) = crate::stdin_input::fallback()? {
+            msg = piped.trim_end_matches('\n').to_string();
+        }
     }
     if msg.is_empty() {
         return Err(CliError::validation(
@@ -2836,11 +2842,16 @@ async fn append_section_cmd(db: &Option<String>, a: AppendSectionArgs) -> CliRes
         (None, Some(f)) if f == "-" => read_stdin()?,
         (None, Some(f)) => std::fs::read_to_string(&f)
             .map_err(|e| CliError::other(format!("read {f}: {e}")))?,
-        (None, None) => {
-            return Err(CliError::validation(
-                "nothing to append: pass the text positionally or via --text-file",
-            ))
-        }
+        // No positional, no --text-file: piped/redirected stdin IS the text;
+        // a TTY keeps the fast error (blank piped text is caught below).
+        (None, None) => match crate::stdin_input::fallback()? {
+            Some(piped) => piped,
+            None => {
+                return Err(CliError::validation(
+                    "nothing to append: pass the text positionally or via --text-file",
+                ))
+            }
+        },
     };
     if text.trim().is_empty() {
         return Err(CliError::validation("nothing to append: text is blank"));
