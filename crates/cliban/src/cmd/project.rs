@@ -710,7 +710,13 @@ async fn note_add(
     if title.is_empty() {
         return Err(CliError::validation("--title can't be blank"));
     }
-    let body = resolve_description(body, body_file)?.unwrap_or_default();
+    let body = match resolve_description(body, body_file)? {
+        Some(explicit) => explicit,
+        // No --body, no --body-file: piped/redirected stdin is the body. An
+        // empty pipe (or a TTY) means "no body" — bare heading — because the
+        // body is optional here, unlike log/append-section.
+        None => crate::stdin_input::fallback()?.unwrap_or_default(),
+    };
     let sub = if body.trim().is_empty() {
         format!("### {title}")
     } else {

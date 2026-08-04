@@ -9,6 +9,7 @@ mod lint;
 mod output;
 mod search;
 mod since;
+mod stdin_input;
 mod store_open;
 
 #[derive(Parser)]

@@ -413,8 +413,11 @@ tool for growing a list or journal-style section. Leading `-` works, so
 markdown bullets need no quoting tricks:
 ```bash
 cliban issue append-section PROJ-12 --section "Decisions so far" "- picked sqlite over pg — single-writer fits"
-echo "long block" | cliban issue append-section PROJ-12 --section notes --text-file -
+echo "long block" | cliban issue append-section PROJ-12 --section notes
 ```
+Piped stdin is the text whenever the argument is absent — the same fallback
+works for `issue log` and `project note add` (explicit arguments always win;
+`--text-file -` remains as the explicit spelling).
 Same existence policy and `--create-section` escape hatch as `edit --section`;
 activity refused (use `issue log`, which stamps and dedupes).
 
@@ -515,7 +518,7 @@ Plan tasks are numbered H3 headings; steps are GFM checkboxes at column zero
 
 ```bash
 cliban issue log PROJ-42 "rebased onto main, tests green"
-cliban issue log PROJ-42 --message-file - < /tmp/note.md
+cliban issue log PROJ-42 < /tmp/note.md          # no arg + piped stdin = the message
 cliban issue tick PROJ-42 --task 1 --step 2                  # - [ ] -> - [x]
 cliban issue promote PROJ-42 --task 1 --step 3 \
   --title "CSRF middleware" --as sub-issue                  # or --as related
