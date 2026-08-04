@@ -27,6 +27,7 @@ fn ok(db: &str, args: &[&str]) -> String {
         .env_remove("XDG_DATA_HOME")
         .env_remove("CLIBAN_ACTOR")
         .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env_remove("CLIBAN_OUTPUT")
         .args(args)
         .output()
         .expect("run cliban");

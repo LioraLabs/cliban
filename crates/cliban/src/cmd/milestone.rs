@@ -12,7 +12,7 @@ use cliban_core::Store;
 
 use crate::cmd::issue::issue_json_inputs;
 use crate::errors::{CliError, CliResult};
-use crate::output::{build_issue_json, write_issue_table, Detail, IssueRow};
+use crate::output::{build_issue_json, write_issue_table, Detail, IssueRow, Mode};
 use crate::store_open;
 
 #[derive(clap::Args)]
@@ -33,6 +33,9 @@ pub enum MilestoneCmd {
         name: String,
         #[arg(long)]
         json: bool,
+        /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
     },
     /// Add a milestone
     Add {
@@ -49,6 +52,9 @@ pub enum MilestoneCmd {
         target: Option<String>,
         #[arg(long)]
         json: bool,
+        /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
     },
     /// List milestones
     Ls {
@@ -66,6 +72,9 @@ pub enum MilestoneCmd {
         stats: bool,
         #[arg(long)]
         json: bool,
+        /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
         /// include each milestone's `description` body in --json output
         #[arg(long)]
         full: bool,
@@ -80,6 +89,9 @@ pub enum MilestoneCmd {
         name_flag: Option<String>,
         #[arg(long)]
         json: bool,
+        /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
         #[arg(long = "with-issues")]
         with_issues: bool,
         /// include each listed issue's `description` body (--with-issues)
@@ -108,6 +120,12 @@ pub enum MilestoneCmd {
         /// clear target date
         #[arg(long = "clear-target")]
         clear_target: bool,
+        /// JSON output (echo the updated milestone)
+        #[arg(long)]
+        json: bool,
+        /// human output (one-line confirmation)
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
     },
     /// A unix reflex, not a real deleter (hidden): cancels, says so, names
     /// the undo.
@@ -126,7 +144,8 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             project,
             name,
             json,
-        } => waves(db, project, name, json).await,
+            table,
+        } => waves(db, project, name, crate::output::mode(json, table)).await,
         MilestoneCmd::Add {
             project,
             name,
@@ -134,6 +153,7 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             description_file,
             target,
             json,
+            table,
         } => {
             add(
                 db,
@@ -142,7 +162,7 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
                 description,
                 description_file,
                 target,
-                json,
+                crate::output::mode(json, table),
             )
             .await
         }
@@ -152,16 +172,40 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             sort,
             stats,
             json,
+            table,
             full,
-        } => ls(db, project, status, sort, stats, json, full).await,
+        } => {
+            ls(
+                db,
+                project,
+                status,
+                sort,
+                stats,
+                crate::output::mode(json, table),
+                full,
+            )
+            .await
+        }
         MilestoneCmd::Show {
             name,
             project,
             name_flag,
             json,
+            table,
             with_issues,
             full,
-        } => show(db, name, project, name_flag, json, with_issues, full).await,
+        } => {
+            show(
+                db,
+                name,
+                project,
+                name_flag,
+                crate::output::mode(json, table),
+                with_issues,
+                full,
+            )
+            .await
+        }
         MilestoneCmd::Edit {
             project,
             name,
@@ -171,10 +215,13 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             status,
             target,
             clear_target,
+            json,
+            table,
         } => {
-            edit(
+            let project_key = project.to_uppercase();
+            let (m, count) = apply_edit(
                 db,
-                project,
+                project_key.clone(),
                 name,
                 rename,
                 description,
@@ -183,13 +230,22 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
                 target,
                 clear_target,
             )
-            .await
+            .await?;
+            let mode = crate::output::mode(json, table);
+            if mode.is_json() {
+                let v = milestone_json(&m, &project_key, count, Detail::Full);
+                println!("{}", serde_json::to_string_pretty(&v).unwrap());
+            } else {
+                println!("updated milestone {} in {}", m.name, project_key);
+            }
+            Ok(())
         }
         MilestoneCmd::Rm { project, name } => {
             // `cancelled` is a milestone's archived state, so that is what a
-            // delete becomes — the closest safe thing, not a refusal.
+            // delete becomes — the closest safe thing, not a refusal. The
+            // message IS the point — it prints in every mode.
             let project_key = project.to_uppercase();
-            edit(
+            apply_edit(
                 db,
                 project_key.clone(),
                 name.clone(),
@@ -305,7 +361,7 @@ async fn add(
     description: Option<String>,
     description_file: Option<String>,
     target: Option<String>,
-    json: bool,
+    mode: Mode,
 ) -> CliResult<()> {
     let project_key = project.to_uppercase();
     let target_date = parse_target(target.as_deref().unwrap_or(""))?;
@@ -329,7 +385,7 @@ async fn add(
         })
         .await?;
 
-    if json {
+    if mode.is_json() {
         let count = issue_count(&store, project_key.clone(), m.name.clone()).await?;
         let v = milestone_json(&m, &project_key, count, Detail::Full);
         println!("{}", serde_json::to_string_pretty(&v).unwrap());
@@ -345,7 +401,7 @@ async fn ls(
     status: Option<String>,
     sort: String,
     stats: bool,
-    json: bool,
+    mode: Mode,
     full: bool,
 ) -> CliResult<()> {
     let project_key = project.map(|p| p.to_uppercase());
@@ -372,7 +428,7 @@ async fn ls(
         .await?;
 
     let now = cliban_core::time::now_usec();
-    if json {
+    if mode.is_json() {
         for s in &ms {
             let v = if stats {
                 milestone_stats_json(s, now)
@@ -464,7 +520,7 @@ async fn show(
     name: Option<String>,
     project: String,
     name_flag: Option<String>,
-    json: bool,
+    mode: Mode,
     with_issues: bool,
     full: bool,
 ) -> CliResult<()> {
@@ -514,7 +570,7 @@ async fn show(
         .await?;
     let count = issue_list.len() as i64;
 
-    if json {
+    if mode.is_json() {
         // Build alpha-ordered map inline so `issues` lands between issue_count
         // and name (keys stay alphabetical).
         let mut map = Map::new();
@@ -597,10 +653,13 @@ async fn resolve_refs(
     Ok(pair)
 }
 
+/// Apply a milestone edit and return the updated row plus its (non-archived)
+/// issue count. Prints nothing: `edit` confirms per the output contract while
+/// `rm` keeps its own always-on message.
 #[allow(clippy::too_many_arguments)]
-async fn edit(
+async fn apply_edit(
     db: &Option<String>,
-    project: String,
+    project_key: String,
     name: String,
     rename: Option<String>,
     description: Option<String>,
@@ -608,8 +667,7 @@ async fn edit(
     status: Option<String>,
     target: Option<String>,
     clear_target: bool,
-) -> CliResult<()> {
-    let project_key = project.to_uppercase();
+) -> CliResult<(Milestone, i64)> {
     let (desc_content, desc_set) = resolve_description(description, description_file)?;
 
     let mut params = UpdateMilestone::default();
@@ -630,27 +688,28 @@ async fn edit(
     }
 
     let store = store_open::open(db).await?;
-    store
+    let call_key = project_key.clone();
+    let m = store
         .call(move |conn| {
             let cur =
-                milestones::get(conn, &project_key, &name)?.ok_or(cliban_core::Error::NotFound)?;
-            milestones::update(conn, &cur, params)?;
-            Ok(())
+                milestones::get(conn, &call_key, &name)?.ok_or(cliban_core::Error::NotFound)?;
+            milestones::update(conn, &cur, params)
         })
         .await?;
-    Ok(())
+    let count = issue_count(&store, project_key, m.name.clone()).await?;
+    Ok((m, count))
 }
 
 /// `milestone waves`: print the dependency-wave partition the core computes —
 /// the deterministic answer to "what can run in parallel, in what order" that
 /// orchestrators previously derived by hand from the blocking graph.
-async fn waves(db: &Option<String>, project: String, name: String, json: bool) -> CliResult<()> {
+async fn waves(db: &Option<String>, project: String, name: String, mode: Mode) -> CliResult<()> {
     let project = project.to_uppercase();
     let store = store_open::open(db).await?;
     let w = store
         .call(move |conn| milestones::waves(conn, &project, &name))
         .await?;
-    if json {
+    if mode.is_json() {
         println!(
             "{}",
             json!({

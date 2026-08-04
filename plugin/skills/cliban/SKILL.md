@@ -20,9 +20,16 @@ unless you ask, and mutations are safe to run unattended.
    on `edit` is for genuinely starting over. The timeline records the
    destruction (`"description rewritten, dropped ## Plan"`) and logged notes
    survive it, but the markdown is gone.
-2. **Always pass `--json` for reads.** The table format is for humans and will
-   change. `ls` emits NDJSON (one compact object per line), `show` emits one
-   pretty object.
+2. **Piped output is JSON by default; pass `--json` when you must be
+   certain.** The default format follows the reader: stdout piped or
+   redirected (how you run commands) → the same JSON/NDJSON that `--json`
+   produces; a TTY → human tables. `ls` emits NDJSON (one compact object per
+   line), `show` emits one pretty object. Explicit `--json` / `--table`
+   always win, and `CLIBAN_OUTPUT=json|table` pins the default (useful for
+   PTY-driven harnesses). Mutations are never silent: they print a one-line
+   confirmation in table mode and echo the mutated entity as JSON when piped
+   or under `--json`. `issue show KEY --section ...` is the one exemption —
+   it is always raw markdown, in every mode.
 3. **`--project` takes the KEY, not the name**: `--project PROJ`, not
    `--project Cliban`. Keys are uppercase; the CLI upcases what you pass.
 4. **`project add` takes the key positionally**: `cliban project add PROJ --name
@@ -107,8 +114,9 @@ happened, including what a previous agent tried and rejected.
 
 ## Command inventory
 
-Everything that exists. `--db PATH` is global; `--json` is available on every
-read and most writes.
+Everything that exists. `--db PATH` is global; `--json` and `--table` are
+available on every read and every write (piped stdout already defaults to the
+`--json` shapes).
 
 | Command | Purpose |
 |---|---|

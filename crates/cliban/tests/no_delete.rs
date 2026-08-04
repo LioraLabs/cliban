@@ -28,6 +28,7 @@ fn run(db: &str, args: &[&str]) -> (String, String, i32) {
         .arg(db)
         .env_remove("CLIBAN_DB")
         .env_remove("XDG_DATA_HOME")
+        .env_remove("CLIBAN_OUTPUT")
         .args(args)
         .output()
         .expect("run cliban");
@@ -102,7 +103,7 @@ fn rm_archives_rather_than_destroying() {
             .contains("CLI"),
         "…but the project itself is still there"
     );
-    let ms = run(&db, &["milestone", "ls", "--project", "CLI"]).0;
+    let ms = run(&db, &["milestone", "ls", "--project", "CLI", "--table"]).0;
     assert!(ms.contains("v1") && ms.contains("cancelled"), "{ms}");
 
     // …and each is reversible, so `rm` costs nothing irreversible.
