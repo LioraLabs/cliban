@@ -20,9 +20,16 @@ unless you ask, and mutations are safe to run unattended.
    on `edit` is for genuinely starting over. The timeline records the
    destruction (`"description rewritten, dropped ## Plan"`) and logged notes
    survive it, but the markdown is gone.
-2. **Always pass `--json` for reads.** The table format is for humans and will
-   change. `ls` emits NDJSON (one compact object per line), `show` emits one
-   pretty object.
+2. **Piped output is JSON by default; pass `--json` when you must be
+   certain.** The default format follows the reader: stdout piped or
+   redirected (how you run commands) → the same JSON/NDJSON that `--json`
+   produces; a TTY → human tables. `ls` emits NDJSON (one compact object per
+   line), `show` emits one pretty object. Explicit `--json` / `--table`
+   always win, and `CLIBAN_OUTPUT=json|table` pins the default (useful for
+   PTY-driven harnesses). Mutations are never silent: they print a one-line
+   confirmation in table mode and echo the mutated entity as JSON when piped
+   or under `--json`. `issue show KEY --section ...` is the one exemption —
+   it is always raw markdown, in every mode.
 3. **`--project` takes the KEY, not the name**: `--project PROJ`, not
    `--project Cliban`. Keys are uppercase; the CLI upcases what you pass.
 4. **`project add` takes the key positionally**: `cliban project add PROJ --name
@@ -94,6 +101,13 @@ write it.
 **Tick plan steps as you finish them** — `cliban issue tick PROJ-42 --task 1
 --step 2` — so progress is visible without reading the code.
 
+**Mutations are retry-safe.** Re-running a mutation whose desired state
+already holds succeeds with an explicit note instead of erroring: a re-tick
+says "(already checked — nothing to do)", `mv` to the current status and
+re-archive likewise. JSON echoes carry `"noop": true` on those paths, and a
+noop writes nothing — no timeline entry, no `updated_at` churn. Retry freely
+after a timeout; only genuinely wrong targets (no such task/step/key) fail.
+
 **Promote scope you discover** rather than silently widening the ticket:
 `cliban issue promote PROJ-42 --task 1 --step 3 --title "..."`, or file a fresh
 issue and link it with `--blocked-by` / `--related-to`.
@@ -107,13 +121,16 @@ happened, including what a previous agent tried and rejected.
 
 ## Command inventory
 
-Everything that exists. `--db PATH` is global; `--json` is available on every
-read and most writes.
+Everything that exists. `--db PATH` is global; `--json` and `--table` are
+available on every read and every write (piped stdout already defaults to the
+`--json` shapes).
 
 | Command | Purpose |
 |---|---|
 | `project add\|ls\|show\|edit\|search\|archive\|unarchive` | projects + project memory |
 | `issue add\|ls\|show\|edit\|mv` | the core loop |
+| `issue cat` | the raw stored description, verbatim — never formatted |
+| `issue cp` | duplicate an issue's shape (plan reset) — never its history |
 | `issue archive\|unarchive\|archive-done` | keep the board clean |
 | `issue log\|tick\|promote` | plan + activity-log mechanics (see below) |
 | `issue append-section` | atomic append to the end of one H2 section |
@@ -352,6 +369,35 @@ Wave N is safe to dispatch once waves 1..N-1 are done. `external_blocked`
 lists issues gated by open work *outside* the milestone — finishing the waves
 won't unblock them. A dependency cycle exits 2 naming the issues in it.
 
+### Duplicate an issue's shape (templates for recurring work)
+```bash
+cliban issue cp PROJ-12 --json                      # same project, fresh backlog issue
+cliban issue cp PROJ-12 --project OTHER --title "Q3 edition"
+```
+Copies title, `## Spec`, `## Plan` (every checkbox reset to `- [ ]`,
+promotion suffixes stripped), `## Notes`, labels, and priority; milestone
+only within the same project. Never copied: activity log, claims, relations,
+due date, archived state. The copy's timeline starts with "copied from KEY".
+
+### Read the raw description
+```bash
+cliban issue cat PROJ-12 > body.md        # verbatim, never JSON, even piped
+cliban issue cat PROJ-12 | grep -n "^## " # what sections exist
+```
+
+### Unix reflexes (spares)
+The issue is the default noun: bare `cliban ls|mv|rm|show|log|tick|cat` are
+exact hidden synonyms of `issue <verb>` — same flags, output, exit codes.
+GitHub reflexes exist too, hidden: `issue close [--note]` (= `mv done`),
+`issue reopen [--note]` (= `mv in-progress`), `issue comment` (= `log`,
+stdin fallback included), `issue delete` (= archives, never deletes, names
+the undo). Every alias states its canonical form once in the confirmation
+(`closed PROJ-4 (mv done): backlog → done`) and its JSON echo adds a
+`"canonical"` field on the otherwise-identical shape — ignore unknown JSON
+fields as a rule. Prefer the canonical forms in anything you write down.
+There is no `ln` and no `touch`, deliberately: `ln` can't know blocks from
+related_to, and keys are generated.
+
 ### Sub-issues, parents, relations
 ```bash
 cliban issue add --project PROJ --parent PROJ-12 --title "Repro test" --json
@@ -405,8 +451,11 @@ tool for growing a list or journal-style section. Leading `-` works, so
 markdown bullets need no quoting tricks:
 ```bash
 cliban issue append-section PROJ-12 --section "Decisions so far" "- picked sqlite over pg — single-writer fits"
-echo "long block" | cliban issue append-section PROJ-12 --section notes --text-file -
+echo "long block" | cliban issue append-section PROJ-12 --section notes
 ```
+Piped stdin is the text whenever the argument is absent — the same fallback
+works for `issue log` and `project note add` (explicit arguments always win;
+`--text-file -` remains as the explicit spelling).
 Same existence policy and `--create-section` escape hatch as `edit --section`;
 activity refused (use `issue log`, which stamps and dedupes).
 
@@ -507,7 +556,7 @@ Plan tasks are numbered H3 headings; steps are GFM checkboxes at column zero
 
 ```bash
 cliban issue log PROJ-42 "rebased onto main, tests green"
-cliban issue log PROJ-42 --message-file - < /tmp/note.md
+cliban issue log PROJ-42 < /tmp/note.md          # no arg + piped stdin = the message
 cliban issue tick PROJ-42 --task 1 --step 2                  # - [ ] -> - [x]
 cliban issue promote PROJ-42 --task 1 --step 3 \
   --title "CSRF middleware" --as sub-issue                  # or --as related

@@ -16,7 +16,7 @@ use crate::descmd;
 use crate::descmd::find_section;
 use crate::errors::{CliError, CliResult};
 use crate::output::{
-    build_issue_json, write_issue_table, Detail, IssueJsonInputs, IssueRow, RelationOut,
+    build_issue_json, write_issue_table, Detail, IssueJsonInputs, IssueRow, Mode, RelationOut,
 };
 use crate::store_open;
 
@@ -45,32 +45,68 @@ pub enum IssueCmd {
     Tick(TickArgs),
     /// Promote a plan step into its own issue
     Promote(PromoteArgs),
+    /// Copy an issue's shape into a new backlog issue — title, ## Spec,
+    /// ## Plan (checkboxes reset), ## Notes, labels, priority — never its
+    /// history (activity log, claims, relations, due date, completed_at)
+    Cp(CpArgs),
     /// Archive done issues
     #[command(name = "archive-done")]
     ArchiveDone(ArchiveDoneArgs),
     /// Bulk-create issues from an NDJSON file (or stdin with '-')
     Import(ImportArgs),
     /// Move an issue to a new status
-    Mv {
-        key: String,
-        status: String,
-        /// why — recorded on the issue's timeline with the transition
-        #[arg(long, allow_hyphen_values = true)]
-        note: Option<String>,
-    },
+    Mv(MvArgs),
+    /// Print the raw description exactly as stored — no header, no JSON, no
+    /// formatting, ever. The read-side spare for piping a ticket's markdown
+    /// into anything that wants bytes.
+    Cat(CatArgs),
     /// A unix reflex, not a real deleter (hidden): archives, says so, names
     /// the undo. An agent that guesses `rm` gets the closest safe thing
     /// instead of losing a turn to a usage error.
     #[command(hide = true)]
-    Rm { key: String },
+    Rm(RmArgs),
+    /// GitHub reflex (hidden): `close` is `mv done`. The confirmation states
+    /// the canonical form once, so the guess teaches itself out of use.
+    #[command(hide = true)]
+    Close(StatusAliasArgs),
+    /// GitHub reflex (hidden): `reopen` is `mv in-progress`.
+    #[command(hide = true)]
+    Reopen(StatusAliasArgs),
+    /// GitHub reflex (hidden): `comment` is `log` — same args, same
+    /// positional/--message-file/piped-stdin resolution.
+    #[command(hide = true)]
+    Comment(LogArgs),
+    /// GitHub reflex (hidden): `delete` gets rm's behavior — archive, say so,
+    /// name the undo — teaching `archive` as the canonical form.
+    #[command(hide = true)]
+    Delete(RmArgs),
     /// Archive an issue (hides it from the default board and lists)
-    Archive { key: String },
+    Archive {
+        key: String,
+        /// JSON output (echo the archived issue)
+        #[arg(long)]
+        json: bool,
+        /// human output (one-line confirmation)
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
+    },
     /// Unarchive an issue
-    Unarchive { key: String },
+    Unarchive {
+        key: String,
+        /// JSON output (echo the unarchived issue)
+        #[arg(long)]
+        json: bool,
+        /// human output (one-line confirmation)
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
+    },
     /// Show the issue inferred from the current git branch
     Current {
         #[arg(long)]
         json: bool,
+        /// human output
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
     },
     /// List issues that have at least one open blocker
     Blocked {
@@ -78,6 +114,9 @@ pub enum IssueCmd {
         project: Option<String>,
         #[arg(long)]
         json: bool,
+        /// human table output
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
         /// include each issue's `description` body in --json output
         #[arg(long)]
         full: bool,
@@ -94,6 +133,9 @@ pub enum IssueCmd {
         milestone: Option<String>,
         #[arg(long)]
         json: bool,
+        /// human table output
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
         /// include each issue's `description` body in --json output
         #[arg(long)]
         full: bool,
@@ -110,18 +152,27 @@ pub enum IssueCmd {
         force: bool,
         #[arg(long)]
         json: bool,
+        /// human output
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
     },
     /// Release an issue's claim
     Release {
         key: String,
         #[arg(long)]
         json: bool,
+        /// human output
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
     },
     /// Validate the description contract (## Spec / ## Plan / ## Activity Log)
     Lint {
         key: String,
         #[arg(long)]
         json: bool,
+        /// human output
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
     },
 }
 
@@ -132,6 +183,9 @@ pub struct ShowArgs {
     /// JSON output
     #[arg(long)]
     json: bool,
+    /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
     /// show only one section: spec|plan|activity|notes
     #[arg(long)]
     section: Option<String>,
@@ -169,6 +223,9 @@ pub struct LsArgs {
     /// NDJSON output (one compact JSON object per line)
     #[arg(long)]
     json: bool,
+    /// human table output (overrides $CLIBAN_OUTPUT and pipe detection)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
     /// include each issue's `description` body in --json output
     #[arg(long)]
     full: bool,
@@ -230,6 +287,9 @@ pub struct AddArgs {
     /// JSON output
     #[arg(long)]
     json: bool,
+    /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
     /// open $EDITOR for input when no --title supplied
     #[arg(long)]
     editor: bool,
@@ -305,6 +365,9 @@ pub struct EditArgs {
     /// JSON output
     #[arg(long)]
     json: bool,
+    /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
 }
 
 #[derive(clap::Args)]
@@ -328,6 +391,9 @@ pub struct AppendSectionArgs {
     /// JSON output
     #[arg(long)]
     json: bool,
+    /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
 }
 
 #[derive(clap::Args)]
@@ -343,6 +409,66 @@ pub struct LogArgs {
     /// JSON output
     #[arg(long)]
     json: bool,
+    /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
+}
+
+#[derive(clap::Args)]
+pub struct MvArgs {
+    /// issue key
+    key: String,
+    /// new status
+    status: String,
+    /// why — recorded on the issue's timeline with the transition
+    #[arg(long, allow_hyphen_values = true)]
+    note: Option<String>,
+    /// JSON output (echo the moved issue)
+    #[arg(long)]
+    json: bool,
+    /// human output (one-line confirmation)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
+}
+
+#[derive(clap::Args)]
+pub struct RmArgs {
+    /// issue key
+    key: String,
+}
+
+#[derive(clap::Args)]
+pub struct CatArgs {
+    /// issue key
+    key: String,
+}
+
+/// Shared shape of the `close`/`reopen` reflexes: a fixed-status `mv` — same
+/// `--note`, same output modes, minus the status argument the alias implies.
+#[derive(clap::Args)]
+pub struct StatusAliasArgs {
+    /// issue key
+    key: String,
+    /// why — recorded on the issue's timeline with the transition
+    #[arg(long, allow_hyphen_values = true)]
+    note: Option<String>,
+    /// JSON output (echo the moved issue)
+    #[arg(long)]
+    json: bool,
+    /// human output (one-line confirmation)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
+}
+
+/// How a reflex alias teaches: `verb` replaces the canonical confirmation
+/// verb on the human line — `closed CLI-4 (mv done): backlog → done` — and
+/// `canonical` names the real command there and in a `"canonical"` field on
+/// the JSON echo (the same add-a-marker pattern as the `"noop"` retry flag,
+/// so the canonical shape is untouched).
+#[derive(Clone, Copy)]
+struct Teach {
+    verb: &'static str,
+    canonical: &'static str,
 }
 
 #[derive(clap::Args)]
@@ -358,6 +484,9 @@ pub struct TickArgs {
     /// JSON output
     #[arg(long)]
     json: bool,
+    /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
 }
 
 #[derive(clap::Args)]
@@ -379,6 +508,29 @@ pub struct PromoteArgs {
     /// JSON output
     #[arg(long)]
     json: bool,
+    /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
+}
+
+#[derive(clap::Args)]
+pub struct CpArgs {
+    /// source issue key
+    key: String,
+    /// create the copy in this project (default: the source's project);
+    /// cross-project copies drop the milestone — names are project-scoped
+    #[arg(long)]
+    project: Option<String>,
+    /// title for the copy (default: the source's title, unchanged)
+    #[arg(long, allow_hyphen_values = true)]
+    title: Option<String>,
+    /// JSON output (echo the new issue)
+    #[arg(long)]
+    json: bool,
+    /// human output (one-line confirmation; overrides $CLIBAN_OUTPUT and
+    /// pipe detection)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
 }
 
 #[derive(clap::Args)]
@@ -392,6 +544,9 @@ pub struct ArchiveDoneArgs {
     /// JSON output
     #[arg(long)]
     json: bool,
+    /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
 }
 
 #[derive(clap::Args)]
@@ -407,6 +562,10 @@ pub struct ImportArgs {
     /// emit each created issue as a JSON line
     #[arg(long)]
     json: bool,
+    /// human output (one summary line; overrides $CLIBAN_OUTPUT and pipe
+    /// detection)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
 }
 
 pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
@@ -415,46 +574,131 @@ pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
         IssueCmd::Show(a) => show(db, a).await,
         IssueCmd::Ls(a) => ls(db, a).await,
         IssueCmd::Edit(a) => edit(db, a).await,
-        IssueCmd::Log(a) => log(db, a).await,
+        IssueCmd::Log(a) => log(db, a, None).await,
         IssueCmd::AppendSection(a) => append_section_cmd(db, a).await,
         IssueCmd::Tick(a) => tick(db, a).await,
         IssueCmd::Promote(a) => promote(db, a).await,
+        IssueCmd::Cp(a) => cp(db, a).await,
         IssueCmd::ArchiveDone(a) => archive_done(db, a).await,
         IssueCmd::Import(a) => import(db, a).await,
-        IssueCmd::Mv { key, status, note } => mv(db, key, status, note).await,
-        IssueCmd::Rm { key } => {
-            // Do the closest safe thing rather than spending a turn refusing.
-            let key = parse_issue_key(&key)?;
-            set_archived(db, key.clone(), true).await?;
-            println!(
-                "archived {key} — cliban archives instead of deleting \
-                 (undo: cliban issue unarchive {key})"
-            );
-            Ok(())
+        IssueCmd::Mv(a) => {
+            mv(
+                db,
+                a.key,
+                a.status,
+                a.note,
+                crate::output::mode(a.json, a.table),
+                None,
+            )
+            .await
         }
-        IssueCmd::Archive { key } => set_archived(db, key, true).await,
-        IssueCmd::Unarchive { key } => set_archived(db, key, false).await,
-        IssueCmd::Current { json } => current(db, json).await,
+        IssueCmd::Cat(a) => cat(db, a).await,
+        IssueCmd::Rm(a) => rm_reflex(db, a.key, None).await,
+        // The reflex aliases forward onto the canonical handlers — mv's
+        // retry-safe noop, log's stdin fallback, and every output-mode rule
+        // come along for free; the `Teach` only decorates the confirmation.
+        IssueCmd::Close(a) => {
+            mv(
+                db,
+                a.key,
+                "done".to_string(),
+                a.note,
+                crate::output::mode(a.json, a.table),
+                Some(Teach {
+                    verb: "closed",
+                    canonical: "mv done",
+                }),
+            )
+            .await
+        }
+        IssueCmd::Reopen(a) => {
+            mv(
+                db,
+                a.key,
+                "in-progress".to_string(),
+                a.note,
+                crate::output::mode(a.json, a.table),
+                Some(Teach {
+                    verb: "reopened",
+                    canonical: "mv in-progress",
+                }),
+            )
+            .await
+        }
+        IssueCmd::Comment(a) => {
+            log(
+                db,
+                a,
+                Some(Teach {
+                    verb: "commented",
+                    canonical: "log",
+                }),
+            )
+            .await
+        }
+        IssueCmd::Delete(a) => rm_reflex(db, a.key, Some("archive")).await,
+        IssueCmd::Archive { key, json, table } => {
+            let store = store_open::open(db).await?;
+            let (issue, noop) = set_archived_on(&store, key, true).await?;
+            confirm_issue(
+                &store,
+                &issue,
+                "archived",
+                noop,
+                crate::output::mode(json, table),
+            )
+            .await
+        }
+        IssueCmd::Unarchive { key, json, table } => {
+            let store = store_open::open(db).await?;
+            let (issue, noop) = set_archived_on(&store, key, false).await?;
+            confirm_issue(
+                &store,
+                &issue,
+                "unarchived",
+                noop,
+                crate::output::mode(json, table),
+            )
+            .await
+        }
+        IssueCmd::Current { json, table } => current(db, crate::output::mode(json, table)).await,
         IssueCmd::Blocked {
             project,
             json,
+            table,
             full,
-        } => blocked(db, project, json, full).await,
+        } => blocked(db, project, crate::output::mode(json, table), full).await,
         IssueCmd::Ready {
             project,
             parent,
             milestone,
             json,
+            table,
             full,
-        } => ready(db, project, parent, milestone, json, full).await,
+        } => {
+            ready(
+                db,
+                project,
+                parent,
+                milestone,
+                crate::output::mode(json, table),
+                full,
+            )
+            .await
+        }
         IssueCmd::Claim {
             key,
             by,
             force,
             json,
-        } => claim_cmd(db, key, by, force, json).await,
-        IssueCmd::Release { key, json } => release_cmd(db, key, json).await,
-        IssueCmd::Lint { key, json } => lint_cmd(db, key, json).await,
+            table,
+        } => claim_cmd(db, key, by, force, crate::output::mode(json, table)).await,
+        IssueCmd::Release { key, json, table } => {
+            release_cmd(db, key, crate::output::mode(json, table)).await
+        }
+        IssueCmd::Lint { key, json, table } => {
+            lint_cmd(db, key, crate::output::mode(json, table)).await
+        }
     }
 }
 
@@ -685,12 +929,12 @@ async fn add(db: &Option<String>, a: AddArgs) -> CliResult<()> {
         issue = fresh;
     }
 
-    print_issue_result(&store, &issue, "created", a.json).await
+    print_issue_result(&store, &issue, "created", crate::output::mode(a.json, a.table)).await
 }
 
 /// Echo a mutated issue: human `{verb} {KEY}: {title}\n`; json pretty.
-async fn print_issue_result(store: &Store, issue: &Issue, verb: &str, json: bool) -> CliResult<()> {
-    if json {
+async fn print_issue_result(store: &Store, issue: &Issue, verb: &str, mode: Mode) -> CliResult<()> {
+    if mode.is_json() {
         let inputs = issue_json_inputs(store, issue).await?;
         println!(
             "{}",
@@ -876,7 +1120,7 @@ async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
         return Ok(());
     }
 
-    if a.json {
+    if crate::output::mode(a.json, a.table).is_json() {
         let inputs = issue_json_inputs(&store, &issue).await?;
         println!(
             "{}",
@@ -1109,7 +1353,7 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
         sort_issues(&mut issues, spec);
     }
 
-    if a.json {
+    if crate::output::mode(a.json, a.table).is_json() {
         for i in &issues {
             let inputs = issue_json_inputs(&store, i).await?;
             println!(
@@ -1146,7 +1390,7 @@ async fn run_search(db: &Option<String>, a: &LsArgs, query: String) -> CliResult
     };
     let matches = crate::search::search(&store, opts).await?;
 
-    if a.json {
+    if crate::output::mode(a.json, a.table).is_json() {
         for m in &matches {
             let inputs = issue_json_inputs(&store, &m.issue).await?;
             println!(
@@ -1635,10 +1879,10 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
             .await?;
     }
 
-    print_issue_result(&store, &issue, "updated", a.json).await
+    print_issue_result(&store, &issue, "updated", crate::output::mode(a.json, a.table)).await
 }
 
-async fn log(db: &Option<String>, a: LogArgs) -> CliResult<()> {
+async fn log(db: &Option<String>, a: LogArgs, teach: Option<Teach>) -> CliResult<()> {
     let key = parse_issue_key(&a.key)?;
     let mut msg = a.message.clone().unwrap_or_default();
     if let Some(file) = &a.message_file {
@@ -1653,6 +1897,12 @@ async fn log(db: &Option<String>, a: LogArgs) -> CliResult<()> {
             std::fs::read_to_string(file).map_err(|e| CliError::validation(e.to_string()))?
         };
         msg = content.trim_end_matches('\n').to_string();
+    } else if a.message.is_none() {
+        // No positional, no --message-file: piped/redirected stdin IS the
+        // message (a TTY yields None and keeps the fast error below).
+        if let Some(piped) = crate::stdin_input::fallback()? {
+            msg = piped.trim_end_matches('\n').to_string();
+        }
     }
     if msg.is_empty() {
         return Err(CliError::validation(
@@ -1683,8 +1933,14 @@ async fn log(db: &Option<String>, a: LogArgs) -> CliResult<()> {
         })
         .await?;
 
-    if a.json {
+    if crate::output::mode(a.json, a.table).is_json() {
         let mut m = serde_json::Map::new();
+        if let Some(t) = teach {
+            m.insert(
+                "canonical".into(),
+                serde_json::json!(format!("issue {}", t.canonical)),
+            );
+        }
         m.insert("entry".into(), serde_json::json!(msg));
         m.insert("key".into(), serde_json::json!(a.key));
         m.insert("timestamp".into(), serde_json::json!(format_usec(now)));
@@ -1692,6 +1948,8 @@ async fn log(db: &Option<String>, a: LogArgs) -> CliResult<()> {
             "{}",
             serde_json::to_string_pretty(&serde_json::Value::Object(m)).unwrap()
         );
+    } else if let Some(t) = teach {
+        println!("{} {} ({}): {}", t.verb, a.key, t.canonical, msg);
     } else {
         println!("logged on {}: {}", a.key, msg);
     }
@@ -1704,12 +1962,17 @@ async fn tick(db: &Option<String>, a: TickArgs) -> CliResult<()> {
     let lookup = key.clone();
     let task = a.task;
     let step = a.step;
-    let updated_at = store
+    let (updated_at, noop) = store
         .call(move |conn| {
             let tx = conn.unchecked_transaction()?;
             let issue = issues::get_by_key(&tx, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
             let new_desc = match descmd::tick_step(&issue.description, task, step) {
-                Ok(d) => d,
+                Ok(descmd::TickOutcome::Ticked(d)) => d,
+                // Desired state already holds: touch nothing (no UPDATE, no
+                // audit record), report success with the noop marker.
+                Ok(descmd::TickOutcome::AlreadyChecked) => {
+                    return Ok((format_usec(issue.updated_at), true));
+                }
                 Err(msg) => return Err(cliban_core::Error::validation("plan", &msg)),
             };
             let now = format_usec(cliban_core::time::now_usec());
@@ -1724,20 +1987,28 @@ async fn tick(db: &Option<String>, a: TickArgs) -> CliResult<()> {
                 &format!("ticked Task {task} Step {step}"),
             );
             tx.commit()?;
-            Ok(now)
+            Ok((now, false))
         })
         .await?;
 
-    if a.json {
+    if crate::output::mode(a.json, a.table).is_json() {
         let mut m = serde_json::Map::new();
         m.insert("checked".into(), serde_json::json!(true));
         m.insert("key".into(), serde_json::json!(a.key));
+        if noop {
+            m.insert("noop".into(), serde_json::json!(true));
+        }
         m.insert("step".into(), serde_json::json!(a.step));
         m.insert("task".into(), serde_json::json!(a.task));
         m.insert("updated_at".into(), serde_json::json!(updated_at));
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::Value::Object(m)).unwrap()
+        );
+    } else if noop {
+        println!(
+            "ticked {} Task {} Step {} (already checked — nothing to do)",
+            a.key, a.task, a.step
         );
     } else {
         println!("ticked {} Task {} Step {}", a.key, a.task, a.step);
@@ -1888,7 +2159,7 @@ async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
         })
         .await?;
 
-    if a.json {
+    if crate::output::mode(a.json, a.table).is_json() {
         let mut m = serde_json::Map::new();
         m.insert("new_key".into(), serde_json::json!(new_key));
         m.insert("parent".into(), serde_json::json!(a.key));
@@ -1933,7 +2204,109 @@ fn build_promoted_line(original: &str, new_key: &str) -> String {
     format!("{trimmed} → {new_key}\n")
 }
 
+/// `issue cp`: duplicate the shape, never the history. The copy gets the
+/// title (unless `--title` overrides), the `## Spec` / `## Plan` / `## Notes`
+/// sections — plan checkboxes reset and promotion pointers stripped by
+/// [`descmd::copy_description`] — plus labels, priority, and (same project
+/// only) the milestone. It starts in backlog, unclaimed, unrelated, undated:
+/// those are facts about the original's run, not about the work's shape.
+async fn cp(db: &Option<String>, a: CpArgs) -> CliResult<()> {
+    let key = parse_issue_key(&a.key)?;
+    let source_project = project_prefix(&key).to_string();
+    let target_project = a
+        .project
+        .map(|p| p.trim().to_uppercase())
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| source_project.clone());
+    let same_project = target_project == source_project;
+
+    let store = store_open::open(db).await?;
+
+    // Read the source's whole shape in one round-trip.
+    let lookup = key.clone();
+    let (src, src_milestone, labels) = store
+        .call(move |conn| {
+            let issue = issues::get_by_key(conn, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+            let milestone = match issue.milestone_id {
+                Some(mid) => milestones::get_by_id(conn, mid)?.map(|m| m.name),
+                None => None,
+            };
+            let labels = issues::label_names(conn, issue.id)?;
+            Ok((issue, milestone, labels))
+        })
+        .await?;
+
+    // Milestone names are project-scoped; a cross-project copy drops it
+    // rather than inventing one in the target project.
+    let milestone_dropped = !same_project && src_milestone.is_some();
+    let milestone = if same_project { src_milestone } else { None };
+    let title = a
+        .title
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| src.title.clone());
+    let description = descmd::copy_description(&src.description);
+    let priority = src.priority.clone();
+
+    // A fresh backlog issue: no parent, no due date, no completed_at — core
+    // `create` never sets those unless asked.
+    let create_project = target_project.clone();
+    let issue = store
+        .call(move |conn| {
+            issues::create(
+                conn,
+                &create_project,
+                CreateIssue {
+                    title,
+                    description: Some(description),
+                    status: None,
+                    priority: Some(priority),
+                    milestone,
+                    parent_key: None,
+                    due_date: None,
+                    position: None,
+                },
+            )
+        })
+        .await?;
+
+    for lbl in labels {
+        let id = issue.id;
+        store
+            .call(move |conn| {
+                let issue = issues::get_by_id(conn, id)?.ok_or(cliban_core::Error::NotFound)?;
+                issues::add_label(conn, &issue, &lbl)
+            })
+            .await?;
+    }
+
+    // Provenance on the copy — and, cross-project, why the milestone is gone.
+    let message = if milestone_dropped {
+        format!("copied from {key} (milestone dropped: names are project-scoped)")
+    } else {
+        format!("copied from {key}")
+    };
+    let id = issue.id;
+    store
+        .call(move |conn| {
+            if let Some(i) = issues::get_by_id(conn, id)? {
+                crate::audit::record(conn, &i, "copy", &message);
+            }
+            Ok(())
+        })
+        .await?;
+
+    // Reload so the labels land in the echo.
+    let reload = issue.key.clone();
+    let issue = store
+        .call(move |conn| issues::get_by_key(conn, &reload))
+        .await?
+        .ok_or(cliban_core::Error::NotFound)?;
+
+    print_issue_result(&store, &issue, "copied", crate::output::mode(a.json, a.table)).await
+}
+
 async fn archive_done(db: &Option<String>, a: ArchiveDoneArgs) -> CliResult<()> {
+    let mode = crate::output::mode(a.json, a.table);
     let store = store_open::open(db).await?;
     if a.auto {
         let n = store
@@ -1966,7 +2339,7 @@ async fn archive_done(db: &Option<String>, a: ArchiveDoneArgs) -> CliResult<()> 
                 Ok(total)
             })
             .await?;
-        if a.json {
+        if mode.is_json() {
             let mut m = serde_json::Map::new();
             m.insert("archived".into(), serde_json::json!(n));
             m.insert("mode".into(), serde_json::json!("auto"));
@@ -2002,7 +2375,7 @@ async fn archive_done(db: &Option<String>, a: ArchiveDoneArgs) -> CliResult<()> 
             Ok(n as i64)
         })
         .await?;
-    if a.json {
+    if mode.is_json() {
         let mut m = serde_json::Map::new();
         m.insert("archived".into(), serde_json::json!(n));
         println!(
@@ -2016,6 +2389,7 @@ async fn archive_done(db: &Option<String>, a: ArchiveDoneArgs) -> CliResult<()> 
 }
 
 async fn import(db: &Option<String>, a: ImportArgs) -> CliResult<()> {
+    let mode = crate::output::mode(a.json, a.table);
     let path = a.file_arg.clone().or(a.file.clone());
     let content = match path.as_deref() {
         None | Some("") | Some("-") => read_stdin()?,
@@ -2128,7 +2502,7 @@ async fn import(db: &Option<String>, a: ImportArgs) -> CliResult<()> {
         }
 
         created += 1;
-        if a.json {
+        if mode.is_json() {
             let inputs = issue_json_inputs(&store, &issue).await?;
             println!(
                 "{}",
@@ -2136,7 +2510,7 @@ async fn import(db: &Option<String>, a: ImportArgs) -> CliResult<()> {
             );
         }
     }
-    if !a.json {
+    if !mode.is_json() {
         println!("imported {created} issue(s)");
     }
     Ok(())
@@ -2169,40 +2543,126 @@ async fn mv(
     key: String,
     status: String,
     note: Option<String>,
+    mode: Mode,
+    teach: Option<Teach>,
 ) -> CliResult<()> {
     let key = parse_issue_key(&key)?;
     let status = parse_status(&status)?;
     #[cfg(feature = "linear")]
     let (push_key, push_status) = (key.clone(), status.clone());
     let store = store_open::open(db).await?;
+    let move_key = key.clone();
+    let move_status = status.clone();
     let from = store
         .call(move |conn| {
-            let issue = issues::get_by_key(conn, &key)?.ok_or(cliban_core::Error::NotFound)?;
+            let issue =
+                issues::get_by_key(conn, &move_key)?.ok_or(cliban_core::Error::NotFound)?;
             let from = issue.status.clone();
-            issues::move_issue(conn, &issue, &status)?;
+            // Desired state already holds: no reposition, no updated_at
+            // churn, no audit record — a retry is not a second move.
+            if from == move_status {
+                return Ok(from);
+            }
+            issues::move_issue(conn, &issue, &move_status)?;
             // The move is the event worth recording; `--note` carries the why.
-            crate::audit::record_move(conn, &issue, &from, &status, note.as_deref());
+            crate::audit::record_move(conn, &issue, &from, &move_status, note.as_deref());
             Ok(from)
         })
         .await?;
+    let noop = from == status;
     // The move has committed; push_on_move (opt-in via linear.toml) may now
     // mirror it to a linked Linear issue. Best-effort: it never fails the mv.
     #[cfg(feature = "linear")]
     if from != push_status {
         crate::cmd::sync::push_on_move(db, &push_key).await;
     }
-    #[cfg(not(feature = "linear"))]
-    let _ = from;
+    if mode.is_json() {
+        // Echo the issue as it now stands — the same shape `show --json`
+        // emits, so a piped caller can chain without a follow-up read.
+        let reload = key.clone();
+        let issue = store
+            .call(move |conn| issues::get_by_key(conn, &reload))
+            .await?
+            .ok_or(cliban_core::Error::NotFound)?;
+        let inputs = issue_json_inputs(&store, &issue).await?;
+        let mut v = build_issue_json(inputs, Detail::Full);
+        if let serde_json::Value::Object(m) = &mut v {
+            if noop {
+                m.insert("noop".into(), serde_json::json!(true));
+            }
+            if let Some(t) = teach {
+                m.insert(
+                    "canonical".into(),
+                    serde_json::json!(format!("issue {}", t.canonical)),
+                );
+            }
+        }
+        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+    } else {
+        match (teach, noop) {
+            (None, true) => println!("{key} already {status} (nothing to do)"),
+            (None, false) => println!("moved {key}: {from} → {status}"),
+            (Some(t), true) => println!(
+                "{} {key} ({}): already {status} (nothing to do)",
+                t.verb, t.canonical
+            ),
+            (Some(t), false) => {
+                println!("{} {key} ({}): {from} → {status}", t.verb, t.canonical)
+            }
+        }
+    }
     Ok(())
 }
 
-async fn set_archived(db: &Option<String>, key: String, archived: bool) -> CliResult<()> {
+/// `issue cat`: the stored description, verbatim — the one read that never
+/// formats. No `--json`/`--table`, no mode branch, no trailing decoration:
+/// its whole contract is "the bytes, exactly".
+async fn cat(db: &Option<String>, a: CatArgs) -> CliResult<()> {
+    let key = parse_issue_key(&a.key)?;
+    let store = store_open::open(db).await?;
+    let issue = store
+        .call(move |conn| issues::get_by_key(conn, &key))
+        .await?
+        .ok_or(cliban_core::Error::NotFound)?;
+    print!("{}", issue.description);
+    Ok(())
+}
+
+/// The shared body of `issue rm` and `issue delete`: do the closest safe
+/// thing rather than spending a turn refusing. The message IS the point of
+/// these reflexes — it prints in every mode, so the caller always learns
+/// nothing was deleted. `delete` additionally states the canonical form
+/// (`archive`) once, per the alias contract.
+async fn rm_reflex(
+    db: &Option<String>,
+    key: String,
+    canonical: Option<&str>,
+) -> CliResult<()> {
     let key = parse_issue_key(&key)?;
     let store = store_open::open(db).await?;
-    store
+    // Desired state = archived; already-archived is the same success.
+    set_archived_on(&store, key.clone(), true).await?;
+    let teach = canonical.map(|c| format!(" ({c})")).unwrap_or_default();
+    println!(
+        "archived {key}{teach} — cliban archives instead of deleting \
+         (undo: cliban issue unarchive {key})"
+    );
+    Ok(())
+}
+
+/// Flip an issue's archived bit and return the (possibly untouched) row plus a
+/// noop flag. When the bit already matches — a retry, not a change — nothing is
+/// written and no audit record is added. Prints nothing: `archive`/`unarchive`
+/// confirm via [`confirm_issue`], while `rm` keeps its own always-on message.
+async fn set_archived_on(store: &Store, key: String, archived: bool) -> CliResult<(Issue, bool)> {
+    let key = parse_issue_key(&key)?;
+    let result = store
         .call(move |conn| {
             let issue = issues::get_by_key(conn, &key)?.ok_or(cliban_core::Error::NotFound)?;
-            issues::update(
+            if issue.archived == archived {
+                return Ok((issue, true));
+            }
+            let updated = issues::update(
                 conn,
                 &issue,
                 UpdateIssue {
@@ -2216,9 +2676,37 @@ async fn set_archived(db: &Option<String>, key: String, archived: bool) -> CliRe
                 "archive",
                 if archived { "archived" } else { "unarchived" },
             );
-            Ok(())
+            Ok((updated, false))
         })
         .await?;
+    Ok(result)
+}
+
+/// The mutation contract's success report: a one-line `{verb} {KEY}` in table
+/// mode, the full issue JSON (the `show --json` shape) in json mode. Never
+/// silent. A noop retry says so — `{KEY} already {verb} (nothing to do)` in
+/// table mode, a `"noop": true` field on the JSON echo.
+async fn confirm_issue(
+    store: &Store,
+    issue: &Issue,
+    verb: &str,
+    noop: bool,
+    mode: Mode,
+) -> CliResult<()> {
+    if mode.is_json() {
+        let inputs = issue_json_inputs(store, issue).await?;
+        let mut v = build_issue_json(inputs, Detail::Full);
+        if noop {
+            if let serde_json::Value::Object(m) = &mut v {
+                m.insert("noop".into(), serde_json::json!(true));
+            }
+        }
+        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+    } else if noop {
+        println!("{} already {verb} (nothing to do)", issue.key);
+    } else {
+        println!("{verb} {}", issue.key);
+    }
     Ok(())
 }
 
@@ -2281,7 +2769,7 @@ fn current_branch() -> Result<String, CliError> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-async fn current(db: &Option<String>, json: bool) -> CliResult<()> {
+async fn current(db: &Option<String>, mode: Mode) -> CliResult<()> {
     let branch = current_branch()?;
     let (proj, seq) = parse_branch(&branch).ok_or_else(|| {
         // Wrapped as "not found: <msg>" so the caller sees what was missing.
@@ -2303,7 +2791,7 @@ async fn current(db: &Option<String>, json: bool) -> CliResult<()> {
             )))
         }
     };
-    if json {
+    if mode.is_json() {
         let inputs = issue_json_inputs(&store, &issue).await?;
         println!(
             "{}",
@@ -2318,7 +2806,7 @@ async fn current(db: &Option<String>, json: bool) -> CliResult<()> {
 async fn blocked(
     db: &Option<String>,
     project: Option<String>,
-    json: bool,
+    mode: Mode,
     full: bool,
 ) -> CliResult<()> {
     let project = project.map(|p| p.to_uppercase()).filter(|p| !p.is_empty());
@@ -2329,7 +2817,7 @@ async fn blocked(
         .await?;
     // Base ordering: ORDER BY p.key, i.status, i.position.
     base_order(&mut issues);
-    if json {
+    if mode.is_json() {
         for i in &issues {
             let inputs = issue_json_inputs(&store, i).await?;
             println!(
@@ -2369,7 +2857,7 @@ async fn ready(
     project: Option<String>,
     parent: Option<String>,
     milestone: Option<String>,
-    json: bool,
+    mode: Mode,
     full: bool,
 ) -> CliResult<()> {
     let project = project.map(|p| p.to_uppercase()).filter(|p| !p.is_empty());
@@ -2388,7 +2876,7 @@ async fn ready(
         .call(move |conn| relations::list_ready(conn, pk.as_deref(), pak.as_deref(), ms.as_deref()))
         .await?;
     base_order(&mut issues_list);
-    if json {
+    if mode.is_json() {
         for i in &issues_list {
             let inputs = issue_json_inputs(&store, i).await?;
             println!(
@@ -2409,7 +2897,7 @@ async fn claim_cmd(
     key: String,
     by: Option<String>,
     force: bool,
-    json: bool,
+    mode: Mode,
 ) -> CliResult<()> {
     let key = parse_issue_key(&key)?;
     let actor = by
@@ -2445,7 +2933,7 @@ async fn claim_cmd(
             Ok((issue, claim))
         })
         .await?;
-    if json {
+    if mode.is_json() {
         println!(
             "{}",
             serde_json::json!({
@@ -2460,7 +2948,7 @@ async fn claim_cmd(
     Ok(())
 }
 
-async fn release_cmd(db: &Option<String>, key: String, json: bool) -> CliResult<()> {
+async fn release_cmd(db: &Option<String>, key: String, mode: Mode) -> CliResult<()> {
     let key = parse_issue_key(&key)?;
     let store = store_open::open(db).await?;
     let lookup = key.clone();
@@ -2479,7 +2967,7 @@ async fn release_cmd(db: &Option<String>, key: String, json: bool) -> CliResult<
             Ok((issue, was))
         })
         .await?;
-    if json {
+    if mode.is_json() {
         println!(
             "{}",
             serde_json::json!({
@@ -2497,7 +2985,7 @@ async fn release_cmd(db: &Option<String>, key: String, json: bool) -> CliResult<
     Ok(())
 }
 
-async fn lint_cmd(db: &Option<String>, key: String, json: bool) -> CliResult<()> {
+async fn lint_cmd(db: &Option<String>, key: String, mode: Mode) -> CliResult<()> {
     let key = parse_issue_key(&key)?;
     let store = store_open::open(db).await?;
     let lookup = key.clone();
@@ -2510,7 +2998,7 @@ async fn lint_cmd(db: &Option<String>, key: String, json: bool) -> CliResult<()>
         .iter()
         .filter(|f| f.severity == crate::lint::Severity::Error)
         .count();
-    if json {
+    if mode.is_json() {
         let list: Vec<serde_json::Value> = findings
             .iter()
             .map(|f| {
@@ -2567,11 +3055,16 @@ async fn append_section_cmd(db: &Option<String>, a: AppendSectionArgs) -> CliRes
         (None, Some(f)) if f == "-" => read_stdin()?,
         (None, Some(f)) => std::fs::read_to_string(&f)
             .map_err(|e| CliError::other(format!("read {f}: {e}")))?,
-        (None, None) => {
-            return Err(CliError::validation(
-                "nothing to append: pass the text positionally or via --text-file",
-            ))
-        }
+        // No positional, no --text-file: piped/redirected stdin IS the text;
+        // a TTY keeps the fast error (blank piped text is caught below).
+        (None, None) => match crate::stdin_input::fallback()? {
+            Some(piped) => piped,
+            None => {
+                return Err(CliError::validation(
+                    "nothing to append: pass the text positionally or via --text-file",
+                ))
+            }
+        },
     };
     if text.trim().is_empty() {
         return Err(CliError::validation("nothing to append: text is blank"));
@@ -2606,5 +3099,5 @@ async fn append_section_cmd(db: &Option<String>, a: AppendSectionArgs) -> CliRes
             Ok(updated)
         })
         .await?;
-    print_issue_result(&store, &issue, "updated", a.json).await
+    print_issue_result(&store, &issue, "updated", crate::output::mode(a.json, a.table)).await
 }

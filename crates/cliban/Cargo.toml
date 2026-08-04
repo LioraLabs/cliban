@@ -37,3 +37,11 @@ serde_json.workspace = true
 chrono.workspace = true
 rusqlite.workspace = true
 regex = "1"
+
+[target.'cfg(unix)'.dependencies]
+# Restoring SIGPIPE's default disposition in main (see reset_sigpipe there).
+libc = "0.2"
+
+[target.'cfg(unix)'.dev-dependencies]
+# tests/stdin_fallback.rs opens a pty to prove a TTY stdin never blocks.
+libc = "0.2"

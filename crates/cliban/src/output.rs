@@ -7,6 +7,61 @@
 //!
 use serde_json::{json, Map, Value};
 
+/// The resolved output format for one command invocation.
+///
+/// Every command that emits a result consults this — never the raw `--json`
+/// bool and never `is_terminal()` directly — so the whole binary agrees on
+/// one contract: explicit flags beat `$CLIBAN_OUTPUT`, which beats
+/// auto-detection (stdout a TTY → `Table`, piped/redirected → `Json`).
+///
+/// Mutations branch on it too: `Table` prints the one-line human
+/// confirmation, `Json` echoes the mutated entity. `CLIBAN_OUTPUT=table`
+/// with piped stdout therefore prints the human line — the env var pins the
+/// *format*, not the terminal-ness.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mode {
+    /// Machine output: the exact shapes `--json` has always produced.
+    Json,
+    /// Human output: tables, listings, one-line confirmations.
+    Table,
+}
+
+impl Mode {
+    pub fn is_json(self) -> bool {
+        self == Mode::Json
+    }
+}
+
+/// Resolve the output mode from the two explicit flags, `$CLIBAN_OUTPUT`,
+/// and finally whether stdout is a terminal.
+///
+/// `--json`/`--table` are mutually exclusive at the clap layer
+/// (`conflicts_with`), so both being true cannot reach here. An unrecognized
+/// `$CLIBAN_OUTPUT` value is ignored rather than fatal: the variable exists
+/// to pin defaults for PTY-driven harnesses, and a typo'd pin failing every
+/// command in the session would be worse than falling back to detection.
+pub fn mode(json_flag: bool, table_flag: bool) -> Mode {
+    if json_flag {
+        return Mode::Json;
+    }
+    if table_flag {
+        return Mode::Table;
+    }
+    if let Ok(v) = std::env::var("CLIBAN_OUTPUT") {
+        match v.trim().to_ascii_lowercase().as_str() {
+            "json" => return Mode::Json,
+            "table" => return Mode::Table,
+            _ => {}
+        }
+    }
+    use std::io::IsTerminal;
+    if std::io::stdout().is_terminal() {
+        Mode::Table
+    } else {
+        Mode::Json
+    }
+}
+
 pub struct RelationOut {
     pub kind: String,
     pub target: String,
@@ -343,6 +398,15 @@ pub fn write_search_table(rows: &[SearchRow]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The flag layer of the resolver. The env/TTY layers are process-global,
+    // so they are pinned end-to-end in tests/output_contract.rs instead of
+    // here.
+    #[test]
+    fn explicit_flags_decide_the_mode_outright() {
+        assert_eq!(mode(true, false), Mode::Json);
+        assert_eq!(mode(false, true), Mode::Table);
+    }
 
     /// The pre-`Detail` shape, for tests that assert the full key set.
     fn build_issue_json_full(i: IssueJsonInputs) -> Value {

@@ -65,6 +65,9 @@ pub struct ActivityArgs {
     /// NDJSON output (one compact JSON object per line)
     #[arg(long)]
     json: bool,
+    /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
 }
 
 struct Event {
@@ -174,7 +177,7 @@ pub async fn run(db: &Option<String>, a: ActivityArgs) -> CliResult<()> {
     }
 
     let now = Utc::now();
-    if a.json {
+    if crate::output::mode(a.json, a.table).is_json() {
         for e in &events {
             println!("{}", serde_json::to_string(&event_json(e)).unwrap());
         }
