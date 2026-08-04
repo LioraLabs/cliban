@@ -77,9 +77,15 @@ export class ClibanClient {
     return (await this.runJson(['issue', 'show', key])) as Issue;
   }
 
-  /** Raw markdown of one section; null when the section doesn't exist (exit 1). */
+  /**
+   * Raw markdown of one section via `issue cat`; null when the section
+   * doesn't exist (exit 1). `cat` is raw-only and rejects --json.
+   */
   async showSection(key: string, section: Section): Promise<string | null> {
-    const res = await this.run(['issue', 'show', key, '--section', section], undefined, true);
+    const res = await this.run(['issue', 'cat', key, '--section', section], {
+      allowExit1: true,
+      raw: true,
+    });
     if (res.code === 1) return null;
     this.raiseOnFailure(res);
     return res.stdout;
@@ -151,7 +157,7 @@ export class ClibanClient {
   // ---- plumbing ----
 
   private async runJson(args: string[], stdin?: string): Promise<unknown> {
-    const res = await this.run(args, stdin);
+    const res = await this.run(args, { stdin });
     return res.stdout.trim() === '' ? {} : JSON.parse(res.stdout);
   }
 
@@ -160,10 +166,13 @@ export class ClibanClient {
     return parseNdjson(res.stdout);
   }
 
-  private async run(args: string[], stdin?: string, allowExit1 = false): Promise<RunResult> {
+  private async run(
+    args: string[],
+    opts: { stdin?: string; allowExit1?: boolean; raw?: boolean } = {},
+  ): Promise<RunResult> {
     const fullArgs = [...(this.opts.extraArgs ?? []), ...args];
     if (this.opts.dbPath) fullArgs.push('--db', this.opts.dbPath);
-    fullArgs.push('--json');
+    if (!opts.raw) fullArgs.push('--json');
 
     const res = await new Promise<RunResult>((resolve, reject) => {
       const child = spawn(this.opts.exePath, fullArgs, {
@@ -179,11 +188,11 @@ export class ClibanClient {
         else reject(new ClibanError(err.message, null));
       });
       child.on('close', (code) => resolve({ stdout, stderr, code: code ?? -1 }));
-      if (stdin !== undefined) child.stdin.end(stdin);
+      if (opts.stdin !== undefined) child.stdin.end(opts.stdin);
       else child.stdin.end();
     });
 
-    if (allowExit1 && res.code === 1) return res;
+    if (opts.allowExit1 && res.code === 1) return res;
     this.raiseOnFailure(res);
     return res;
   }

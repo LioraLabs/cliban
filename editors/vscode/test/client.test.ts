@@ -116,9 +116,16 @@ test('showSection returns null on exit 1 (section absent)', async () => {
   assert.equal(await client.showSection('CLI-9', 'plan'), null);
 });
 
-test('showSection returns raw markdown untouched', async () => {
-  const client = makeClient({ FAKE_STDOUT: '### Task 1: x\n\n- [ ] **Step 1: y**\n' });
+test('showSection reads via cat --section, raw, without --json', async () => {
+  const cap = withCapture();
+  const client = makeClient({
+    FAKE_CAPTURE: cap.file,
+    FAKE_STDOUT: '### Task 1: x\n\n- [ ] **Step 1: y**\n',
+  });
   assert.equal(await client.showSection('CLI-9', 'plan'), '### Task 1: x\n\n- [ ] **Step 1: y**\n');
+  // `issue cat` is raw-only: it rejects --json, so the args must omit it
+  assert.deepEqual(cap.read().argv, ['issue', 'cat', 'CLI-9', '--section', 'plan']);
+  cap.cleanup();
 });
 
 test('exit 1 elsewhere raises NotFoundError', async () => {
