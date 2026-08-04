@@ -16,6 +16,8 @@ export interface BoardHandlers {
   onRefresh(): void;
   onMoveIssue(key: string, toStatus: Status): void;
   onNewIssue(): void;
+  onArchiveDone(): void;
+  onOpenSettings(): void;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -102,6 +104,11 @@ export function renderBoard(root: HTMLElement, msg: BoardMsg, handlers: BoardHan
     const body = el('div', 'column-body');
     for (const issue of issues) body.append(renderCard(issue, handlers));
     column.append(body);
+    if (status === 'done' && issues.length > 0) {
+      const archive = el('button', 'column-footer-btn', 'Archive done…');
+      archive.addEventListener('click', () => handlers.onArchiveDone());
+      column.append(archive);
+    }
     column.addEventListener('dragover', (ev) => {
       const from = ev.dataTransfer?.types.includes('text/cliban-key');
       if (!from) return;
@@ -123,7 +130,12 @@ export function renderBoard(root: HTMLElement, msg: BoardMsg, handlers: BoardHan
   root.append(board);
 }
 
-export function renderErrorState(root: HTMLElement, kind: string, message: string): void {
+export function renderErrorState(
+  root: HTMLElement,
+  kind: string,
+  message: string,
+  handlers?: Pick<BoardHandlers, 'onOpenSettings' | 'onRefresh'>,
+): void {
   root.replaceChildren();
   const pane = el('div', 'empty-state');
   if (kind === 'cli-missing') {
@@ -131,8 +143,16 @@ export function renderErrorState(root: HTMLElement, kind: string, message: strin
     pane.append(
       el('p', undefined, 'The cliban CLI is not installed or not on PATH.'),
       el('p', undefined, 'Install it with: cargo install cliban  ·  brew install lioralabs/tap/cliban  ·  AUR: cliban'),
-      el('p', undefined, 'Or point the cliban.executablePath setting at the binary.'),
     );
+    if (handlers) {
+      const row = el('div', 'form-row form-actions empty-actions');
+      const settings = el('button', 'toolbar-btn', 'Open settings');
+      settings.addEventListener('click', () => handlers.onOpenSettings());
+      const retry = el('button', 'toolbar-btn form-submit', 'Retry');
+      retry.addEventListener('click', () => handlers.onRefresh());
+      row.append(settings, retry);
+      pane.append(row);
+    }
   } else {
     pane.append(el('h2', undefined, 'Board unavailable'), el('p', undefined, message));
   }

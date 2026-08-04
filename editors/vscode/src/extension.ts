@@ -15,6 +15,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('cliban.newIssue', () => {
       BoardPanel.get(context).newIssue();
     }),
+    vscode.commands.registerCommand('cliban.archiveDone', () => {
+      void BoardPanel.get(context).archiveDone();
+    }),
   );
 }
 

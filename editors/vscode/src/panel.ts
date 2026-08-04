@@ -145,6 +145,34 @@ export class BoardPanel {
       case 'editSection':
         await this.editSection(msg);
         break;
+      case 'archiveDone':
+        await this.archiveDone();
+        break;
+      case 'openSettings':
+        void vscode.commands.executeCommand('workbench.action.openSettings', 'cliban');
+        break;
+    }
+  }
+
+  async archiveDone(): Promise<void> {
+    const project = this.store.snapshot().project;
+    if (!project) return;
+    const doneCount = this.store.snapshot().issues.filter((i) => i.status === 'done').length;
+    if (doneCount === 0) {
+      this.post({ type: 'toast', level: 'info', message: 'nothing in Done to archive' });
+      return;
+    }
+    const pick = await vscode.window.showWarningMessage(
+      `Archive all ${doneCount} done issue(s) in ${project}? (reversible: cliban issue unarchive)`,
+      { modal: true },
+      'Archive',
+    );
+    if (pick !== 'Archive') return;
+    try {
+      await this.client.archiveDone(project);
+      await this.refresh();
+    } catch (err) {
+      this.surface(err);
     }
   }
 

@@ -39,6 +39,8 @@ const handlers = {
     pendingSectionEdits.set(requestId, { key, section, content });
     vscode.postMessage({ type: 'editSection', requestId, key, section, content, ifUpdatedAt });
   },
+  onArchiveDone: () => vscode.postMessage({ type: 'archiveDone' }),
+  onOpenSettings: () => vscode.postMessage({ type: 'openSettings' }),
   onNewIssue: () => {
     if (!lastBoard) return;
     createPending = false;
@@ -63,7 +65,7 @@ function onMessage(msg: HostMsg): void {
       }
       break;
     case 'errorState':
-      renderErrorState(app, msg.kind, msg.message);
+      renderErrorState(app, msg.kind, msg.message, handlers);
       break;
     case 'busy':
       document.body.classList.toggle('busy', msg.on);

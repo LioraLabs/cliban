@@ -136,6 +136,14 @@ export interface EditSectionMsg {
   ifUpdatedAt: string;
 }
 
+export interface ArchiveDoneMsg {
+  type: 'archiveDone';
+}
+
+export interface OpenSettingsMsg {
+  type: 'openSettings';
+}
+
 export type WebviewMsg =
   | ReadyMsg
   | RefreshMsg
@@ -146,6 +154,8 @@ export type WebviewMsg =
   | AddLogMsg
   | EditMetaMsg
   | CreateIssueMsg
-  | EditSectionMsg;
+  | EditSectionMsg
+  | ArchiveDoneMsg
+  | OpenSettingsMsg;
 
 export type { ActivityEvent, Issue, Label, Milestone, Status };
