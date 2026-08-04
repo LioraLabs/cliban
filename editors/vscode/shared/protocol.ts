@@ -22,6 +22,7 @@ export interface BoardMsg {
   issues: Issue[];
   milestones: Milestone[];
   labels: Label[];
+  events: ActivityEvent[];
 }
 
 export interface ErrorStateMsg {

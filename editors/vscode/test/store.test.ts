@@ -80,3 +80,26 @@ test('rollback after the issue vanished is a no-op', () => {
   store.rollback('a');
   assert.deepEqual(store.snapshot().issues, []);
 });
+
+test('mergeActivity dedupes by ts/key/kind and advances lastActivityTs', () => {
+  const store = new BoardStore();
+  const e1 = { ts: '2026-08-04T10:00:00Z', key: 'C-1', kind: 'status' };
+  const e2 = { ts: '2026-08-04T11:00:00Z', key: 'C-2', kind: 'log' };
+  store.mergeActivity([e2, e1]); // newest-first, as the CLI emits
+  store.mergeActivity([e2]); // watcher refetch overlaps
+  assert.equal(store.snapshot().events.length, 2);
+  assert.equal(store.lastActivityTs, '2026-08-04T11:00:00Z');
+});
+
+test('mergeActivity keeps newest first and caps the feed', () => {
+  const store = new BoardStore();
+  const events = Array.from({ length: 120 }, (_, i) => ({
+    ts: `2026-08-04T10:00:${String(i % 60).padStart(2, '0')}.${String(i).padStart(3, '0')}Z`,
+    key: `C-${i}`,
+    kind: 'log',
+  }));
+  store.mergeActivity(events);
+  const snap = store.snapshot();
+  assert.equal(snap.events.length, 100);
+  assert.ok(snap.events[0]!.ts >= snap.events[1]!.ts);
+});

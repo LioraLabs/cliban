@@ -4,6 +4,7 @@ import type { IssueDraft, MetaPatch, Status } from '../shared/model';
 import { renderBoard, renderErrorState } from './board';
 import { closeDrawer, renderDrawer, type EditableSection } from './drawer';
 import { closeCreateForm, createFormFailed, createFormSucceeded, openCreateForm } from './forms';
+import { renderFeed } from './feed';
 import { toast } from './toast';
 
 declare function acquireVsCodeApi(): { postMessage(msg: WebviewMsg): void };
@@ -55,6 +56,7 @@ function onMessage(msg: HostMsg): void {
     case 'board':
       lastBoard = msg;
       renderBoard(app, msg, handlers);
+      renderFeed(app, msg.events, { onOpenIssue: handlers.onOpenIssue });
       if (createPending) {
         createPending = false;
         createFormSucceeded();

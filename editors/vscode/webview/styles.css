@@ -448,3 +448,83 @@ body.busy {
   flex-direction: column;
   gap: 0.4rem;
 }
+
+/* activity feed */
+
+.feed {
+  flex: none;
+  border-top: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-sideBar-background);
+  max-height: 40vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.feed-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.3rem 0.75rem;
+  background: none;
+  border: none;
+  color: inherit;
+  font-family: inherit;
+  font-size: 0.85em;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.feed-list {
+  overflow-y: auto;
+  padding: 0 0.75rem 0.5rem;
+}
+
+.feed-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.15rem 0;
+  font-size: 0.85em;
+  border-top: 1px solid transparent;
+}
+
+.feed-new {
+  animation: feed-pulse 2s ease-out;
+}
+
+@keyframes feed-pulse {
+  from { background: var(--vscode-list-hoverBackground); }
+  to { background: transparent; }
+}
+
+.feed-time {
+  opacity: 0.5;
+  min-width: 4.5em;
+}
+
+.feed-kind {
+  opacity: 0.7;
+  min-width: 5em;
+}
+
+.feed-key {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+  font-family: var(--vscode-editor-font-family);
+  font-size: inherit;
+}
+
+.feed-msg {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-actor {
+  opacity: 0.5;
+  font-size: 0.9em;
+}

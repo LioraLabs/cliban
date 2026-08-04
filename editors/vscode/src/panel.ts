@@ -14,6 +14,7 @@ import {
 import type { Issue, IssueDraft } from '../shared/model';
 import type { EditSectionMsg, ErrorKind } from '../shared/protocol';
 import { readSettings } from './settings';
+import { DbWatcher, resolveDbPath } from './watcher';
 
 const PROJECT_STATE_KEY = 'cliban.project';
 
@@ -55,6 +56,7 @@ export class BoardPanel {
     this.panel.webview.html = this.render(context);
     this.panel.webview.onDidReceiveMessage((msg: WebviewMsg) => void this.onMessage(msg));
     this.panel.onDidDispose(() => {
+      this.watcher?.dispose();
       BoardPanel.current = undefined;
     });
     this.store.onChange((snap) => {
@@ -65,17 +67,36 @@ export class BoardPanel {
           issues: snap.issues,
           milestones: snap.milestones,
           labels: snap.labels,
+          events: snap.events,
         });
       }
+    });
+    this.armWatcher();
+    this.panel.onDidChangeViewState((e) => {
+      if (e.webviewPanel.visible) void this.refresh();
     });
     this.context.subscriptions.push(
       vscode.workspace.onDidChangeConfiguration((e) => {
         if (e.affectsConfiguration('cliban')) {
           this.client = this.buildClient();
+          this.armWatcher();
           void this.refresh();
         }
       }),
     );
+  }
+
+  private watcher: DbWatcher | undefined;
+
+  private armWatcher(): void {
+    this.watcher?.dispose();
+    const s = readSettings();
+    this.watcher = new DbWatcher({
+      dbPath: resolveDbPath(s.dbPath, process.env),
+      mode: s.watchMode,
+      pollIntervalMs: s.pollIntervalSeconds * 1000,
+      onFire: () => void this.refresh(),
+    });
   }
 
   private buildClient(): ClibanClient {
@@ -225,12 +246,15 @@ export class BoardPanel {
     if (!project) return;
     this.post({ type: 'busy', on: true });
     try {
-      const [issues, milestones, labels] = await Promise.all([
+      const since = this.store.lastActivityTs ?? '1d';
+      const [issues, milestones, labels, events] = await Promise.all([
         this.client.listIssues(project),
         this.client.listMilestones(project),
         this.client.listLabels(project),
+        this.client.activity(since, project),
       ]);
       this.store.setBoard(project, issues, milestones, labels);
+      this.store.mergeActivity(events);
     } catch (err) {
       this.surface(err);
     } finally {
