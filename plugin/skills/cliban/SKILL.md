@@ -440,7 +440,7 @@ cliban milestone edit --project PROJ --name v0.1 --status completed
 cliban milestone edit --project PROJ --name v0.1 --rename "v0.1.0"
 ```
 Milestones are addressed **by name, not a key** — and only `show` accepts the
-name positionally. `add` and `edit` require `--name`; a positional name
+name positionally. `add`, `edit`, and `rm` require `--name`; a positional name
 there fails with `error: unexpected argument`. When in doubt, pass `--name`.
 `--sort` is `activity` (most recently worked on) | `name` (default) | `target`
 (soonest first, undated last). `--stats` adds done/total and last-activity
@@ -460,14 +460,23 @@ cliban milestone edit --project PROJ --name v0.1 --status cancelled
 ```
 `--auto-archive-done-after 0` disables the policy.
 
-**Nothing is ever deleted, and there is no `rm` for work items.** Deleting a
-row would take its timeline with it, and a history with holes is worse than no
-history. `issue archive`, `project archive`, and `milestone edit --status
-cancelled` are the whole story: reversible, recorded, and the item keeps its
-key, relations, and past — it simply stops appearing in default lists.
+**Nothing is ever deleted.** Deleting a row would take its timeline with it,
+and a history with holes is worse than no history. `issue rm` and `project rm`
+therefore *archive*, and `milestone rm` *cancels* — a unix reflex does the
+closest safe thing instead of costing you a turn, reports what it actually
+did, and names the undo:
 
-(`label rm` exists and genuinely deletes — a label is a tag, not a work item.
-It has no timeline, and detaching it destroys nothing.)
+```bash
+$ cliban issue rm PROJ-12
+archived PROJ-12 — cliban archives instead of deleting (undo: cliban issue unarchive PROJ-12)
+```
+
+Prefer the real command (`issue archive`) when you know what you want.
+Archiving is reversible: the issue keeps its key, relations and recorded past,
+and simply stops appearing in default lists.
+
+(`label rm` genuinely deletes — a label is a tag, not a work item. It has no
+timeline, and detaching it destroys nothing.)
 
 ## The description contract
 
@@ -643,7 +652,7 @@ in-progress. A cancelled Linear issue arrives as `done` **and archived**.
 - Don't record a project lesson by round-tripping the whole description — use
   `project note add`.
 - Don't start work another session may also see without `issue claim`.
-- Don't reach for `rm` on work items — it isn't a command. Archive instead;
-  nothing in cliban destroys a work item.
+- Don't expect `rm` to delete: it archives (milestones: cancels) and tells
+  you so. Nothing in cliban destroys a work item.
 - Don't invent flags: there is no `--key`, no `issue move`, no `--all`. If a
   flag is rejected, run `cliban <cmd> --help` rather than guessing again.

@@ -82,6 +82,15 @@ pub enum ProjectCmd {
     Archive { key: String },
     /// Unarchive a project
     Unarchive { key: String },
+    /// A unix reflex, not a real deleter (hidden): archives, says so, names
+    /// the undo.
+    #[command(hide = true)]
+    Rm {
+        key: String,
+        /// accepted and ignored — archiving needs no force
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -152,6 +161,16 @@ pub async fn run(db: &Option<String>, args: ProjectArgs) -> CliResult<()> {
         },
         ProjectCmd::Archive { key } => set_archived(db, key, true).await,
         ProjectCmd::Unarchive { key } => set_archived(db, key, false).await,
+        ProjectCmd::Rm { key, force: _ } => {
+            // Do the closest safe thing rather than spending a turn refusing.
+            let key = key.to_uppercase();
+            set_archived(db, key.clone(), true).await?;
+            println!(
+                "archived project {key} — cliban archives instead of deleting \
+                 (undo: cliban project unarchive {key})"
+            );
+            Ok(())
+        }
     }
 }
 

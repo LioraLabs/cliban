@@ -58,6 +58,11 @@ pub enum IssueCmd {
         #[arg(long, allow_hyphen_values = true)]
         note: Option<String>,
     },
+    /// A unix reflex, not a real deleter (hidden): archives, says so, names
+    /// the undo. An agent that guesses `rm` gets the closest safe thing
+    /// instead of losing a turn to a usage error.
+    #[command(hide = true)]
+    Rm { key: String },
     /// Archive an issue (hides it from the default board and lists)
     Archive { key: String },
     /// Unarchive an issue
@@ -417,6 +422,16 @@ pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
         IssueCmd::ArchiveDone(a) => archive_done(db, a).await,
         IssueCmd::Import(a) => import(db, a).await,
         IssueCmd::Mv { key, status, note } => mv(db, key, status, note).await,
+        IssueCmd::Rm { key } => {
+            // Do the closest safe thing rather than spending a turn refusing.
+            let key = parse_issue_key(&key)?;
+            set_archived(db, key.clone(), true).await?;
+            println!(
+                "archived {key} — cliban archives instead of deleting \
+                 (undo: cliban issue unarchive {key})"
+            );
+            Ok(())
+        }
         IssueCmd::Archive { key } => set_archived(db, key, true).await,
         IssueCmd::Unarchive { key } => set_archived(db, key, false).await,
         IssueCmd::Current { json } => current(db, json).await,

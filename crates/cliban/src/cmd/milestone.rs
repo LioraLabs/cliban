@@ -109,6 +109,15 @@ pub enum MilestoneCmd {
         #[arg(long = "clear-target")]
         clear_target: bool,
     },
+    /// A unix reflex, not a real deleter (hidden): cancels, says so, names
+    /// the undo.
+    #[command(hide = true)]
+    Rm {
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        name: String,
+    },
 }
 
 pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
@@ -175,6 +184,29 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
                 clear_target,
             )
             .await
+        }
+        MilestoneCmd::Rm { project, name } => {
+            // `cancelled` is a milestone's archived state, so that is what a
+            // delete becomes — the closest safe thing, not a refusal.
+            let project_key = project.to_uppercase();
+            edit(
+                db,
+                project_key.clone(),
+                name.clone(),
+                None,
+                None,
+                None,
+                Some("cancelled".to_string()),
+                None,
+                false,
+            )
+            .await?;
+            println!(
+                "cancelled milestone {name} in {project_key} — cliban cancels instead of \
+                 deleting (undo: cliban milestone edit --project {project_key} --name {name} \
+                 --status open)"
+            );
+            Ok(())
         }
     }
 }
