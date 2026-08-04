@@ -45,6 +45,10 @@ pub enum IssueCmd {
     Tick(TickArgs),
     /// Promote a plan step into its own issue
     Promote(PromoteArgs),
+    /// Copy an issue's shape into a new backlog issue — title, ## Spec,
+    /// ## Plan (checkboxes reset), ## Notes, labels, priority — never its
+    /// history (activity log, claims, relations, due date, completed_at)
+    Cp(CpArgs),
     /// Archive done issues
     #[command(name = "archive-done")]
     ArchiveDone(ArchiveDoneArgs),
@@ -446,6 +450,26 @@ pub struct PromoteArgs {
 }
 
 #[derive(clap::Args)]
+pub struct CpArgs {
+    /// source issue key
+    key: String,
+    /// create the copy in this project (default: the source's project);
+    /// cross-project copies drop the milestone — names are project-scoped
+    #[arg(long)]
+    project: Option<String>,
+    /// title for the copy (default: the source's title, unchanged)
+    #[arg(long, allow_hyphen_values = true)]
+    title: Option<String>,
+    /// JSON output (echo the new issue)
+    #[arg(long)]
+    json: bool,
+    /// human output (one-line confirmation; overrides $CLIBAN_OUTPUT and
+    /// pipe detection)
+    #[arg(long, conflicts_with = "json")]
+    table: bool,
+}
+
+#[derive(clap::Args)]
 pub struct ArchiveDoneArgs {
     /// project key
     #[arg(long)]
@@ -490,6 +514,7 @@ pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
         IssueCmd::AppendSection(a) => append_section_cmd(db, a).await,
         IssueCmd::Tick(a) => tick(db, a).await,
         IssueCmd::Promote(a) => promote(db, a).await,
+        IssueCmd::Cp(a) => cp(db, a).await,
         IssueCmd::ArchiveDone(a) => archive_done(db, a).await,
         IssueCmd::Import(a) => import(db, a).await,
         IssueCmd::Mv {
@@ -2036,6 +2061,107 @@ fn build_promoted_line(original: &str, new_key: &str) -> String {
         None => trimmed,
     };
     format!("{trimmed} → {new_key}\n")
+}
+
+/// `issue cp`: duplicate the shape, never the history. The copy gets the
+/// title (unless `--title` overrides), the `## Spec` / `## Plan` / `## Notes`
+/// sections — plan checkboxes reset and promotion pointers stripped by
+/// [`descmd::copy_description`] — plus labels, priority, and (same project
+/// only) the milestone. It starts in backlog, unclaimed, unrelated, undated:
+/// those are facts about the original's run, not about the work's shape.
+async fn cp(db: &Option<String>, a: CpArgs) -> CliResult<()> {
+    let key = parse_issue_key(&a.key)?;
+    let source_project = project_prefix(&key).to_string();
+    let target_project = a
+        .project
+        .map(|p| p.trim().to_uppercase())
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| source_project.clone());
+    let same_project = target_project == source_project;
+
+    let store = store_open::open(db).await?;
+
+    // Read the source's whole shape in one round-trip.
+    let lookup = key.clone();
+    let (src, src_milestone, labels) = store
+        .call(move |conn| {
+            let issue = issues::get_by_key(conn, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+            let milestone = match issue.milestone_id {
+                Some(mid) => milestones::get_by_id(conn, mid)?.map(|m| m.name),
+                None => None,
+            };
+            let labels = issues::label_names(conn, issue.id)?;
+            Ok((issue, milestone, labels))
+        })
+        .await?;
+
+    // Milestone names are project-scoped; a cross-project copy drops it
+    // rather than inventing one in the target project.
+    let milestone_dropped = !same_project && src_milestone.is_some();
+    let milestone = if same_project { src_milestone } else { None };
+    let title = a
+        .title
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| src.title.clone());
+    let description = descmd::copy_description(&src.description);
+    let priority = src.priority.clone();
+
+    // A fresh backlog issue: no parent, no due date, no completed_at — core
+    // `create` never sets those unless asked.
+    let create_project = target_project.clone();
+    let issue = store
+        .call(move |conn| {
+            issues::create(
+                conn,
+                &create_project,
+                CreateIssue {
+                    title,
+                    description: Some(description),
+                    status: None,
+                    priority: Some(priority),
+                    milestone,
+                    parent_key: None,
+                    due_date: None,
+                    position: None,
+                },
+            )
+        })
+        .await?;
+
+    for lbl in labels {
+        let id = issue.id;
+        store
+            .call(move |conn| {
+                let issue = issues::get_by_id(conn, id)?.ok_or(cliban_core::Error::NotFound)?;
+                issues::add_label(conn, &issue, &lbl)
+            })
+            .await?;
+    }
+
+    // Provenance on the copy — and, cross-project, why the milestone is gone.
+    let message = if milestone_dropped {
+        format!("copied from {key} (milestone dropped: names are project-scoped)")
+    } else {
+        format!("copied from {key}")
+    };
+    let id = issue.id;
+    store
+        .call(move |conn| {
+            if let Some(i) = issues::get_by_id(conn, id)? {
+                crate::audit::record(conn, &i, "copy", &message);
+            }
+            Ok(())
+        })
+        .await?;
+
+    // Reload so the labels land in the echo.
+    let reload = issue.key.clone();
+    let issue = store
+        .call(move |conn| issues::get_by_key(conn, &reload))
+        .await?
+        .ok_or(cliban_core::Error::NotFound)?;
+
+    print_issue_result(&store, &issue, "copied", crate::output::mode(a.json, a.table)).await
 }
 
 async fn archive_done(db: &Option<String>, a: ArchiveDoneArgs) -> CliResult<()> {
