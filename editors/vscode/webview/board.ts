@@ -14,6 +14,7 @@ export interface BoardHandlers {
   onOpenIssue(key: string): void;
   onOpenIssueDoc(key: string): void;
   onPickProject(): void;
+  onPickMilestone(): void;
   onRefresh(): void;
   onMoveIssue(key: string, toStatus: Status): void;
   onNewIssue(): void;
@@ -93,13 +94,22 @@ export function renderBoard(root: HTMLElement, msg: BoardMsg, handlers: BoardHan
   const projectBtn = el('button', 'toolbar-btn project-btn', msg.project);
   projectBtn.title = 'Switch project';
   projectBtn.addEventListener('click', () => handlers.onPickProject());
+  const msLabel =
+    msg.milestoneFilter === undefined
+      ? '◇ all'
+      : msg.milestoneFilter === null
+        ? '◇ none'
+        : `◇ ${msg.milestoneFilter}`;
+  const msBtn = el('button', 'toolbar-btn', msLabel);
+  msBtn.title = 'Switch milestone';
+  msBtn.addEventListener('click', () => handlers.onPickMilestone());
   const refreshBtn = el('button', 'toolbar-btn', '↻');
   refreshBtn.title = 'Refresh';
   refreshBtn.addEventListener('click', () => handlers.onRefresh());
   const newBtn = el('button', 'toolbar-btn', '+ New');
   newBtn.title = 'New issue';
   newBtn.addEventListener('click', () => handlers.onNewIssue());
-  toolbar.append(projectBtn, newBtn, refreshBtn);
+  toolbar.append(projectBtn, msBtn, newBtn, refreshBtn);
   root.append(toolbar);
 
   const board = el('div', 'board');

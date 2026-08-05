@@ -28,6 +28,10 @@
         "title": "Cliban: Switch Project"
       },
       {
+        "command": "cliban.switchMilestone",
+        "title": "Cliban: Switch Milestone"
+      },
+      {
         "command": "cliban.refreshBoard",
         "title": "Cliban: Refresh Board"
       },

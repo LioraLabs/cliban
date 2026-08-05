@@ -28,6 +28,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('cliban.switchProject', () => {
       void BoardPanel.get(context, provider).switchProject();
     }),
+    vscode.commands.registerCommand('cliban.switchMilestone', () => {
+      void BoardPanel.get(context, provider).switchMilestone();
+    }),
     vscode.commands.registerCommand('cliban.refreshBoard', () => {
       void BoardPanel.get(context, provider).refresh();
     }),

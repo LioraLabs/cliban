@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as crypto from 'node:crypto';
 import type { HostMsg, WebviewMsg } from '../shared/protocol';
 import type { Status } from '../shared/model';
-import { BoardStore } from './store';
+import { BoardStore, type MilestoneFilter } from './store';
 import {
   ClibanClient,
   ClibanError,
@@ -74,6 +74,7 @@ export class BoardPanel {
           milestones: snap.milestones,
           labels: snap.labels,
           events: snap.events,
+          milestoneFilter: snap.milestoneFilter,
         });
       }
     });
@@ -127,6 +128,9 @@ export class BoardPanel {
         break;
       case 'pickProject':
         await this.switchProject();
+        break;
+      case 'pickMilestone':
+        await this.switchMilestone();
         break;
       case 'openIssue':
         await this.openIssue(msg.key);
@@ -293,6 +297,7 @@ export class BoardPanel {
         this.client.listLabels(project),
         this.client.activity(since, project),
       ]);
+      this.store.setMilestoneFilter(this.persistedMilestoneFilter(project));
       this.store.setBoard(project, issues, milestones, labels);
       this.store.mergeActivity(events);
     } catch (err) {
@@ -304,6 +309,37 @@ export class BoardPanel {
 
   newIssue(): void {
     this.post({ type: 'openCreateForm' });
+  }
+
+  async switchMilestone(): Promise<void> {
+    const snap = this.store.snapshot();
+    if (!snap.project) return;
+    type Item = vscode.QuickPickItem & { filter: MilestoneFilter };
+    const items: Item[] = [
+      { label: 'All milestones', filter: undefined },
+      { label: 'No milestone', description: 'issues not assigned to any milestone', filter: null },
+      ...snap.milestones.map(
+        (m): Item => ({
+          label: `◇ ${m.name}`,
+          description: m.status && m.status !== 'open' ? m.status : '',
+          filter: m.name,
+        }),
+      ),
+    ];
+    const picked = await vscode.window.showQuickPick(items, {
+      placeHolder: 'Filter the board by milestone',
+    });
+    if (!picked) return;
+    await this.context.workspaceState.update(this.milestoneStateKey(snap.project), picked.filter);
+    this.store.setMilestoneFilter(picked.filter);
+  }
+
+  private milestoneStateKey(project: string): string {
+    return `cliban.milestone:${project}`;
+  }
+
+  private persistedMilestoneFilter(project: string): MilestoneFilter {
+    return this.context.workspaceState.get<string | null>(this.milestoneStateKey(project));
   }
 
   async switchProject(): Promise<void> {

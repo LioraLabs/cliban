@@ -42,6 +42,7 @@ cargo install cliban        # or: brew install lioralabs/tap/cliban · AUR: clib
 |---|---|
 | `Cliban: Open Board` | open (or focus) the board panel |
 | `Cliban: Switch Project` | pick the project the board shows |
+| `Cliban: Switch Milestone` | filter the board to one milestone (or none/all) |
 | `Cliban: New Issue` | open the create form |
 | `Cliban: Refresh Board` | re-read everything now |
 | `Cliban: Archive Done Issues` | sweep the Done column (reversible) |

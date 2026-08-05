@@ -103,3 +103,28 @@ test('mergeActivity keeps newest first and caps the feed', () => {
   assert.equal(snap.events.length, 100);
   assert.ok(snap.events[0]!.ts >= snap.events[1]!.ts);
 });
+
+test('milestone filter: all / one / no-milestone', () => {
+  const store = new BoardStore();
+  const a = { ...issue('C-1', 'backlog'), milestone: 'v1' };
+  const b = { ...issue('C-2', 'backlog'), milestone: 'v2' };
+  const c = issue('C-3', 'backlog'); // no milestone
+  store.setBoard('C', [a, b, c], [], []);
+  assert.equal(store.snapshot().issues.length, 3); // undefined = all
+  store.setMilestoneFilter('v1');
+  assert.deepEqual(store.snapshot().issues.map((i) => i.key), ['C-1']);
+  assert.equal(store.snapshot().milestoneFilter, 'v1');
+  store.setMilestoneFilter(null); // no-milestone only
+  assert.deepEqual(store.snapshot().issues.map((i) => i.key), ['C-3']);
+  store.setMilestoneFilter(undefined);
+  assert.equal(store.snapshot().issues.length, 3);
+});
+
+test('milestone filter change notifies listeners', () => {
+  const store = new BoardStore();
+  store.setBoard('C', [{ ...issue('C-1', 'backlog'), milestone: 'v1' }], [], []);
+  let fired = 0;
+  store.onChange(() => fired++);
+  store.setMilestoneFilter('v1');
+  assert.equal(fired, 1);
+});

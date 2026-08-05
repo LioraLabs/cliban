@@ -27,6 +27,7 @@ const handlers = {
   onOpenIssue: (key: string) => vscode.postMessage({ type: 'openIssue', key }),
   onOpenIssueDoc: (key: string) => vscode.postMessage({ type: 'openIssueDoc', key }),
   onPickProject: () => vscode.postMessage({ type: 'pickProject' }),
+  onPickMilestone: () => vscode.postMessage({ type: 'pickMilestone' }),
   onRefresh: () => vscode.postMessage({ type: 'refresh' }),
   onMoveIssue: (key: string, toStatus: Status) =>
     vscode.postMessage({ type: 'moveIssue', requestId: crypto.randomUUID(), key, toStatus }),

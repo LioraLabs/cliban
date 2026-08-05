@@ -23,6 +23,8 @@ export interface BoardMsg {
   milestones: Milestone[];
   labels: Label[];
   events: ActivityEvent[];
+  /** undefined = all; null = no-milestone; string = that milestone. */
+  milestoneFilter?: string | null;
 }
 
 export interface ErrorStateMsg {
@@ -89,6 +91,10 @@ export interface PickProjectMsg {
   type: 'pickProject';
 }
 
+export interface PickMilestoneMsg {
+  type: 'pickMilestone';
+}
+
 export interface OpenIssueMsg {
   type: 'openIssue';
   key: string;
@@ -153,6 +159,7 @@ export type WebviewMsg =
   | ReadyMsg
   | RefreshMsg
   | PickProjectMsg
+  | PickMilestoneMsg
   | OpenIssueMsg
   | OpenIssueDocMsg
   | MoveIssueMsg
