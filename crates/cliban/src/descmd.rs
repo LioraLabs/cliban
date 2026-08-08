@@ -20,55 +20,58 @@ fn errf(msg: String) -> String {
     format!("descmd: {msg}")
 }
 
-/// Locates the N-th task within a plan-section body. Tasks are identified by an
-/// H3 heading of the form "### Task <N>:" at the start of a line. The matching
-/// is exact: a search for Task 1 will not match "### Task 10:" (the trailing
-/// colon in the prefix prevents that). Returns the [start, end) byte offsets of
-/// the task's body — content AFTER the heading line, up to (but excluding) the
-/// next "### " heading or end of input.
-pub fn find_task(plan_body: &str, n: i32) -> (usize, usize, bool) {
-    let prefix = format!("### Task {n}:");
-    let mut offset = 0usize;
-    let mut task_body_start: Option<usize> = None;
-    for line in plan_body.split_inclusive('\n') {
-        let line_len = line.len();
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        match task_body_start {
-            None => {
-                if trimmed.starts_with(&prefix) {
-                    task_body_start = Some(offset + line_len);
-                }
-            }
-            Some(start) => {
-                if trimmed.starts_with("### ") {
-                    return (start, offset, true);
-                }
-            }
-        }
-        offset += line_len;
-    }
-    match task_body_start {
-        None => (0, 0, false),
-        Some(start) => (start, plan_body.len(), true),
-    }
+/// The `### Task N:` headings of a plan body, in order, as
+/// (number, heading range). Anything else at H3 is not a task and is skipped
+/// here — `lint` is what reports it.
+///
+/// Like sections, these come from the markdown grammar rather than a line
+/// prefix, so a `### Task 2:` quoted inside a fenced code block in one task's
+/// body no longer ends that task.
+pub fn task_headings(plan_body: &str) -> Vec<(i32, std::ops::Range<usize>)> {
+    cliban_core::sections::h3_headings(plan_body)
+        .into_iter()
+        .filter_map(|h| task_number(&h.text).map(|n| (n, h.range)))
+        .collect()
 }
 
-/// Number of `### Task N:` headings inside `## Plan` — what lets `tick` and
-/// `promote` infer `--task` when the plan has exactly one.
+/// `Task 3: rewire the parser` → `3`. The colon is required: it is what keeps
+/// a search for Task 1 from matching "Task 10".
+fn task_number(heading_text: &str) -> Option<i32> {
+    heading_text
+        .strip_prefix("Task ")?
+        .split_once(':')
+        .and_then(|(n, _)| n.trim().parse::<i32>().ok())
+}
+
+/// Locates the N-th task within a plan-section body. Tasks are identified by an
+/// H3 heading of the form "### Task <N>:". Returns the [start, end) byte offsets
+/// of the task's body — content AFTER the heading line, up to (but excluding)
+/// the next H3 heading or end of input.
+pub fn find_task(plan_body: &str, n: i32) -> (usize, usize, bool) {
+    // End at the next H3 of any kind, task-shaped or not: a malformed heading
+    // still visually opens a new block, and swallowing it into the previous
+    // task would let `tick` reach steps the author filed under something else.
+    let all_h3 = cliban_core::sections::h3_headings(plan_body);
+    for (i, h) in all_h3.iter().enumerate() {
+        if task_number(&h.text) == Some(n) {
+            let start = h.range.end;
+            let end = all_h3
+                .get(i + 1)
+                .map_or(plan_body.len(), |next| next.range.start);
+            return (start, end, true);
+        }
+    }
+    (0, 0, false)
+}
+
+/// Number of `### Task N:` headings inside `## Plan` — what lets `promote`
+/// infer `--task` when the plan has exactly one.
 pub fn count_tasks(desc: &str) -> usize {
     let (start, end, ok) = find_section(desc, "Plan");
     if !ok {
         return 0;
     }
-    desc[start..end]
-        .lines()
-        .filter(|l| {
-            let t = l.trim_end();
-            t.strip_prefix("### Task ")
-                .and_then(|rest| rest.split(':').next())
-                .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
-        })
-        .count()
+    task_headings(&desc[start..end]).len()
 }
 
 /// One bite-sized step line in a Task body.
@@ -91,26 +94,31 @@ pub struct Step {
 }
 
 /// Locates the M-th step line in a task body. Steps are top-level GFM checkbox
-/// list items: lines beginning with "- [ ] " or "- [x] " at column zero.
-/// Indented child bullets are ignored.
+/// list items: markdown list items whose first line begins with "- [ ] " or
+/// "- [x] ". Child bullets are nested items, not steps, and are ignored.
+///
+/// `raw` is deliberately only the item's *first line*, not its whole markdown
+/// range: a step may own a sublist or a wrapped continuation, and `tick`
+/// splices over `raw`. Taking the full item range would flip the checkbox and
+/// delete the step's children with it.
 pub fn find_step(task_body: &str, m: i32) -> Option<Step> {
-    let mut offset = 0usize;
     let mut count = 0i32;
-    for line in task_body.split_inclusive('\n') {
-        let line_len = line.len();
-        if line.starts_with("- [ ] ") || line.starts_with("- [x] ") {
+    for range in cliban_core::sections::top_level_list_items(task_body) {
+        let item = &task_body[range.clone()];
+        let first_line_len = item.find('\n').map_or(item.len(), |i| i + 1);
+        let raw = &item[..first_line_len];
+        if raw.starts_with("- [ ] ") || raw.starts_with("- [x] ") {
             count += 1;
             if count == m {
                 return Some(Step {
                     index: m,
-                    checked: line.starts_with("- [x] "),
-                    line_start: offset,
-                    line_end: offset + line_len,
-                    raw: line.to_string(),
+                    checked: raw.starts_with("- [x] "),
+                    line_start: range.start,
+                    line_end: range.start + first_line_len,
+                    raw: raw.to_string(),
                 });
             }
         }
-        offset += line_len;
     }
     None
 }
@@ -199,32 +207,78 @@ pub fn append_activity_log(desc: &str, msg: &str, ts: DateTime<Utc>) -> String {
     format!("{}{}{}", &desc[..start], rebuilt, &desc[end..])
 }
 
-/// Reads back the entries [`append_activity_log`] wrote: `- <ts> — <msg>`,
-/// oldest first. Lines that don't match that shape (hand-written prose, an
-/// entry from some other tool) are skipped rather than guessed at.
-pub fn parse_activity_log(desc: &str) -> Vec<(DateTime<Utc>, String)> {
+/// One entry in the `## Activity Log` section — one markdown list item.
+pub struct ActivityEntry {
+    /// The item's first line without its list marker: what an error message
+    /// should quote, and where the timestamp lives.
+    pub head: String,
+    /// Timestamp and message, when the entry has the `- <ts> — <msg>` shape.
+    /// `None` for hand-written prose or an entry from some other tool.
+    pub parsed: Option<(DateTime<Utc>, String)>,
+}
+
+/// Every entry in the `## Activity Log` section, in document order.
+///
+/// An entry is a *markdown list item*, not a line. That distinction is the
+/// whole fix: an indented `- ` beneath an entry is a nested list item and a
+/// wrapped prose line beneath one is a lazy continuation — both belong to the
+/// entry that opened, and scanning lines made the first look like two more
+/// malformed entries and dropped the second on the floor.
+///
+/// The reader and `lint` both come through here, so they cannot disagree about
+/// what an entry is.
+pub fn activity_entries(desc: &str) -> Vec<ActivityEntry> {
     let (start, end, ok) = find_section(desc, "Activity Log");
     if !ok {
         return Vec::new();
     }
-    desc[start..end]
-        .lines()
-        .filter_map(|line| {
-            let rest = line.trim().strip_prefix("- ")?;
-            // The separator is an em dash surrounded by spaces; the timestamp
-            // may not contain one, so the first occurrence is the split point.
-            let (stamp, msg) = rest.split_once(" — ")?;
-            let ts = chrono::NaiveDateTime::parse_from_str(
-                stamp.trim(),
-                // Minute precision, as written; fall back to full RFC3339 for
-                // entries someone recorded by hand.
-                ACTIVITY_LOG_TIME_FORMAT,
-            )
-            .map(|t| t.and_utc())
-            .or_else(|_| DateTime::parse_from_rfc3339(stamp.trim()).map(|t| t.with_timezone(&Utc)))
-            .ok()?;
-            Some((ts, msg.trim().to_string()))
+    let body = &desc[start..end];
+    cliban_core::sections::top_level_list_items(body)
+        .into_iter()
+        .map(|r| {
+            let entry = cliban_core::sections::list_item_body(&body[r]);
+            let (head, rest) = match entry.split_once('\n') {
+                Some((h, r)) => (h.to_string(), Some(r)),
+                None => (entry.clone(), None),
+            };
+            let parsed = parse_entry_head(&head).map(|(ts, msg)| match rest {
+                // The body beneath the first line is part of this entry's
+                // message: a sublist of detail, or the rest of a wrapped
+                // sentence. It is carried through with its nesting intact.
+                Some(rest) if !rest.trim().is_empty() => {
+                    (ts, format!("{msg}\n{}", rest.trim_end()))
+                }
+                _ => (ts, msg),
+            });
+            ActivityEntry { head, parsed }
         })
+        .collect()
+}
+
+/// `2026-08-08T10:00Z — did a thing` → its timestamp and message.
+fn parse_entry_head(head: &str) -> Option<(DateTime<Utc>, String)> {
+    // The separator is an em dash surrounded by spaces; the timestamp may not
+    // contain one, so the first occurrence is the split point.
+    let (stamp, msg) = head.split_once(" — ")?;
+    let ts = chrono::NaiveDateTime::parse_from_str(
+        stamp.trim(),
+        // Minute precision, as written; fall back to full RFC3339 for entries
+        // someone recorded by hand.
+        ACTIVITY_LOG_TIME_FORMAT,
+    )
+    .map(|t| t.and_utc())
+    .or_else(|_| DateTime::parse_from_rfc3339(stamp.trim()).map(|t| t.with_timezone(&Utc)))
+    .ok()?;
+    Some((ts, msg.trim().to_string()))
+}
+
+/// Reads back the entries [`append_activity_log`] wrote: `- <ts> — <msg>`,
+/// oldest first. Entries that don't match that shape are skipped rather than
+/// guessed at.
+pub fn parse_activity_log(desc: &str) -> Vec<(DateTime<Utc>, String)> {
+    activity_entries(desc)
+        .into_iter()
+        .filter_map(|e| e.parsed)
         .collect()
 }
 
@@ -466,6 +520,93 @@ mod tests {
         let out = copy_description("## Spec\n\n## Plan\n\n- [ ] s\n");
         assert_eq!(out, "## Spec\n\n## Plan\n\n- [ ] s\n");
         assert!(!out.contains("\n\n\n"));
+    }
+
+    #[test]
+    fn an_indented_sublist_is_part_of_its_entry() {
+        // Under CommonMark an indented `-` beneath an entry is a nested list
+        // item, not a new entry. It used to parse as two more entries that
+        // failed the `- <ts> — <msg>` shape and were silently dropped, while
+        // lint warned about each one.
+        let d = "## Activity Log\n\n- 2026-08-08T10:00Z — did a thing\n  - detail one\n  \
+                 - detail two\n- 2026-08-08T11:00Z — next thing\n";
+        let out = parse_activity_log(d);
+        assert_eq!(out.len(), 2, "two entries, not four: {out:?}");
+        assert_eq!(
+            out[0].1, "did a thing\n- detail one\n- detail two",
+            "the sublist rides along with its entry"
+        );
+        assert_eq!(out[1].1, "next thing");
+    }
+
+    #[test]
+    fn a_wrapped_prose_line_folds_into_its_entry() {
+        // A plain continuation line is a lazy continuation of the list item.
+        // It used to be dropped outright — the message silently lost its tail.
+        let d = "## Activity Log\n\n- 2026-08-08T11:00Z — wrapped entry that continues\n  \
+                 onto a prose line\n";
+        let out = parse_activity_log(d);
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out[0].1,
+            "wrapped entry that continues\nonto a prose line",
+            "the continuation is not dropped"
+        );
+    }
+
+    #[test]
+    fn an_entry_that_is_not_log_shaped_is_still_reported_once() {
+        let d = "## Activity Log\n\n- yesterday: did stuff\n  - with detail\n";
+        assert!(parse_activity_log(d).is_empty());
+        let entries = activity_entries(d);
+        assert_eq!(entries.len(), 1, "one malformed entry, not two");
+        assert_eq!(entries[0].head, "yesterday: did stuff");
+    }
+
+    #[test]
+    fn a_fenced_log_line_is_not_an_entry() {
+        let d = "## Activity Log\n\n- 2026-08-08T10:00Z — real\n\n```\n- 2026-01-01T00:00Z — fake\n```\n";
+        let out = parse_activity_log(d);
+        assert_eq!(out.len(), 1, "the fenced line is code, not an entry: {out:?}");
+        assert_eq!(out[0].1, "real");
+    }
+
+    #[test]
+    fn a_fenced_task_heading_does_not_end_a_task() {
+        // Same family as the section bug, one level down: a plan step that
+        // quotes the task format used to truncate the task it lives in.
+        let plan = "### Task 1: t\n\n- [ ] **Step 1: a**\n- [ ] **Step 2: b**\n\n```markdown\n\
+                    ### Task 2: not real\n```\n\n- [ ] **Step 3: c**\n";
+        let (s, e, ok) = find_task(plan, 1);
+        assert!(ok);
+        let body = &plan[s..e];
+        assert!(body.contains("Step 3: c"), "task not truncated: {body:?}");
+        assert!(find_step(body, 3).is_some(), "the third step is reachable");
+        assert_eq!(count_tasks(&format!("## Plan\n\n{plan}")), 1);
+    }
+
+    #[test]
+    fn ticking_a_step_that_owns_a_sublist_keeps_its_children() {
+        // find_step reports only the item's first line precisely so that the
+        // tick splice cannot swallow the step's children.
+        let d = "## Plan\n\n### Task 1: t\n\n- [ ] **Step 1: a**\n  - note one\n  - note two\n\
+                 - [ ] **Step 2: b**\n";
+        let out = match tick_step(d, 1, 1).unwrap() {
+            TickOutcome::Ticked(out) => out,
+            TickOutcome::AlreadyChecked => panic!("unchecked step must tick"),
+        };
+        assert!(out.contains("- [x] **Step 1: a**"));
+        assert!(out.contains("  - note one\n  - note two"), "got {out:?}");
+        assert!(out.contains("- [ ] **Step 2: b**"));
+    }
+
+    #[test]
+    fn a_fenced_checkbox_is_not_a_step() {
+        let task = "- [ ] **Step 1: real**\n\n```\n- [ ] fenced, not a step\n```\n\n\
+                    - [ ] **Step 2: also real**\n";
+        assert!(find_step(task, 1).unwrap().raw.contains("real"));
+        assert!(find_step(task, 2).unwrap().raw.contains("also real"));
+        assert!(find_step(task, 3).is_none(), "only two steps exist");
     }
 
     #[test]

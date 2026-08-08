@@ -12,6 +12,7 @@ Scaffold the per-repo binding that every cliban workflow skill — and any third
 - **The adapter** — `docs/agents/issue-tracker.md`, declaring cliban as this repo's issue tracker and recording the four bindings (project key, craft stack, key policy, branch convention)
 - **The pointer** — an `## Agent skills` block in `CLAUDE.md` / `AGENTS.md` so agents find the adapter
 - **The board** — the cliban project itself, created if missing
+- **Stack companions** — for the mattpocock stack, the triage-labels and domain-docs files its own setup skill would have written (step 4), so the user never has to run `setup-matt-pocock-skills` separately
 
 This is a prompt-driven skill, not a deterministic script. Explore, present what you found, confirm with the user, then write.
 
@@ -41,7 +42,7 @@ Read whatever exists; don't assume:
   - `superpowers:*` → superpowers (brainstorming, writing-plans, subagent-driven-development, using-git-worktrees, finishing-a-development-branch)
   - `mattpocock-skills:*` → the mattpocock suite
   - neither prefix anywhere → the stack is "none" (plan mode + the inline stage actions in `cliban-workflow`)
-- **Monorepo signals** — workspace manifests, populated `packages/*`. Only relevant to Section A.
+- **Monorepo signals** — workspace manifests, populated `packages/*`. Relevant to Section A and, for the mattpocock stack, the domain-docs layout in step 4.
 
 ### 2. Present findings and ask
 
@@ -165,7 +166,7 @@ board — never as `Blocked by:` text lines in repo files.
 <the craft-stack paragraph from Section B, expanded with the stack's actual skill names>
 ```
 
-For the **mattpocock-skills** stack, this file doubles as the `docs/agents/issue-tracker.md` their `setup-matt-pocock-skills` skill would have written for an "other" tracker — do not run their setup's Section A on top of it. Their `/wayfinder` skill consults this doc's "Wayfinding operations" section to learn how the repo's tracker expresses maps, tickets, blocking, and claims — without it, wayfinder falls back to a local-markdown tracker and bypasses the board. So for this stack, **also append**:
+For the **mattpocock-skills** stack, this file doubles as the `docs/agents/issue-tracker.md` their `setup-matt-pocock-skills` skill would have written for an "other" tracker — do not run their setup's Section A on top of it (their remaining sections run here as step 4). Their `/wayfinder` skill consults this doc's "Wayfinding operations" section to learn how the repo's tracker expresses maps, tickets, blocking, and claims — without it, wayfinder falls back to a local-markdown tracker and bypasses the board. So for this stack, **also append**:
 
 ```markdown
 ## Wayfinding operations
@@ -192,6 +193,33 @@ Used by `/wayfinder`. The **map** is a cliban issue; its tickets are native sub-
   `cliban issue append-section <MAP-KEY> --section "Decisions so far" "- <name> (<TICKET>) — <gist>"`.
 ```
 
-### 4. Done
+### 4. Companion setup for the mattpocock stack
 
-Tell the user what now reads the binding: every workflow skill resolves the project key, key policy, and branch convention from it; `complete-milestone`'s per-ticket agents plan and execute with the bound craft stack; and the plugin's SessionStart hook starts injecting live board state (current-branch issue, in-progress, blocked) into every session opened in this repo — the adapter's existence is what switches it on. Editing `docs/agents/issue-tracker.md` directly later is fine; re-running this skill is only for switching stacks or starting over.
+Skip this step entirely unless the bound craft stack is **mattpocock-skills**.
+
+The adapter supersedes only Section A (issue tracker) of their `setup-matt-pocock-skills` skill. Their other sections still matter — the engineering skills read the files those sections write — and running their setup separately would risk its Section A clobbering the cliban adapter. So finish their setup here instead.
+
+Locate the installed skill folder (glob `~/.claude/plugins/cache/*/mattpocock-skills/*/skills/engineering/setup-matt-pocock-skills/`), read its `SKILL.md`, and run every section of it **except** the issue-tracker one, following its own process — its file is the source of truth for its own sections; what follows is only orientation, current as of their v1.2:
+
+- **Triage labels** (their Section B; runs only when their `triage` skill is present in the installed version): one question — keep the five canonical default labels? (recommended **yes**; cliban labels are freeform strings, so the defaults need no mapping). Write `docs/agents/triage-labels.md` from their seed template.
+- **Domain docs** (their Section C): default **single-context** — root `CONTEXT.md` + `docs/adr/`, created lazily by their `/domain-modeling`; write it without asking. Offer multi-context only when exploration found monorepo signals. Write `docs/agents/domain.md` from their seed template.
+
+Then extend the same `## Agent skills` pointer block written in step 3 with their sub-blocks (in-place, no duplicates):
+
+```markdown
+### Triage labels
+
+[one-line summary of the label vocabulary]. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+[one-line summary — "single-context" or "multi-context"]. See `docs/agents/domain.md`.
+```
+
+On re-runs, leave existing companion files alone unless the user is deliberately changing them — like the adapter, direct edits to them are blessed.
+
+If the glob finds nothing (stack detected via skills list but cache layout has moved), say so and fall back to pointing the user at `/setup-matt-pocock-skills`, with the instruction to skip its issue-tracker section.
+
+### 5. Done
+
+Tell the user what now reads the binding: every workflow skill resolves the project key, key policy, and branch convention from it; `complete-milestone`'s per-ticket agents plan and execute with the bound craft stack; and the plugin's SessionStart hook starts injecting live board state (current-branch issue, in-progress, blocked) into every session opened in this repo — the adapter's existence is what switches it on. Editing `docs/agents/issue-tracker.md` directly later is fine; re-running this skill is only for switching stacks or starting over. When step 4 ran, also name the companion files it wrote and which of their skills read them.

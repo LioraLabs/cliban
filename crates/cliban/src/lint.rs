@@ -60,9 +60,8 @@ pub fn lint_description(desc: &str) -> Vec<Finding> {
         lint_plan(&desc[plan_start..plan_end], &mut findings);
     }
 
-    let (act_start, act_end, has_activity) = find_section(desc, "Activity Log");
-    if has_activity {
-        lint_activity(&desc[act_start..act_end], &mut findings);
+    if find_section(desc, "Activity Log").2 {
+        lint_activity(desc, &mut findings);
     }
 
     findings
@@ -70,53 +69,58 @@ pub fn lint_description(desc: &str) -> Vec<Finding> {
 
 fn lint_plan(plan: &str, findings: &mut Vec<Finding>) {
     // Every H3 in the plan must be a task heading; collect the numbers, and
-    // track whether we're inside a valid task — a column-zero checkbox outside
-    // one lints clean structurally but `tick` can never address it.
+    // note where the first one starts — a checkbox before it lints clean
+    // structurally but `tick` can never address it.
+    //
+    // Headings and list items come from the markdown grammar (the same source
+    // `tick` reads), so a `### Task 2:` or a `- [X]` quoted inside a fenced
+    // code block is content, not structure, and no longer reported.
     let mut numbers: Vec<i32> = Vec::new();
-    let mut in_task = false;
+    let mut first_task_at: Option<usize> = None;
     let mut unreachable_steps = 0usize;
-    for line in plan.lines() {
-        let trimmed = line.trim_end();
-        if let Some(rest) = trimmed.strip_prefix("### ") {
-            match rest
-                .strip_prefix("Task ")
-                .and_then(|r| r.split_once(':'))
-                .and_then(|(n, _)| n.trim().parse::<i32>().ok())
-            {
-                Some(n) => {
-                    numbers.push(n);
-                    in_task = true;
-                }
-                None => {
-                    err(
-                        findings,
-                        format!("plan heading {trimmed:?} is not \"### Task N: <title>\""),
-                    );
-                    in_task = false;
-                }
+    for h in cliban_core::sections::h3_headings(plan) {
+        match h
+            .text
+            .strip_prefix("Task ")
+            .and_then(|r| r.split_once(':'))
+            .and_then(|(n, _)| n.trim().parse::<i32>().ok())
+        {
+            Some(n) => {
+                numbers.push(n);
+                first_task_at.get_or_insert(h.range.start);
             }
-        }
-        if !in_task && (line.starts_with("- [ ] ") || line.starts_with("- [x] ")) {
-            unreachable_steps += 1;
-        }
-        // Checkbox-ish lines that tick/find_step will not recognize. At column
-        // zero that's a malformed step (error); indented it's a child bullet —
-        // legitimate per the contract, but silently untickable, so worth a
-        // heads-up when it looks like a checkbox.
-        let lstripped = line.trim_start();
-        if line.starts_with("- [") && !line.starts_with("- [ ] ") && !line.starts_with("- [x] ") {
-            err(
-                findings,
-                format!("malformed checkbox {trimmed:?} (want \"- [ ] \" or \"- [x] \")"),
-            );
-        } else if lstripped != line && lstripped.starts_with("- [") {
-            warn(
+            None => err(
                 findings,
                 format!(
-                    "indented checkbox {:?} is a child bullet — tick cannot reach it",
-                    lstripped.trim_end()
+                    "plan heading {:?} is not \"### Task N: <title>\"",
+                    plan[h.range.clone()].trim_end()
                 ),
+            ),
+        }
+    }
+
+    for item in cliban_core::sections::list_items(plan) {
+        let src = &plan[item.range.clone()];
+        let first_line = src.split_once('\n').map_or(src, |(l, _)| l).trim_end();
+        if !first_line.starts_with("- [") {
+            continue;
+        }
+        let well_formed = first_line.starts_with("- [ ] ") || first_line.starts_with("- [x] ");
+        // Checkboxes tick/find_step will not recognize. At the top level that's
+        // a malformed step (error); nested it's a child bullet — legitimate per
+        // the contract, but silently untickable, so worth a heads-up.
+        if item.depth > 0 {
+            warn(
+                findings,
+                format!("indented checkbox {first_line:?} is a child bullet — tick cannot reach it"),
             );
+        } else if !well_formed {
+            err(
+                findings,
+                format!("malformed checkbox {first_line:?} (want \"- [ ] \" or \"- [x] \")"),
+            );
+        } else if first_task_at.is_none_or(|at| item.range.start < at) {
+            unreachable_steps += 1;
         }
     }
 
@@ -155,24 +159,16 @@ fn lint_plan(plan: &str, findings: &mut Vec<Finding>) {
     }
 }
 
-fn lint_activity(activity: &str, findings: &mut Vec<Finding>) {
-    for line in activity.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("- ") {
-            continue;
-        }
-        let parses = trimmed
-            .strip_prefix("- ")
-            .and_then(|rest| rest.split_once(" — "))
-            .map(|(stamp, _)| {
-                chrono::NaiveDateTime::parse_from_str(stamp.trim(), "%Y-%m-%dT%H:%MZ").is_ok()
-                    || chrono::DateTime::parse_from_rfc3339(stamp.trim()).is_ok()
-            })
-            .unwrap_or(false);
-        if !parses {
+/// `desc` rather than the section slice: the entry parser locates
+/// `## Activity Log` itself, and routing lint through the very function the
+/// reader uses is what stops the two from disagreeing about what an entry is.
+fn lint_activity(desc: &str, findings: &mut Vec<Finding>) {
+    for entry in crate::descmd::activity_entries(desc) {
+        if entry.parsed.is_none() {
+            let head = &entry.head;
             warn(
                 findings,
-                format!("activity entry {trimmed:?} does not parse as \"- <ts> — <msg>\""),
+                format!("activity entry \"- {head}\" does not parse as \"- <ts> — <msg>\""),
             );
         }
     }
@@ -267,5 +263,43 @@ mod tests {
         let f = lint_description(d);
         assert_eq!(f.len(), 2, "{f:?}"); // missing-spec warning + activity warning
         assert!(f.iter().all(|f| f.severity == Severity::Warning));
+    }
+
+    #[test]
+    fn a_sublist_under_a_log_entry_is_not_a_malformed_entry() {
+        // The reported bug: detail bullets beneath an entry drew one spurious
+        // "does not parse" warning each.
+        let d = "## Spec\n\ns\n\n## Activity Log\n\n- 2026-08-08T10:00Z — did a thing\n  \
+                 - detail one\n  - detail two\n";
+        let f = lint_description(d);
+        assert!(f.is_empty(), "sublists are entry body, not entries: {f:?}");
+    }
+
+    #[test]
+    fn a_wrapped_log_entry_is_not_flagged() {
+        let d = "## Spec\n\ns\n\n## Activity Log\n\n- 2026-08-08T10:00Z — a long entry that\n  \
+                 wraps onto another line\n";
+        assert!(lint_description(d).is_empty(), "{:?}", lint_description(d));
+    }
+
+    #[test]
+    fn a_fenced_plan_is_content_not_structure() {
+        // A spec-shaped plan quoting the contract used to draw a malformed
+        // checkbox error and a bogus task heading error from inside a fence.
+        let d = "## Spec\n\ns\n\n## Plan\n\n### Task 1: a\n\n- [ ] **Step 1: x**\n\n\
+                 The format is:\n\n```markdown\n### Step one\n\n- [X] not a real checkbox\n```\n";
+        let f = lint_description(d);
+        assert!(f.is_empty(), "fenced content must not lint: {f:?}");
+    }
+
+    #[test]
+    fn steps_after_a_fenced_block_still_count_as_inside_the_task() {
+        let d = "## Spec\n\ns\n\n## Plan\n\n### Task 1: a\n\n```\n### Task 9: fake\n```\n\n\
+                 - [ ] **Step 1: x**\n";
+        let f = lint_description(d);
+        assert!(
+            !f.iter().any(|f| f.message.contains("tick cannot reach")),
+            "{f:?}"
+        );
     }
 }

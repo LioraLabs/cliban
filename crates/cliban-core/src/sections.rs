@@ -10,6 +10,123 @@
 //! disturb the `## Plan` an agent has been ticking. Two implementations of
 //! "where does this section end" would eventually disagree, and the symptom
 //! would be a silently eaten plan.
+//!
+//! # Why a real markdown parser
+//!
+//! Boundaries used to be found by scanning lines for a `## ` prefix. That
+//! cannot see block structure, so a column-zero `##` inside a fenced code
+//! block read as a section boundary: it truncated `## Spec`, hid the real
+//! `## Plan` behind a fake one, and `lint` reported the issue as clean while
+//! `tick` failed with "no Task 1 in ## Plan". Whether a line is a heading is a
+//! grammar question, so pulldown-cmark answers it.
+//!
+//! The parser is used only to *classify* — the `[start, end)` byte offsets it
+//! yields still slice out of the original string, so every mutation here stays
+//! a splice and round-trips byte-identically. The storage layer is unchanged.
+//!
+//! # What counts as a section heading
+//!
+//! An ATX `## Anchor` at column zero, at the top level of the document.
+//! pulldown-cmark decides whether such a line is a heading *at all* (inside a
+//! fence, an indented code block, or link text it is not). The three extra
+//! restrictions are deliberate, and each one keeps a construct that parses
+//! fine today from silently becoming a new boundary:
+//!
+//!   * **ATX only.** `Plan\n----` is an H2 in CommonMark, but the writers here
+//!     only ever emit `## Plan`, and promoting setext would split any
+//!     description with a `---` rule under a line of prose.
+//!   * **Column zero only.** CommonMark allows up to three spaces of
+//!     indentation. The writers emit none.
+//!   * **Top level only.** A heading nested in a list item or blockquote
+//!     belongs to that block, not to the document's section sequence.
+//!
+//! Net effect: this module is strictly better at rejecting things that were
+//! never headings, and recognizes exactly the same set of real ones as before.
+
+use std::ops::Range;
+
+use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag};
+
+/// Extensions to parse with. Deliberately none: every construct these bugs
+/// turn on — fenced code, indented code, lists, lazy continuation — is core
+/// CommonMark, and an extension can only add new ways for a block to swallow a
+/// heading.
+fn options() -> Options {
+    Options::empty()
+}
+
+/// A heading: its text (the part after the `##` marker) and the byte range of
+/// the heading line, including its trailing newline when it has one.
+pub struct Heading {
+    pub text: String,
+    pub range: Range<usize>,
+}
+
+/// Every top-level ATX heading of `level` in `src`, in document order.
+///
+/// H2 delimits sections; H3 delimits `### Task N:` inside a plan. Both need
+/// the same "is this really a heading" answer, so both come from here.
+fn atx_headings(src: &str, level: HeadingLevel) -> Vec<Heading> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    for (ev, range) in Parser::new_ext(src, options()).into_offset_iter() {
+        match ev {
+            Event::Start(Tag::Heading { level: got, .. }) => {
+                // `depth` is the nesting level *before* this block opens, so
+                // zero means the heading is a direct child of the document.
+                if got == level && depth == 0 && at_line_start(src, range.start) {
+                    if let Some(text) = atx_text(&src[range.clone()], level) {
+                        out.push(Heading { text, range });
+                    }
+                }
+                depth += 1;
+            }
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth -= 1,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Every top-level ATX H2 in `desc`, in document order.
+fn headings(desc: &str) -> Vec<Heading> {
+    atx_headings(desc, HeadingLevel::H2)
+}
+
+/// Every top-level ATX H3 in `src`, in document order — the `### Task N:`
+/// headings of a plan body. Exposed so the CLI's plan parsing and `lint` share
+/// this module's answer instead of re-deriving it from line prefixes.
+pub fn h3_headings(src: &str) -> Vec<Heading> {
+    atx_headings(src, HeadingLevel::H3)
+}
+
+/// Whether `offset` sits at the beginning of a line — the column-zero rule.
+fn at_line_start(desc: &str, offset: usize) -> bool {
+    offset == 0 || desc.as_bytes()[offset - 1] == b'\n'
+}
+
+/// The text of an ATX heading, or `None` for a setext heading
+/// (`Anchor\n----`), which carries no `#` marker to strip.
+fn atx_text(heading_src: &str, level: HeadingLevel) -> Option<String> {
+    let marker = "#".repeat(level as usize);
+    let rest = heading_src.strip_prefix(&marker)?;
+    // CommonMark requires whitespace (or end of line) after the marker.
+    if !rest.is_empty() && !rest.starts_with([' ', '\t', '\n', '\r']) {
+        return None;
+    }
+    let text = rest.trim_end_matches(['\n', '\r']).trim();
+    // An optional closing sequence: `## Spec ##` names the same section as
+    // `## Spec`. It only closes when preceded by whitespace.
+    let closed = text.trim_end_matches('#');
+    let text = if closed.len() != text.len() && (closed.is_empty() || closed.ends_with([' ', '\t']))
+    {
+        closed.trim_end()
+    } else {
+        text
+    };
+    Some(text.to_string())
+}
 
 /// Locates a top-level H2 section by its exact anchor text (the part after
 /// "## "). Returns the `[start, end)` byte offsets of the section's *content* —
@@ -18,37 +135,22 @@
 ///
 /// Matching rules:
 ///   - Anchor match is case-sensitive and exact (no leading/trailing spaces).
-///   - The heading must appear at the start of a line.
+///   - The heading must be a real markdown heading — see the module docs.
 ///   - Content includes the leading newline after the heading and the trailing
 ///     newlines up to the next `## ` heading.
 pub fn find_section(desc: &str, anchor: &str) -> (usize, usize, bool) {
     if anchor.is_empty() {
         return (0, 0, false);
     }
-    let needle = format!("## {anchor}");
-    let mut offset = 0usize;
-    let mut section_content_start: Option<usize> = None;
-    for line in desc.split_inclusive('\n') {
-        let line_len = line.len();
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        match section_content_start {
-            None => {
-                if trimmed == needle {
-                    section_content_start = Some(offset + line_len);
-                }
-            }
-            Some(start) => {
-                if trimmed.starts_with("## ") {
-                    return (start, offset, true);
-                }
-            }
+    let headings = headings(desc);
+    for (i, h) in headings.iter().enumerate() {
+        if h.text == anchor {
+            let start = h.range.end;
+            let end = headings.get(i + 1).map_or(desc.len(), |next| next.range.start);
+            return (start, end, true);
         }
-        offset += line_len;
     }
-    match section_content_start {
-        None => (0, 0, false),
-        Some(start) => (start, desc.len(), true),
-    }
+    (0, 0, false)
 }
 
 /// Replace the body of `anchor`'s section with `body`, leaving every other
@@ -105,38 +207,140 @@ pub fn append_section(desc: &str, anchor: &str, text: &str) -> String {
 /// leading H2 matching the target anchor (case-insensitive) is stripped, and
 /// any other H2 anywhere in the payload is an error naming the line — body
 /// text cannot contain section boundaries.
+///
+/// Only H2s that would actually become boundaries count. A `## Plan` inside a
+/// fenced code block is a payload an agent legitimately wants to store (a spec
+/// quoting the plan format), and rejecting it was the same over-recognition
+/// bug wearing a different hat.
 pub fn sanitize_section_body(anchor: &str, body: &str) -> Result<String, String> {
-    let mut lines = body.lines();
-    let mut kept: Vec<&str> = Vec::new();
-    let mut first_content_seen = false;
-    for line in &mut lines {
-        let trimmed = line.trim_end();
-        if let Some(heading) = trimmed.strip_prefix("## ") {
-            if !first_content_seen && heading.trim().eq_ignore_ascii_case(anchor) {
-                // The payload restated its own heading; drop it.
-                continue;
-            }
-            return Err(format!(
-                "section payload contains an H2 heading {trimmed:?} — a section holds body \
-                 text only; an embedded H2 would terminate it and the content after would \
-                 silently leave the section"
-            ));
-        }
-        if !trimmed.is_empty() {
-            first_content_seen = true;
-        }
-        kept.push(line);
+    let headings = headings(body);
+    let Some(first) = headings.first() else {
+        return Ok(body.trim_start_matches('\n').trim_end().to_string());
+    };
+
+    // Is the first heading a restatement of the target anchor, before any
+    // other content? Then drop it and keep what follows.
+    let leading = body[..first.range.start].trim().is_empty();
+    if leading && first.text.eq_ignore_ascii_case(anchor) {
+        let rest = &body[first.range.end..];
+        return match headings.get(1) {
+            Some(next) => Err(embedded_h2(&body[next.range.clone()])),
+            None => Ok(rest.trim_start_matches('\n').trim_end().to_string()),
+        };
     }
-    Ok(kept.join("\n").trim_start_matches('\n').to_string())
+    Err(embedded_h2(&body[first.range.clone()]))
+}
+
+fn embedded_h2(heading_src: &str) -> String {
+    let trimmed = heading_src.trim_end();
+    format!(
+        "section payload contains an H2 heading {trimmed:?} — a section holds body \
+         text only; an embedded H2 would terminate it and the content after would \
+         silently leave the section"
+    )
 }
 
 /// Every H2 anchor in the description, in order. What "sections: ..." error
 /// messages list so a caller can see what actually exists.
 pub fn h2_anchors(desc: &str) -> Vec<String> {
-    desc.lines()
-        .filter_map(|l| l.trim_end().strip_prefix("## "))
-        .map(str::to_string)
+    headings(desc).into_iter().map(|h| h.text).collect()
+}
+
+/// One list item: how deeply nested it is (0 = top level) and its byte range.
+pub struct ListItem {
+    pub depth: usize,
+    pub range: Range<usize>,
+}
+
+/// Every list item in `body`, in document order, with its nesting depth.
+///
+/// The ranges are what a markdown parser considers one item, which is the
+/// whole point: an indented `- ` under an entry is a *nested list item* and a
+/// non-indented prose line following one is a *lazy continuation*. Both belong
+/// to the item that opened, and both used to be scanned as separate top-level
+/// lines — the first producing spurious "does not parse" warnings, the second
+/// silently dropping the text.
+pub fn list_items(body: &str) -> Vec<ListItem> {
+    let mut out = Vec::new();
+    // Nesting depth in *lists*, not in blocks: a list inside a blockquote
+    // still has top-level items as far as its own structure goes, and the
+    // callers here care about "is this a child bullet of another bullet".
+    let mut list_depth = 0usize;
+    for (ev, range) in Parser::new_ext(body, options()).into_offset_iter() {
+        match ev {
+            Event::Start(Tag::List(_)) => list_depth += 1,
+            Event::End(pulldown_cmark::TagEnd::List(_)) => list_depth -= 1,
+            Event::Start(Tag::Item) => out.push(ListItem {
+                depth: list_depth.saturating_sub(1),
+                range,
+            }),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The top-level list items of `body`, as byte ranges into it.
+pub fn top_level_list_items(body: &str) -> Vec<Range<usize>> {
+    list_items(body)
+        .into_iter()
+        .filter(|i| i.depth == 0)
+        .map(|i| i.range)
         .collect()
+}
+
+/// Split one list item's source into its marker and its body, with
+/// continuation lines dedented to the item's content column.
+///
+/// `- 2026-01-01T00:00Z — did a thing\n  - detail\n` yields
+/// `"2026-01-01T00:00Z — did a thing\n- detail"`: the entry's own text, with
+/// the structure beneath it intact and re-indentable.
+pub fn list_item_body(item_src: &str) -> String {
+    let mut lines = item_src.lines();
+    let Some(first) = lines.next() else {
+        return String::new();
+    };
+    // The marker is leading whitespace, a bullet, then whitespace. Whatever
+    // follows starts the content column.
+    let after_indent = first.trim_start();
+    let indent = first.len() - after_indent.len();
+    let after_bullet = match after_indent.strip_prefix(['-', '*', '+']) {
+        Some(rest) => rest,
+        // An ordered item (`1.`): take digits, then the delimiter.
+        None => {
+            let digits = after_indent
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(after_indent.len());
+            after_indent[digits..]
+                .strip_prefix(['.', ')'])
+                .unwrap_or(&after_indent[digits..])
+        }
+    };
+    let content = after_bullet.trim_start();
+    let content_col = indent + (after_indent.len() - content.len());
+
+    let mut out = String::with_capacity(item_src.len());
+    out.push_str(content);
+    for line in lines {
+        out.push('\n');
+        // Strip exactly the item's content indent; anything deeper is real
+        // nesting and survives.
+        let stripped = strip_indent(line, content_col);
+        out.push_str(stripped);
+    }
+    out.trim_end().to_string()
+}
+
+/// Remove up to `n` leading spaces (tabs count as one) from `line`.
+fn strip_indent(line: &str, n: usize) -> &str {
+    let mut cut = 0;
+    for (i, ch) in line.char_indices() {
+        if cut >= n || (ch != ' ' && ch != '\t') {
+            return &line[i..];
+        }
+        cut += 1;
+    }
+    ""
 }
 
 /// Squeeze runs of 3+ newlines down to 2. Markdown treats them the same, and
@@ -291,5 +495,133 @@ mod tests {
         }
         assert!(!d.contains("\n\n\n"), "blank-line drift: {d:?}");
         assert!(d.contains("## Plan\n\np\n"));
+    }
+
+    // ---- block structure: things that look like headings but are not ----
+
+    #[test]
+    fn a_heading_inside_a_code_fence_is_not_a_boundary() {
+        // The bug this module was rewritten for. The fenced `## Plan` used to
+        // truncate Spec and shadow the real plan; tick then failed with
+        // "no Task 1 in ## Plan" while lint reported the issue clean.
+        let d = "## Spec\n\nFormat:\n\n```markdown\n## Plan\n\nnot real\n```\n\nstill spec.\n\n\
+                 ## Plan\n\n### Task 1: t\n\n- [ ] **Step 1: x**\n";
+        let (s, e, ok) = find_section(d, "Spec");
+        assert!(ok);
+        let spec = &d[s..e];
+        assert!(spec.contains("```markdown"), "fence stays in Spec: {spec:?}");
+        assert!(spec.contains("still spec."), "Spec not truncated: {spec:?}");
+
+        let (s, e, ok) = find_section(d, "Plan");
+        assert!(ok);
+        assert!(
+            d[s..e].contains("### Task 1: t"),
+            "the real plan is the one found: {:?}",
+            &d[s..e]
+        );
+        assert_eq!(h2_anchors(d), vec!["Spec", "Plan"]);
+    }
+
+    #[test]
+    fn a_tilde_fence_hides_headings_too() {
+        let d = "## Spec\n\n~~~\n## Plan\n~~~\n\ntail\n";
+        assert_eq!(h2_anchors(d), vec!["Spec"]);
+        let (s, e, _) = find_section(d, "Spec");
+        assert!(d[s..e].contains("tail"));
+    }
+
+    #[test]
+    fn a_heading_inside_an_indented_code_block_is_not_a_boundary() {
+        let d = "## Spec\n\nExample:\n\n    ## Plan\n\n    indented code\n\nstill spec.\n";
+        assert_eq!(h2_anchors(d), vec!["Spec"]);
+        let (s, e, ok) = find_section(d, "Spec");
+        assert!(ok);
+        assert!(d[s..e].contains("still spec."));
+    }
+
+    #[test]
+    fn a_hash_inside_link_text_is_not_a_boundary() {
+        let d = "## Spec\n\nSee [## Plan](http://example.test/x) and [#42](http://y).\n";
+        assert_eq!(h2_anchors(d), vec!["Spec"]);
+        let (s, e, _) = find_section(d, "Spec");
+        assert!(d[s..e].contains("http://y"));
+    }
+
+    #[test]
+    fn a_heading_nested_in_a_list_or_quote_is_not_a_boundary() {
+        // Indented under a list item, or quoted — both belong to that block,
+        // not to the document's section sequence.
+        let d = "## Spec\n\n- item\n  ## Plan\n\n> ## Notes\n\ntail\n";
+        assert_eq!(h2_anchors(d), vec!["Spec"]);
+    }
+
+    #[test]
+    fn setext_and_indented_headings_stay_out_of_the_contract() {
+        // Both are H2s in CommonMark. The writers emit neither, and promoting
+        // them would split descriptions that parse fine today — so the
+        // contract stays "ATX at column zero". Pinned deliberately.
+        assert_eq!(h2_anchors("## Spec\n\nPlan\n----\n\nbody\n"), vec!["Spec"]);
+        assert_eq!(h2_anchors("## Spec\n\n   ## Plan\n\nbody\n"), vec!["Spec"]);
+    }
+
+    #[test]
+    fn a_closing_sequence_names_the_same_section() {
+        let d = "## Spec ##\n\nbody\n\n## Plan\n";
+        assert_eq!(h2_anchors(d), vec!["Spec", "Plan"]);
+        let (s, e, ok) = find_section(d, "Spec");
+        assert!(ok);
+        assert_eq!(&d[s..e], "\nbody\n\n");
+    }
+
+    #[test]
+    fn sanitize_allows_a_fenced_heading_in_the_payload() {
+        // A spec that quotes the plan format is a legitimate payload; the old
+        // line scan rejected it as an embedded boundary.
+        let body = "The plan format is:\n\n```markdown\n## Plan\n\n### Task 1: x\n```\n";
+        let out = sanitize_section_body("Spec", body).unwrap();
+        assert!(out.contains("## Plan"), "fenced heading survives: {out:?}");
+    }
+
+    #[test]
+    fn replace_section_does_not_eat_a_following_fenced_heading() {
+        let d = "## Spec\n\nold\n\n## Notes\n\n```\n## Plan\n```\n";
+        let out = replace_section(d, "Spec", "new");
+        assert!(out.contains("new"));
+        assert!(out.contains("```\n## Plan\n```"), "got {out:?}");
+        assert_eq!(h2_anchors(&out), vec!["Spec", "Notes"]);
+    }
+
+    // ---- list items ----
+
+    #[test]
+    fn a_sublist_belongs_to_the_item_that_opened_it() {
+        let body = "- 2026-08-08T10:00Z — did a thing\n  - detail one\n  - detail two\n\
+                    - 2026-08-08T11:00Z — next\n";
+        let items = top_level_list_items(body);
+        assert_eq!(items.len(), 2, "nested bullets are not top-level items");
+        assert!(body[items[0].clone()].contains("detail two"));
+        assert_eq!(
+            list_item_body(&body[items[0].clone()]),
+            "2026-08-08T10:00Z — did a thing\n- detail one\n- detail two"
+        );
+    }
+
+    #[test]
+    fn a_lazy_continuation_folds_into_its_item() {
+        let body = "- 2026-08-08T11:00Z — wrapped entry that continues\n  onto a prose line\n";
+        let items = top_level_list_items(body);
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            list_item_body(&body[items[0].clone()]),
+            "2026-08-08T11:00Z — wrapped entry that continues\nonto a prose line"
+        );
+    }
+
+    #[test]
+    fn list_item_body_handles_the_marker_shapes_markdown_allows() {
+        assert_eq!(list_item_body("* starred\n"), "starred");
+        assert_eq!(list_item_body("+ plussed\n"), "plussed");
+        assert_eq!(list_item_body("1. numbered\n"), "numbered");
+        assert_eq!(list_item_body("- \n"), "");
     }
 }
