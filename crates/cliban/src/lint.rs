@@ -107,7 +107,9 @@ fn lint_plan(plan: &str, findings: &mut Vec<Finding>) {
         if item.depth > 0 {
             warn(
                 findings,
-                format!("indented checkbox {first_line:?} is a child bullet — tick cannot reach it"),
+                format!(
+                    "indented checkbox {first_line:?} is a child bullet — tick cannot reach it"
+                ),
             );
         } else if !well_formed {
             err(

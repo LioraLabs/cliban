@@ -24,17 +24,38 @@ fn out(o: &std::process::Output) -> String {
 }
 
 fn db_at(tag: &str) -> std::path::PathBuf {
-    let root = std::env::temp_dir().join(format!("cliban_canonical_plan_{tag}_{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!(
+        "cliban_canonical_plan_{tag}_{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let db = root.join("board.db");
-    assert!(run(&db, &["project", "add", "CP", "Canonical"]).status.success());
+    assert!(run(&db, &["project", "add", "CP", "Canonical"])
+        .status
+        .success());
     db
 }
 
 fn add(db: &std::path::Path, title: &str, desc: &str) -> String {
-    let o = run(db, &["issue", "add", title, "-p", "CP", "--description", desc, "--json"]);
-    assert!(o.status.success(), "add failed: {}", String::from_utf8_lossy(&o.stderr));
+    let o = run(
+        db,
+        &[
+            "issue",
+            "add",
+            title,
+            "-p",
+            "CP",
+            "--description",
+            desc,
+            "--json",
+        ],
+    );
+    assert!(
+        o.status.success(),
+        "add failed: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
     serde_json::from_str::<serde_json::Value>(&out(&o)).unwrap()["key"]
         .as_str()
         .unwrap()
@@ -70,7 +91,11 @@ fn a_flat_plan_is_stored_with_its_implicit_task_one() {
 
     // …and `tick` can now address the steps it previously refused.
     let tick = run(&db, &["issue", "tick", &key, "--task", "1", "--step", "1"]);
-    assert!(tick.status.success(), "tick: {}", String::from_utf8_lossy(&tick.stderr));
+    assert!(
+        tick.status.success(),
+        "tick: {}",
+        String::from_utf8_lossy(&tick.stderr)
+    );
     assert!(plan_of(&db, &key).contains("- [x] first"));
 }
 
@@ -136,7 +161,11 @@ fn tick_still_infers_the_task_when_the_plan_has_exactly_one() {
     // load-bearing. Every flat plan an agent writes now becomes an
     // exactly-one-task plan, so this is the path those issues tick through.
     let db = db_at("infer");
-    let key = add(&db, "Single task", "## Spec\n\ns\n\n## Plan\n\n- [ ] only step\n");
+    let key = add(
+        &db,
+        "Single task",
+        "## Spec\n\ns\n\n## Plan\n\n- [ ] only step\n",
+    );
     let o = run(&db, &["issue", "tick", &key, "--step", "1", "--json"]);
     assert!(
         o.status.success(),

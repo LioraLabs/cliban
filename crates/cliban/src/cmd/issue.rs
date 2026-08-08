@@ -168,8 +168,8 @@ pub struct LsArgs {
     #[arg(long, short = 's')]
     status: Option<String>,
     /// priority filter
-    #[arg(long)]
-    priority: Option<String>,
+    #[arg(long, value_enum, ignore_case = true)]
+    priority: Option<Priority>,
     /// milestone filter
     #[arg(long, short = 'm')]
     milestone: Option<String>,
@@ -234,8 +234,8 @@ pub struct AddArgs {
     #[arg(long, short = 'm')]
     milestone: Option<String>,
     /// priority
-    #[arg(long)]
-    priority: Option<String>,
+    #[arg(long, value_enum, ignore_case = true)]
+    priority: Option<Priority>,
     /// status
     #[arg(long, short = 's')]
     status: Option<String>,
@@ -279,8 +279,8 @@ pub struct EditArgs {
     #[arg(long = "description-file")]
     description_file: Option<String>,
     /// new priority
-    #[arg(long)]
-    priority: Option<String>,
+    #[arg(long, value_enum, ignore_case = true)]
+    priority: Option<Priority>,
     /// new milestone
     #[arg(long, short = 'm')]
     milestone: Option<String>,
@@ -662,8 +662,44 @@ fn parse_status(s: &str) -> Result<String, CliError> {
     }
 }
 
+/// The `--priority` flag's value set, so clap lists the spellings in `--help`,
+/// rejects anything else itself, and shell completions offer them.
+///
+/// It used to be a bare `String`, and the paths disagreed about what a
+/// priority was: `edit`, `ls`, and `import` ran it through [`parse_priority`]
+/// (trim + lowercase), while `add` passed the raw string to core's exact,
+/// case-sensitive check. `--priority "  HIGH "` was therefore accepted by
+/// `edit` and rejected by `add`, and `add`'s rejection did not even name the
+/// valid values. One value set now covers every flag.
+///
+/// The variants are the CLI's spelling of [`ISSUE_PRIORITIES`]; the test at
+/// the bottom of this file fails if the two ever drift apart.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum Priority {
+    None,
+    Low,
+    Medium,
+    High,
+    Urgent,
+}
+
+impl Priority {
+    /// The stored spelling — what goes in the DB column.
+    fn as_str(self) -> &'static str {
+        match self {
+            Priority::None => "none",
+            Priority::Low => "low",
+            Priority::Medium => "medium",
+            Priority::High => "high",
+            Priority::Urgent => "urgent",
+        }
+    }
+}
+
 /// `domain.ParsePriority`: lowercase+trim, must be a known priority. Plain
-/// (exit-3) error.
+/// (exit-3) error. Still reached by `import`, whose priorities come from a
+/// TSV/JSON field rather than a command-line flag and so never pass through
+/// clap's value parsing.
 fn parse_priority(s: &str) -> Result<String, CliError> {
     let norm = s.trim().to_lowercase();
     if ISSUE_PRIORITIES.contains(&norm.as_str()) {
@@ -810,7 +846,7 @@ async fn add(db: &Option<String>, a: AddArgs) -> CliResult<()> {
 
     // Step 1: create the issue (core validates status/priority/milestone/parent).
     let milestone = a.milestone.filter(|m| !m.is_empty());
-    let priority = a.priority.filter(|p| !p.is_empty());
+    let priority = a.priority.map(|p| p.as_str().to_string());
     let status = a.status.filter(|s| !s.is_empty());
     let create_project = project_key.clone();
     let mut issue = store
@@ -1118,10 +1154,7 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
         Some(s) if !s.is_empty() => Some(parse_status(s)?),
         _ => None,
     };
-    let priority = match &a.priority {
-        Some(p) if !p.is_empty() => Some(parse_priority(p)?),
-        _ => None,
-    };
+    let priority = a.priority.map(|p| p.as_str().to_string());
     let parent_key = match &a.parent {
         Some(p) if !p.is_empty() => Some(parse_issue_key(p)?),
         _ => None,
@@ -1276,7 +1309,7 @@ async fn run_search(db: &Option<String>, a: &LsArgs, query: String) -> CliResult
         label: a.label.clone(),
         milestone: a.milestone.clone(),
         status: a.status.clone(),
-        priority: a.priority.clone(),
+        priority: a.priority.map(|p| p.as_str().to_string()),
         parent: a.parent.clone(),
         include_archived: a.archived,
         exclude_subs: a.no_subs,
@@ -1452,10 +1485,7 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
     };
 
     let title = a.title.clone(); // --title given → Some (even if "")
-    let priority = match &a.priority {
-        Some(p) => Some(parse_priority(p)?),
-        None => None,
-    };
+    let priority = a.priority.map(|p| p.as_str().to_string());
     let due_date: Option<Option<chrono::NaiveDate>> = if a.clear_due {
         Some(None)
     } else if let Some(d) = &a.due {
@@ -3012,4 +3042,36 @@ async fn append_section_cmd(db: &Option<String>, a: AppendSectionArgs) -> CliRes
         crate::output::mode(a.json, a.table),
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::ValueEnum;
+
+    #[test]
+    fn the_priority_flag_offers_exactly_what_the_store_accepts() {
+        // The CLI enum and core's inclusion check are two spellings of one
+        // value set. If they drift, `--priority` either advertises a value the
+        // store rejects or hides one it accepts.
+        let from_flag: Vec<&str> = Priority::value_variants()
+            .iter()
+            .map(|p| p.as_str())
+            .collect();
+        assert_eq!(from_flag, ISSUE_PRIORITIES);
+
+        // …and clap's own spelling of each variant matches the stored one, so
+        // what a user types is what lands in the column.
+        for p in Priority::value_variants() {
+            let shown = p.to_possible_value().expect("not skipped");
+            assert_eq!(shown.get_name(), p.as_str());
+        }
+    }
+
+    #[test]
+    fn priority_rank_orders_every_variant() {
+        let mut ranked: Vec<&str> = ISSUE_PRIORITIES.to_vec();
+        ranked.sort_by_key(|p| priority_rank(p));
+        assert_eq!(ranked, ["none", "low", "medium", "high", "urgent"]);
+    }
 }

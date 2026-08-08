@@ -539,8 +539,7 @@ mod tests {
         let out = parse_activity_log(d);
         assert_eq!(out.len(), 1);
         assert_eq!(
-            out[0].1,
-            "wrapped entry that continues\nonto a prose line",
+            out[0].1, "wrapped entry that continues\nonto a prose line",
             "the continuation is not dropped"
         );
     }
@@ -558,7 +557,11 @@ mod tests {
     fn a_fenced_log_line_is_not_an_entry() {
         let d = "## Activity Log\n\n- 2026-08-08T10:00Z — real\n\n```\n- 2026-01-01T00:00Z — fake\n```\n";
         let out = parse_activity_log(d);
-        assert_eq!(out.len(), 1, "the fenced line is code, not an entry: {out:?}");
+        assert_eq!(
+            out.len(),
+            1,
+            "the fenced line is code, not an entry: {out:?}"
+        );
         assert_eq!(out[0].1, "real");
     }
 

@@ -146,7 +146,9 @@ pub fn find_section(desc: &str, anchor: &str) -> (usize, usize, bool) {
     for (i, h) in headings.iter().enumerate() {
         if h.text == anchor {
             let start = h.range.end;
-            let end = headings.get(i + 1).map_or(desc.len(), |next| next.range.start);
+            let end = headings
+                .get(i + 1)
+                .map_or(desc.len(), |next| next.range.start);
             return (start, end, true);
         }
     }
@@ -333,12 +335,10 @@ pub fn list_item_body(item_src: &str) -> String {
 
 /// Remove up to `n` leading spaces (tabs count as one) from `line`.
 fn strip_indent(line: &str, n: usize) -> &str {
-    let mut cut = 0;
-    for (i, ch) in line.char_indices() {
+    for (cut, (i, ch)) in line.char_indices().enumerate() {
         if cut >= n || (ch != ' ' && ch != '\t') {
             return &line[i..];
         }
-        cut += 1;
     }
     ""
 }
@@ -535,7 +535,8 @@ mod tests {
 
     #[test]
     fn sanitize_strips_the_restated_heading() {
-        let out = sanitize_section_body("Plan", "## Plan\n\n### Task 1: x\n\n- [ ] step\n").unwrap();
+        let out =
+            sanitize_section_body("Plan", "## Plan\n\n### Task 1: x\n\n- [ ] step\n").unwrap();
         assert_eq!(out, "### Task 1: x\n\n- [ ] step");
         // Case-insensitive: agents write "## plan" too.
         assert!(sanitize_section_body("Plan", "## plan\nbody").unwrap() == "body");
@@ -585,7 +586,10 @@ mod tests {
         let (s, e, ok) = find_section(d, "Spec");
         assert!(ok);
         let spec = &d[s..e];
-        assert!(spec.contains("```markdown"), "fence stays in Spec: {spec:?}");
+        assert!(
+            spec.contains("```markdown"),
+            "fence stays in Spec: {spec:?}"
+        );
         assert!(spec.contains("still spec."), "Spec not truncated: {spec:?}");
 
         let (s, e, ok) = find_section(d, "Plan");
@@ -756,7 +760,10 @@ mod tests {
     fn a_prose_line_directly_above_a_step_still_gets_a_blank_line() {
         let d = "## Plan\n\nApproach:\n- [ ] first\n";
         let out = canonicalize_plan(d, "T");
-        assert!(out.contains("Approach:\n\n### Task 1: T\n\n- [ ] first"), "got {out:?}");
+        assert!(
+            out.contains("Approach:\n\n### Task 1: T\n\n- [ ] first"),
+            "got {out:?}"
+        );
     }
 
     #[test]

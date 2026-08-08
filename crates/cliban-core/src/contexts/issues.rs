@@ -84,8 +84,10 @@ pub fn create(conn: &Connection, project_key: &str, attrs: CreateIssue) -> Resul
     // Canonical on the way in: a flat `## Plan` gets its implicit
     // `### Task 1:` here rather than being stored as something `tick` cannot
     // drive and `lint` complains about later.
-    let description =
-        crate::sections::canonicalize_plan(&attrs.description.clone().unwrap_or_default(), &attrs.title);
+    let description = crate::sections::canonicalize_plan(
+        &attrs.description.clone().unwrap_or_default(),
+        &attrs.title,
+    );
 
     // --- validation (Issue.create_changeset) ---
     if attrs.title.is_empty() {
