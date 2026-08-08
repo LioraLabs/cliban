@@ -118,7 +118,7 @@ pub fn for_issue(conn: &Connection, issue_id: i64) -> Result<Vec<Relation>> {
 
 /// The frontier: takeable issues — `backlog` status, not archived, no open
 /// blocker, and no live claim. The complement of [`list_blocked`], and the
-/// query behind `cliban issue ready`. `milestone` is project-scoped like
+/// query behind `cliban issue ls --ready`. `milestone` is project-scoped like
 /// `issues::list`: given without `project_key`, the result is empty.
 pub fn list_ready(
     conn: &Connection,
