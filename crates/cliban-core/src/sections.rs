@@ -343,6 +343,82 @@ fn strip_indent(line: &str, n: usize) -> &str {
     ""
 }
 
+/// `Task 3: rewire the parser` → `3`. The colon is required: it is what keeps
+/// a search for Task 1 from matching "Task 10".
+pub fn task_number(heading_text: &str) -> Option<i32> {
+    heading_text
+        .strip_prefix("Task ")?
+        .split_once(':')
+        .and_then(|(n, _)| n.trim().parse::<i32>().ok())
+}
+
+/// Give a headingless `## Plan` its implicit `### Task 1:` heading.
+///
+/// A flat plan — checkbox steps with no `### Task N:` above them — used to be
+/// accepted at write time and reported by `lint` afterwards, with `tick`
+/// refusing to address any of it ("no `### Task N:` headings in ## Plan"). The
+/// contract is not relaxed to admit such plans; they are made canonical on the
+/// way in, so what is stored is always what `tick` can drive.
+///
+/// Only a plan that *has steps to adopt* is rewritten. A plan holding just
+/// prose or a placeholder gains nothing from an empty task heading — it would
+/// merely trade one lint finding ("steps outside any task") for another
+/// ("Task 1 has no steps").
+pub fn canonicalize_plan(desc: &str, task_title: &str) -> String {
+    let (start, end, ok) = find_section(desc, "Plan");
+    if !ok {
+        return desc.to_string();
+    }
+    let plan = &desc[start..end];
+    if h3_headings(plan)
+        .iter()
+        .any(|h| task_number(&h.text).is_some())
+    {
+        return desc.to_string();
+    }
+    // Insert above the first step rather than at the top of the section, so
+    // any prose introducing the plan stays plan-level commentary.
+    let Some(first_step) = top_level_list_items(plan)
+        .into_iter()
+        .find(|r| is_step_line(&plan[r.clone()]))
+    else {
+        return desc.to_string();
+    };
+
+    let at = start + first_step.start;
+    let prefix = &desc[..at];
+    let sep = if prefix.is_empty() || prefix.ends_with("\n\n") {
+        ""
+    } else if prefix.ends_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
+    format!(
+        "{prefix}{sep}### Task 1: {}\n\n{}",
+        heading_title(task_title),
+        &desc[at..]
+    )
+}
+
+/// Whether a list item's first line is a top-level GFM checkbox step.
+fn is_step_line(item_src: &str) -> bool {
+    let line = item_src.split_once('\n').map_or(item_src, |(l, _)| l);
+    line.starts_with("- [ ] ") || line.starts_with("- [x] ")
+}
+
+/// A heading is one line, so the task inherits the issue's title only as far
+/// as its first line. An issue with no usable title still needs *some* task
+/// name for the contract to hold.
+fn heading_title(title: &str) -> &str {
+    let first = title.lines().next().unwrap_or("").trim();
+    if first.is_empty() {
+        "Implementation"
+    } else {
+        first
+    }
+}
+
 /// Squeeze runs of 3+ newlines down to 2. Markdown treats them the same, and
 /// without this a section replaced N times grows N blank lines at its seam.
 fn collapse_blank_runs(s: &str) -> String {
@@ -615,6 +691,94 @@ mod tests {
             list_item_body(&body[items[0].clone()]),
             "2026-08-08T11:00Z — wrapped entry that continues\nonto a prose line"
         );
+    }
+
+    // ---- canonical plans ----
+
+    #[test]
+    fn a_flat_plan_gains_task_one() {
+        let d = "## Spec\n\ns\n\n## Plan\n\n- [ ] first\n- [ ] second\n";
+        let out = canonicalize_plan(d, "Rewire the parser");
+        assert_eq!(
+            out,
+            "## Spec\n\ns\n\n## Plan\n\n### Task 1: Rewire the parser\n\n- [ ] first\n- [ ] second\n"
+        );
+        // …and what comes out is what `tick` can drive.
+        let (s, e, _) = find_section(&out, "Plan");
+        assert_eq!(
+            h3_headings(&out[s..e])
+                .iter()
+                .filter_map(|h| task_number(&h.text))
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn a_plan_that_already_has_task_headings_passes_through_untouched() {
+        let d = "## Plan\n\n### Task 1: a\n\n- [ ] x\n\n### Task 2: b\n\n- [ ] y\n";
+        assert_eq!(canonicalize_plan(d, "T"), d);
+        // Even numbered oddly — renumbering is lint's business, not this
+        // function's, and rewriting here would hide the finding.
+        let odd = "## Plan\n\n### Task 3: a\n\n- [ ] x\n";
+        assert_eq!(canonicalize_plan(odd, "T"), odd);
+    }
+
+    #[test]
+    fn an_issue_with_no_plan_is_untouched() {
+        let d = "## Spec\n\njust a spec\n";
+        assert_eq!(canonicalize_plan(d, "T"), d);
+        assert_eq!(canonicalize_plan("", "T"), "");
+        assert_eq!(canonicalize_plan("free text\n", "T"), "free text\n");
+    }
+
+    #[test]
+    fn a_plan_with_no_steps_is_left_alone() {
+        // The Linear bridge seeds an empty `## Plan` placeholder. Giving it a
+        // task heading would only trade "steps outside any task" for
+        // "Task 1 has no steps".
+        let d = "## Plan\n\n_No plan yet. Add tasks as `### Task N: title`._\n";
+        assert_eq!(canonicalize_plan(d, "T"), d);
+        assert_eq!(canonicalize_plan("## Plan\n", "T"), "## Plan\n");
+    }
+
+    #[test]
+    fn plan_level_prose_stays_above_the_inserted_task() {
+        let d = "## Plan\n\nApproach: smallest change first.\n\n- [ ] first\n";
+        let out = canonicalize_plan(d, "T");
+        assert_eq!(
+            out,
+            "## Plan\n\nApproach: smallest change first.\n\n### Task 1: T\n\n- [ ] first\n"
+        );
+    }
+
+    #[test]
+    fn a_prose_line_directly_above_a_step_still_gets_a_blank_line() {
+        let d = "## Plan\n\nApproach:\n- [ ] first\n";
+        let out = canonicalize_plan(d, "T");
+        assert!(out.contains("Approach:\n\n### Task 1: T\n\n- [ ] first"), "got {out:?}");
+    }
+
+    #[test]
+    fn a_fenced_checkbox_does_not_look_like_a_plan_to_adopt() {
+        let d = "## Plan\n\n```\n- [ ] not a step\n```\n";
+        assert_eq!(canonicalize_plan(d, "T"), d);
+    }
+
+    #[test]
+    fn a_titleless_issue_still_gets_a_contract_shaped_heading() {
+        let out = canonicalize_plan("## Plan\n\n- [ ] x\n", "");
+        assert!(out.contains("### Task 1: Implementation"), "got {out:?}");
+        // A multi-line title cannot become a multi-line heading.
+        let out = canonicalize_plan("## Plan\n\n- [ ] x\n", "line one\nline two");
+        assert!(out.contains("### Task 1: line one\n"), "got {out:?}");
+    }
+
+    #[test]
+    fn canonicalizing_is_idempotent() {
+        let d = "## Plan\n\n- [ ] first\n";
+        let once = canonicalize_plan(d, "T");
+        assert_eq!(canonicalize_plan(&once, "T"), once);
     }
 
     #[test]

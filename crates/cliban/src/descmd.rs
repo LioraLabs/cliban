@@ -13,7 +13,7 @@ const ACTIVITY_LOG_TIME_FORMAT: &str = "%Y-%m-%dT%H:%MZ";
 /// Linear bridge needs the identical boundaries when it replaces `## Spec`
 /// without disturbing `## Plan`. Re-exported here so every call site in this
 /// crate reads the same as it always did.
-pub use cliban_core::sections::find_section;
+pub use cliban_core::sections::{find_section, task_number};
 
 /// Constructs a descmd error string with the structured `descmd: ` prefix.
 fn errf(msg: String) -> String {
@@ -32,15 +32,6 @@ pub fn task_headings(plan_body: &str) -> Vec<(i32, std::ops::Range<usize>)> {
         .into_iter()
         .filter_map(|h| task_number(&h.text).map(|n| (n, h.range)))
         .collect()
-}
-
-/// `Task 3: rewire the parser` → `3`. The colon is required: it is what keeps
-/// a search for Task 1 from matching "Task 10".
-fn task_number(heading_text: &str) -> Option<i32> {
-    heading_text
-        .strip_prefix("Task ")?
-        .split_once(':')
-        .and_then(|(n, _)| n.trim().parse::<i32>().ok())
 }
 
 /// Locates the N-th task within a plan-section body. Tasks are identified by an

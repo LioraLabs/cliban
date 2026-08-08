@@ -79,12 +79,7 @@ fn lint_plan(plan: &str, findings: &mut Vec<Finding>) {
     let mut first_task_at: Option<usize> = None;
     let mut unreachable_steps = 0usize;
     for h in cliban_core::sections::h3_headings(plan) {
-        match h
-            .text
-            .strip_prefix("Task ")
-            .and_then(|r| r.split_once(':'))
-            .and_then(|(n, _)| n.trim().parse::<i32>().ok())
-        {
+        match cliban_core::sections::task_number(&h.text) {
             Some(n) => {
                 numbers.push(n);
                 first_task_at.get_or_insert(h.range.start);

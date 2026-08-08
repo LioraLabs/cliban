@@ -81,7 +81,11 @@ pub fn create(conn: &Connection, project_key: &str, attrs: CreateIssue) -> Resul
         None => default_position(&tx, project.id, &status)?,
     };
 
-    let description = attrs.description.clone().unwrap_or_default();
+    // Canonical on the way in: a flat `## Plan` gets its implicit
+    // `### Task 1:` here rather than being stored as something `tick` cannot
+    // drive and `lint` complains about later.
+    let description =
+        crate::sections::canonicalize_plan(&attrs.description.clone().unwrap_or_default(), &attrs.title);
 
     // --- validation (Issue.create_changeset) ---
     if attrs.title.is_empty() {
@@ -275,10 +279,13 @@ fn do_update(conn: &Connection, issue: &Issue, attrs: UpdateIssue) -> Result<Iss
         None => issue.parent_id,
     };
     let title = attrs.title.clone().unwrap_or_else(|| issue.title.clone());
-    let description = attrs
-        .description
-        .clone()
-        .unwrap_or_else(|| issue.description.clone());
+    // Only a description the caller actually supplied is canonicalized. An
+    // edit that touches some other field must leave the stored description
+    // byte-identical — this normalizes writes, it does not migrate data.
+    let description = match &attrs.description {
+        Some(d) => crate::sections::canonicalize_plan(d, &title),
+        None => issue.description.clone(),
+    };
     let status = attrs.status.clone().unwrap_or_else(|| issue.status.clone());
     let priority = attrs
         .priority
