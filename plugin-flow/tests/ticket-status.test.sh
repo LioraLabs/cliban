@@ -14,9 +14,9 @@ commit_file feature.txt "ticket work"
 
 run_flow ticket status "$key"
 assert_status 0 "a branch containing the milestone tip is mergeable"
-assert_out_has "mergeable" "the verdict is mergeable"
+assert_stdout_is "mergeable" "the verdict, alone, is on stdout"
 assert_out_lacks "sync-required" "the mergeable verdict says nothing about syncing"
-assert_out_has "milestone/test-milestone" "the verdict names the milestone branch"
+assert_stderr_has "milestone/test-milestone" "the guidance on stderr names the milestone branch"
 assert_board_has "$key" "[cliban-flow] ticket status $key: mergeable" \
     "the mergeable verdict is recorded on the board"
 
@@ -46,12 +46,13 @@ gitf checkout -q milestone/test-milestone
 commit_file milestone-side.txt "another ticket landed"
 before=$(gitf rev-parse "$branch")
 
+msha=$(gitf rev-parse --short milestone/test-milestone)
 run_flow ticket status "$key"
 assert_status 1 "a branch that is behind is not mergeable"
-assert_out_has "sync-required: milestone/test-milestone@" "the verdict is sync-required"
-assert_out_has "is not an ancestor of $branch" "the verdict names the ticket branch"
-assert_out_has "cliban-flow ticket sync $key" "the verdict names the command that fixes it"
-assert_out_has "orchestrator must not" "the verdict says the orchestrator must not resolve it"
+assert_stdout_is "sync-required: milestone/test-milestone@$msha is not an ancestor of $branch" \
+    "the verdict, alone, is on stdout and names both sides"
+assert_stderr_has "cliban-flow ticket sync $key" "the guidance names the command that fixes it"
+assert_stderr_has "orchestrator must not" "the guidance says the orchestrator must not resolve it"
 assert_board_has "$key" "[cliban-flow] ticket status $key: sync-required" \
     "the sync-required verdict is recorded on the board"
 assert_eq "$(gitf rev-parse "$branch")" "$before" "the ticket branch was not moved"
@@ -120,7 +121,7 @@ gitf branch "$branch" milestone/test-milestone
 
 run_flow ticket status "$key"
 assert_status 2 "a ticket on no milestone is refused"
-assert_out_has "milestone" "the refusal says the ticket is on no milestone"
+assert_out_has "on no milestone" "the refusal says the ticket is on no milestone"
 assert_board_has "$key" "[cliban-flow] ticket status $key: refused" \
     "the refusal is recorded on the board"
 
@@ -138,5 +139,94 @@ run_flow ticket status "$key"
 unset FLOW_CWD
 assert_status 2 "running outside a git repository is refused"
 assert_out_has "git repository" "the refusal says where it should have been run"
+
+# A ref that is not a local branch does not satisfy the milestone-branch guard.
+fixture_new
+key=$(new_issue "Tag is not a branch")
+branch=$(branch_of "$key")
+gitf branch -q -D milestone/test-milestone
+gitf tag milestone/test-milestone main
+gitf branch "$branch" main
+
+run_flow ticket status "$key"
+assert_status 2 "a tag named like the milestone branch does not satisfy the guard"
+assert_out_lacks "mergeable" "no verdict is given against a tag"
+
+# Trailing arguments are a typo, not something to ignore silently.
+fixture_new
+key=$(new_issue "One key only")
+branch=$(branch_of "$key")
+gitf branch "$branch" milestone/test-milestone
+
+run_flow ticket status "$key" --json
+assert_status 2 "an unrecognised trailing argument is refused"
+assert_out_has "--json" "the refusal names the argument it did not understand"
+
+# ------------------------------------------------------- board unavailability
+#
+# The board is the audit trail, not the authority. A board that cannot be
+# written must degrade to a warning, because the alternative is a gate whose
+# answer depends on whether logging worked.
+
+fixture_new
+key=$(new_issue "Board is down")
+branch=$(branch_of "$key")
+gitf checkout -q -b "$branch" milestone/test-milestone
+commit_file feature.txt "ticket work"
+break_board_writes
+
+run_flow ticket status "$key"
+assert_status 0 "a failed board write does not change the verdict"
+assert_stdout_is "mergeable" "the verdict is unchanged"
+assert_stderr_has "could not record" "the failed board write is reported"
+unset FLOW_PATH
+
+# ------------------------------------------------------- unreadable board JSON
+#
+# The dangerous failure is not a crash but a quiet exit 1: callers read that as
+# sync-required and go and run a merge. A read that cannot complete must refuse.
+
+fixture_new
+key=$(new_issue "JSON reader is broken")
+branch=$(branch_of "$key")
+gitf checkout -q -b "$branch" milestone/test-milestone
+commit_file feature.txt "ticket work"
+break_json_reader
+
+run_flow ticket status "$key"
+assert_status 2 "a JSON read that fails is refused, not reported as a verdict"
+assert_out_lacks "sync-required" "a failed read is never mistaken for sync-required"
+assert_out_has "could not read $key" "the refusal says what it could not do"
+unset FLOW_PATH
+
+fixture_new
+key=$(new_issue "JSON reader is missing")
+branch=$(branch_of "$key")
+gitf branch "$branch" milestone/test-milestone
+hide_json_reader
+
+run_flow ticket status "$key"
+assert_status 2 "a missing python3 is refused"
+assert_out_has "python3" "the refusal names the missing dependency"
+unset FLOW_PATH
+
+# -------------------------------------------------------------- slug agreement
+#
+# The milestone branch name is derived by reimplementing cliban's own slug
+# rules, so the two must be pinned together. cliban's answer is read back off an
+# issue's git_branch_name rather than recomputed here.
+
+fixture_new
+awkward='Deterministic  integration!! (v2)'
+slug=$(cliban_slug_of "$awkward")
+cb milestone add "$awkward" --project FLOW >/dev/null
+key=$(new_issue "On an awkwardly named milestone" "$awkward")
+branch=$(branch_of "$key")
+gitf branch "milestone/$slug" main
+gitf branch "$branch" "milestone/$slug"
+
+run_flow ticket status "$key"
+assert_status 0 "the derived milestone branch is the one cliban's rules produce"
+assert_stdout_is "mergeable" "the verdict is mergeable, so the branch was found"
 
 finish

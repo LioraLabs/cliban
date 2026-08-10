@@ -27,6 +27,11 @@
 # so a compacted orchestrator, a recovery survey, or a test assertion can
 # reconstruct what ran. An invocation that never resolves a ticket — a usage
 # error, an unknown key — has no log to append to and prints only.
+#
+# cliban has no `milestone log`, so a subcommand acting on a milestone rather
+# than a ticket has no per-milestone place to write. Whoever adds the first one
+# decides where its line goes; board_line() is the single place the shape is
+# built, so only the destination is open.
 
 set -euo pipefail
 
@@ -68,7 +73,7 @@ refuse() {
 refuse_ticket() {
     local key=$1 summary=$2
     shift 2
-    board_record "$key" "refused — $summary"
+    board_record "$key" "refused ($summary)"
     refuse "$summary" "$@"
 }
 
@@ -100,12 +105,14 @@ EOF
 # anything happened, so writing it is best-effort — an unreachable board must
 # never turn a clean verdict into a failure, only into a warning.
 
-# board_record <KEY> <outcome>... — one line, in the documented shape.
+# board_line <subject> <outcome>... — the documented shape, and the only place
+# it is built. Anything that has to parse these lines parses this format.
+board_line() { printf '%s %s %s: %s' "$BOARD_PREFIX" "$ACTION" "$1" "${*:2}"; }
+
+# board_record <KEY> <outcome>... — append one line to a ticket's activity log.
 board_record() {
-    local key=$1
-    shift
-    cliban issue log "$key" "$BOARD_PREFIX $ACTION $key: $*" >/dev/null 2>&1 ||
-        warn "could not record on $key's activity log; the board is out of date"
+    cliban issue log "$1" "$(board_line "$@")" >/dev/null 2>&1 ||
+        warn "could not record on $1's activity log; the board is out of date"
 }
 
 # ---------------------------------------------------------------- git
@@ -122,9 +129,12 @@ require_repo() {
 
 gitr() { git -C "$REPO" "$@"; }
 
-have_ref() { gitr rev-parse --verify --quiet "$1^{commit}" >/dev/null; }
+# have_branch <name> — a local branch, specifically. Resolving the bare name
+# would also match a tag or a remote-tracking ref, and this protocol only ever
+# merges local branches.
+have_branch() { gitr rev-parse --verify --quiet "refs/heads/$1" >/dev/null; }
 
-short_sha() { gitr rev-parse --short "$1"; }
+short_sha() { gitr rev-parse --short "refs/heads/$1"; }
 
 # is_ancestor <a> <b> — true when every commit of <a> is reachable from <b>.
 # Strict ancestry is the whole gate: never a trial merge, because a trial merge
@@ -134,37 +144,55 @@ is_ancestor() { gitr merge-base --is-ancestor "$1" "$2"; }
 
 # ---------------------------------------------------------------- the board's issues
 
-json_field() {
+# json_tsv <field>... — the named fields of the JSON object on stdin, tab
+# separated, empty for absent. One python3 call per subcommand rather than one
+# per field, so there is a single place for a parse to fail loudly. Adding a
+# field is one name here and one variable in the `read` that consumes it.
+json_tsv() {
     python3 -c 'import json, sys
 d = json.load(sys.stdin)
-v = d.get(sys.argv[1])
-sys.stdout.write("" if v is None else str(v))' "$1"
+print("\t".join("" if d.get(f) is None else str(d[f]) for f in sys.argv[1:]))' "$@"
 }
 
-# load_issue <KEY> — populate the ISSUE_* globals, or refuse.
+require_python() {
+    command -v python3 >/dev/null || refuse \
+        "python3 is not on PATH" \
+        "cliban-flow reads cliban's JSON with python3."
+}
+
+# load_issue <KEY> — populate the ISSUE_* globals, or refuse. Every read here
+# either succeeds or refuses: a half-loaded issue would let a later guard answer
+# the wrong question about the wrong branch.
 load_issue() {
-    local json
+    require_python
+    local json row
     json=$(cliban issue show "$1" --json 2>/dev/null) || refuse \
         "no issue named $1 on the board" \
         "Check the key. If this is a scratch board, check CLIBAN_DB points at it."
-    # Extension point: `title` and `status` are on the same JSON and become
-    # ISSUE_TITLE / ISSUE_STATUS the moment a subcommand needs them.
-    ISSUE_KEY=$1
-    ISSUE_BRANCH=$(printf '%s' "$json" | json_field git_branch_name)
-    ISSUE_MILESTONE=$(printf '%s' "$json" | json_field milestone)
+    row=$(printf '%s' "$json" | json_tsv key git_branch_name milestone) || refuse \
+        "could not read $1 from the board" \
+        "\`cliban issue show $1 --json\` returned something this script could not" \
+        "parse. cliban may be newer or older than this dispatcher expects."
+    IFS=$'\t' read -r ISSUE_KEY ISSUE_BRANCH ISSUE_MILESTONE <<<"$row"
+    # The board's own spelling of the key, so the audit trail stays greppable
+    # when someone types `flow-1`.
+    [ -n "$ISSUE_KEY" ] && [ -n "$ISSUE_BRANCH" ] || refuse \
+        "the board gave no key or branch name for $1" \
+        "This dispatcher needs \`key\` and \`git_branch_name\` on \`issue show --json\`."
 }
 
 # slugify <text> — cliban's own branch-name rules, reimplemented: lowercase,
 # every run of non-alphanumerics collapsed to one dash, trimmed, capped at 60.
 # cliban publishes `git_branch_name` for an issue but nothing equivalent for a
 # milestone, so the milestone branch name is derived here and has to stay in
-# step with git_branch_name() in crates/cliban/src/output.rs.
+# step with git_branch_name() in crates/cliban/src/output.rs. LC_ALL is pinned
+# because the character classes below are ASCII by intent, not by accident.
 slugify() {
-    printf '%s' "$1" |
-        tr '[:upper:]' '[:lower:]' |
-        sed -e 's/[^a-z0-9][^a-z0-9]*/-/g' -e 's/^-//' -e 's/-$//' |
-        cut -c 1-60 |
-        sed -e 's/-$//'
+    LC_ALL=C printf '%s' "$1" |
+        LC_ALL=C tr '[:upper:]' '[:lower:]' |
+        LC_ALL=C sed -e 's/[^a-z0-9][^a-z0-9]*/-/g' -e 's/^-//' -e 's/-$//' |
+        LC_ALL=C cut -c 1-60 |
+        LC_ALL=C sed -e 's/-$//'
 }
 
 milestone_branch() { printf 'milestone/%s' "$(slugify "$1")"; }
@@ -203,6 +231,7 @@ main() {
 cmd_ticket_status() {
     local key=${1:-}
     [ -n "$key" ] || usage_error "ticket status needs an issue key"
+    [ $# -le 1 ] || usage_error "ticket status takes one issue key, got: $*"
     require_repo
     load_issue "$key"
 
@@ -215,8 +244,12 @@ cmd_ticket_status() {
 
     local mbranch
     mbranch=$(milestone_branch "$ISSUE_MILESTONE")
+    [ "$mbranch" != "milestone/" ] || refuse_ticket "$ISSUE_KEY" \
+        "milestone \"$ISSUE_MILESTONE\" has no usable branch name" \
+        "Its name slugifies to nothing, so there is no branch it could refer to." \
+        "Rename the milestone to something containing letters or digits."
 
-    have_ref "$mbranch" || refuse_ticket "$ISSUE_KEY" \
+    have_branch "$mbranch" || refuse_ticket "$ISSUE_KEY" \
         "the milestone branch $mbranch does not exist here" \
         "$ISSUE_KEY is on milestone \"$ISSUE_MILESTONE\", whose branch would be" \
         "$mbranch. Create it, in its own worktree:" \
@@ -226,7 +259,7 @@ cmd_ticket_status() {
         "Refusing rather than creating it here: a milestone branch invented at" \
         "gate time would answer the question by defining it away."
 
-    have_ref "$ISSUE_BRANCH" || refuse_ticket "$ISSUE_KEY" \
+    have_branch "$ISSUE_BRANCH" || refuse_ticket "$ISSUE_KEY" \
         "the ticket branch $ISSUE_BRANCH does not exist here" \
         "Nothing has been implemented on $ISSUE_KEY yet, or this repository is" \
         "not where it was. Start it with:" \

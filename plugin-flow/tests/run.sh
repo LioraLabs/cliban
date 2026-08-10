@@ -9,8 +9,9 @@ set -uo pipefail
 
 TESTS_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
-command -v cliban >/dev/null || { echo "cliban is not on PATH" >&2; exit 1; }
-command -v git >/dev/null || { echo "git is not on PATH" >&2; exit 1; }
+for tool in cliban git python3; do
+    command -v "$tool" >/dev/null || { echo "$tool is not on PATH" >&2; exit 1; }
+done
 
 suites=()
 if [ $# -gt 0 ]; then
