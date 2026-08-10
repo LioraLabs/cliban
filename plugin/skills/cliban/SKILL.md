@@ -155,12 +155,14 @@ cliban issue log PROJ-12 "note"         # writes ## Activity Log AND the durable
   writes: the log belongs to `issue log`.
 - `issue log` / `milestone log` / `append-section` / `project note add` read
   piped stdin when the text argument is absent.
-- Milestone descriptions follow the same contract, and `milestone log` owns
+- Milestone descriptions use the same H2 grammar, and `milestone log` owns
   `## Activity Log` there the way `issue log` owns it on an issue — same line
-  shape, one parser reads both. `milestone edit --description` is
-  full-replace, so it is never how you add an entry. Unlike `issue log` there
-  is no second durable record behind it: the section is the only copy, and a
-  `--description` rewrite erases it.
+  shape, one parser reads both. But the *section tools* are issue-only: no
+  `--section` on `milestone edit`, no `milestone cat`, no `lint`. So read a
+  milestone's log out of `milestone show --json`'s `description`, and never
+  add an entry with `milestone edit --description` — it is full-replace, there
+  is no durable record behind the section the way there is for `issue log`,
+  and the rewrite erases the only copy without saying so.
 - Racy round-trips: pass `--if-updated-at <updated_at>` from a prior `show`
   or echo (exit 2 = stale; re-read and retry). `project edit` takes it too.
 

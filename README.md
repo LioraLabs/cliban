@@ -238,7 +238,9 @@ setting a milestone up, a landing attempted — has `cliban milestone log "v0.4"
 "wave 2 dispatched"`. Same line shape, appended to the milestone description's
 `## Activity Log` under a write lock, so several agents can record against one
 milestone at once and no `--description` rewrite is involved to lose anybody's
-entry.
+entry. One asymmetry to know: there is no durable record behind it, so unlike
+an issue's log a milestone's is only as safe as its description — `milestone
+edit --description` replaces the lot, silently.
 
 Nothing is ever deleted. A deleted row would take its timeline with it, so
 `issue rm` and `project rm` archive, `milestone rm` cancels — a unix reflex
