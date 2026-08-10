@@ -431,6 +431,10 @@ ticket_dispatch() {
     local command=${1:-}
     if [ $# -gt 0 ]; then shift; fi
     case $command in
+        start)
+            ACTION="ticket start"
+            cmd_ticket_start "$@"
+            ;;
         status)
             ACTION="ticket status"
             cmd_ticket_status "$@"
@@ -558,6 +562,39 @@ cmd_milestone_start() {
     say "$path"
     instruct "The primary checkout $primary was not touched."
     board_record_milestone "$MILESTONE_NAME" "$outcome ($MILESTONE_BRANCH at $path)"
+    exit 0
+}
+
+# ticket start <KEY> — the ticket's worktree, under the milestone's.
+#
+# Rooted at <milestone worktree>/.worktrees/<git_branch_name>, and branched off
+# the milestone branch's tip *as it is now*: ticket worktrees are made at wave
+# time, so each one starts from everything already integrated rather than from
+# wherever the milestone began.
+#
+# Under the milestone worktree rather than beside the primary checkout so that
+# the milestone's build state — every ticket's target directory, every
+# node_modules — stays out of the tree the user works and runs from.
+cmd_ticket_start() {
+    local key=${1:-}
+    [ -n "$key" ] || usage_error "ticket start needs an issue key"
+    [ $# -le 1 ] || usage_error "ticket start takes one issue key, got: $*"
+    require_repo
+    load_issue "$key"
+
+    local mbranch mwt path
+    mbranch=$(milestone_branch "$ISSUE_MILESTONE")
+    mwt=$(worktree_for_branch "$mbranch")
+    path="$mwt/.worktrees/$ISSUE_BRANCH"
+
+    announce "creating $ISSUE_BRANCH off $mbranch@$(short_sha "$mbranch") and checking it out at $path"
+    gitr worktree add -b "$ISSUE_BRANCH" "$path" "refs/heads/$mbranch" >&2 ||
+        refuse_ticket "$ISSUE_KEY" \
+            "git could not create $ISSUE_BRANCH at $path" \
+            "git's own error is above."
+
+    say "$path"
+    board_record "$ISSUE_KEY" "created ($ISSUE_BRANCH at $path)"
     exit 0
 }
 

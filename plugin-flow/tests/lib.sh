@@ -88,10 +88,26 @@ cb() { cliban --db "$CLIBAN_DB" "$@"; }
 # gitf <args> — git inside the fixture repo.
 gitf() { git -C "$FIXTURE_REPO" "$@"; }
 
-commit_file() {
-    printf '%s\n' "$2" >>"$FIXTURE_REPO/$1"
-    gitf add "$1"
-    gitf commit -qm "$1: $2"
+commit_file() { commit_file_at "$FIXTURE_REPO" "$1" "$2"; }
+
+# commit_file_at <worktree> <file> <content> — the same, in a linked worktree.
+commit_file_at() {
+    printf '%s\n' "$3" >>"$1/$2"
+    git -C "$1" add "$2"
+    git -C "$1" commit -qm "$2: $3"
+}
+
+# fixture_milestone_wt — where the script under test is expected to put the
+# fixture milestone's worktree: the primary checkout's own path with the
+# milestone slug appended. Spelled out here rather than asked of the script, so
+# the assertion is a specification and not an echo.
+fixture_milestone_wt() { printf '%s' "$FIXTURE_ROOT/repo-test-milestone"; }
+
+# fixture_milestone_worktree — that worktree, built with plain git rather than
+# by running `milestone start`. A ticket-start case must fail because ticket
+# start is wrong, never because milestone start is.
+fixture_milestone_worktree() {
+    gitf worktree add -q "$(fixture_milestone_wt)" milestone/test-milestone
 }
 
 # new_issue <title> [milestone] — an issue on the fixture milestone unless one
