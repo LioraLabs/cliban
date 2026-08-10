@@ -47,7 +47,7 @@ ACTION=""
 # The repository every git call runs against; set by require_repo.
 REPO=""
 # The loaded ticket; set by load_issue.
-ISSUE_KEY="" ISSUE_BRANCH="" ISSUE_MILESTONE="" ISSUE_PROJECT=""
+ISSUE_KEY="" ISSUE_BRANCH="" ISSUE_MILESTONE="" ISSUE_PROJECT="" ISSUE_STATUS=""
 # The loaded milestone; set by load_milestone.
 MILESTONE_NAME="" MILESTONE_BRANCH=""
 # The project key milestone reads and writes are scoped by; set by
@@ -304,6 +304,14 @@ worktree_dirty() {
     [ -n "$(git -C "$1" status --porcelain -- ':(exclude).worktrees' 2>/dev/null)" ]
 }
 
+# merge_in_progress <path> — a merge left half-finished in the worktree at
+# <path>. Read as a ref rather than by looking for a file: MERGE_HEAD is
+# per-worktree state, so it lives in the linked worktree's own git directory and
+# a hard-coded `.git/MERGE_HEAD` would answer about the primary checkout
+# instead. This is the state a conflicting `ticket sync` deliberately leaves
+# behind, so recognising it is how the second run says something useful.
+merge_in_progress() { git -C "$1" rev-parse --verify --quiet MERGE_HEAD >/dev/null 2>&1; }
+
 # path_within <root> <path> — is <path> inside <root>? Compared after purely
 # lexical normalisation, so neither path has to exist yet and no amount of `..`
 # in a name can spell its way past the check. python3 rather than `realpath -m`:
@@ -320,18 +328,27 @@ path_within() {
 
 # ---------------------------------------------------------------- the board's issues
 
-# json_tsv <field>... — the named fields of the JSON object on stdin, tab
-# separated, empty for absent. One python3 call per subcommand rather than one
-# per field, so there is a single place for a parse to fail loudly. Adding a
-# field is one name here and one variable in the `read` that consumes it.
-json_tsv() {
+# json_fields <field>... — the named fields of the JSON object on stdin,
+# separated by US (0x1f), empty for absent. One python3 call per subcommand
+# rather than one per field, so there is a single place for a parse to fail
+# loudly. Adding a field is one name here and one variable in the `read` that
+# consumes it.
+#
+# Not tab separated, which is what this was until a field that can legitimately
+# be empty stopped being the last one. Tab is IFS *whitespace*, so `read`
+# collapses a run of tabs into one delimiter: an absent field in the middle
+# vanishes and every field after it shifts up one, silently, with no failure
+# anywhere. 0x1f is not whitespace and cannot occur in cliban's output, so an
+# empty field stays an empty field. Every consumer must therefore split on
+# $'\x1f' and nothing else.
+json_fields() {
     python3 -c 'import json, sys
 d = json.load(sys.stdin)
-print("\t".join("" if d.get(f) is None else str(d[f]) for f in sys.argv[1:]))' "$@"
+print("\x1f".join("" if d.get(f) is None else str(d[f]) for f in sys.argv[1:]))' "$@"
 }
 
 # json_lines_field <field> — one field per line, for cliban's JSONL listings.
-# Separate from json_tsv because that one reads a single object; this reads a
+# Separate from json_fields because that one reads a single object; this reads a
 # stream of them and the two failure modes should not be confused.
 json_lines_field() {
     python3 -c 'import json, sys
@@ -357,11 +374,11 @@ load_issue() {
     json=$(cliban issue show "$1" --json 2>/dev/null) || refuse \
         "no issue named $1 on the board" \
         "Check the key. If this is a scratch board, check CLIBAN_DB points at it."
-    row=$(printf '%s' "$json" | json_tsv key git_branch_name milestone) || refuse \
+    row=$(printf '%s' "$json" | json_fields key git_branch_name milestone status) || refuse \
         "could not read $1 from the board" \
         "\`cliban issue show $1 --json\` returned something this script could not" \
         "parse. cliban may be newer or older than this dispatcher expects."
-    IFS=$'\t' read -r ISSUE_KEY ISSUE_BRANCH ISSUE_MILESTONE <<<"$row"
+    IFS=$'\x1f' read -r ISSUE_KEY ISSUE_BRANCH ISSUE_MILESTONE ISSUE_STATUS <<<"$row"
     # The board's own spelling of the key, so the audit trail stays greppable
     # when someone types `flow-1`.
     [ -n "$ISSUE_KEY" ] && [ -n "$ISSUE_BRANCH" ] || refuse \
@@ -421,7 +438,7 @@ load_milestone() {
         "" \
         "Refusing rather than creating it: a branch named after a milestone that" \
         "does not exist has nothing to integrate into."
-    name=$(printf '%s' "$json" | json_tsv name) || refuse \
+    name=$(printf '%s' "$json" | json_fields name) || refuse \
         "could not read milestone \"$1\" from the board" \
         "\`cliban milestone show\` returned something this script could not parse."
     # The board's own spelling, so the audit trail stays greppable.
@@ -492,6 +509,135 @@ parse_project_option() {
                 ;;
         esac
     done
+}
+
+# ------------------------------------------------------- the ticket guard layer
+#
+# Four ticket subcommands ask the same questions of the same board and the same
+# repository, and the answer must not depend on which one is asking. Every
+# question with a single right answer lives here once; a subcommand supplies
+# only the part that is genuinely its own — the reason it needs a milestone at
+# all.
+#
+# This is not tidiness. `milestone start` and `ticket start` were written as two
+# guard chains over one helper layer, and every defect their review found was a
+# place the two disagreed: one refused the primary checkout, its twin reported
+# that same checkout as the answer to a caller whose next step was to build
+# there. None of it was visible from inside either subcommand, because a test
+# for one command cannot see what the other does with the same state.
+
+# The milestone branch this ticket integrates into; set by
+# load_ticket_milestone_branch.
+TICKET_MBRANCH=""
+# The worktree the ticket branch is checked out in; set by load_ticket_worktree.
+TICKET_WT=""
+
+# require_ticket_branch — the ticket has a branch in this repository at all.
+# Every subcommand past `start` needs one and none of them may invent it: a
+# branch created at this point would be an empty answer to "what has been
+# implemented".
+require_ticket_branch() {
+    have_branch "$ISSUE_BRANCH" || refuse_ticket "$ISSUE_KEY" \
+        "the ticket branch $ISSUE_BRANCH does not exist here" \
+        "Nothing has been implemented on $ISSUE_KEY yet, or this repository is" \
+        "not where it was. Start it with:" \
+        "" \
+        "    $PROG ticket start $ISSUE_KEY"
+}
+
+# load_ticket_milestone_branch <clause> <instruction>... — the milestone branch
+# this ticket integrates into, into TICKET_MBRANCH, or refuse.
+#
+# <clause> completes "$KEY is on no milestone, so <clause>", and the
+# instructions after it are the caller's own account of why it needs one: a
+# branch to start from, a tip to be checked against, something to merge in.
+# Below that first guard nothing varies by caller — what an empty slug means,
+# and why a missing milestone branch is never created here, are the same facts
+# whichever subcommand ran into them.
+load_ticket_milestone_branch() {
+    local clause=$1
+    shift
+    [ -n "$ISSUE_MILESTONE" ] || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY is on no milestone, so $clause" \
+        "$@" \
+        "" \
+        "    cliban issue edit $ISSUE_KEY --milestone \"<name>\""
+
+    TICKET_MBRANCH=$(milestone_branch "$ISSUE_MILESTONE")
+    [ "$TICKET_MBRANCH" != "milestone/" ] || refuse_ticket "$ISSUE_KEY" \
+        "milestone \"$ISSUE_MILESTONE\" has no usable branch name" \
+        "Its name slugifies to nothing, so there is no branch it could refer to." \
+        "Rename the milestone to something containing letters or digits."
+
+    have_branch "$TICKET_MBRANCH" || refuse_ticket "$ISSUE_KEY" \
+        "the milestone branch $TICKET_MBRANCH does not exist here" \
+        "$ISSUE_KEY is on milestone \"$ISSUE_MILESTONE\", whose branch would be" \
+        "$TICKET_MBRANCH. Create it, in its own worktree:" \
+        "" \
+        "    $PROG milestone start \"$ISSUE_MILESTONE\" -p $ISSUE_PROJECT" \
+        "" \
+        "Refusing rather than creating it here: a milestone branch invented at" \
+        "this point decides what the ticket integrates into, and answers any" \
+        "question asked about it by defining it away."
+}
+
+# load_ticket_worktree — the worktree the ticket branch is checked out in, into
+# TICKET_WT, or refuse. Anything that changes a working tree, or reads one for
+# work in flight, needs this; `ticket status`, which only reads refs, does not
+# and must keep working in a repository with no worktrees at all.
+#
+# The guards are shared deliberately, in one order, so that `sync` and `ready`
+# cannot come to disagree about which of these states is acceptable. Each one
+# refuses before anything is changed.
+load_ticket_worktree() {
+    local primary
+    primary=$(primary_worktree) || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    TICKET_WT=$(worktree_for_branch "$ISSUE_BRANCH") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+
+    [ -n "$TICKET_WT" ] || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_BRANCH exists but is checked out in no worktree" \
+        "This acts on the ticket's own worktree rather than on whatever tree the" \
+        "caller happens to be standing in, and $ISSUE_KEY has none. Make it:" \
+        "" \
+        "    $PROG ticket start $ISSUE_KEY"
+
+    # The same hazard `ticket start` refuses to create, met from the other end:
+    # someone checked the ticket branch out in the primary checkout to look at
+    # it, and this would now merge into, or vouch for, the tree the user works
+    # and runs from.
+    [ "$TICKET_WT" != "$primary" ] || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_BRANCH is checked out in the primary checkout $primary" \
+        "That is the tree the user works and runs from, and a ticket's work never" \
+        "belongs in it. Free the branch and give it its own worktree:" \
+        "" \
+        "    git -C \"$primary\" checkout main" \
+        "    $PROG ticket start $ISSUE_KEY"
+
+    read_prune_instructions
+    ! worktree_missing "$TICKET_WT" || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_BRANCH is registered to $TICKET_WT, which no longer exists" \
+        "${PRUNE_INSTRUCTIONS[@]}" \
+        "    $PROG ticket start $ISSUE_KEY"
+
+    # Half a merge is not a state to act on top of, and not one to discard
+    # either: whatever is resolved in that index was resolved by someone.
+    ! merge_in_progress "$TICKET_WT" || refuse_ticket "$ISSUE_KEY" \
+        "a merge is already in progress in $TICKET_WT" \
+        "Finish it or abandon it before anything else acts on this branch:" \
+        "" \
+        "    git -C \"$TICKET_WT\" status" \
+        "    git -C \"$TICKET_WT\" commit        # keep the resolution" \
+        "    git -C \"$TICKET_WT\" merge --abort # throw it away"
+
+    ! worktree_dirty "$TICKET_WT" || refuse_ticket "$ISSUE_KEY" \
+        "the ticket worktree $TICKET_WT has uncommitted changes" \
+        "What integration reads is the branch, and uncommitted work is not on it," \
+        "so anything decided here would be decided about a different tree. Commit" \
+        "or stash it first:" \
+        "" \
+        "    git -C \"$TICKET_WT\" status"
 }
 
 # ---------------------------------------------------------------- dispatch
@@ -684,29 +830,13 @@ cmd_ticket_start() {
     require_repo
     load_issue "$key"
 
-    [ -n "$ISSUE_MILESTONE" ] || refuse_ticket "$ISSUE_KEY" \
-        "$ISSUE_KEY is on no milestone, so it has nothing to branch from" \
+    load_ticket_milestone_branch "it has nothing to branch from" \
         "A ticket branch starts at its milestone's tip and its worktree hangs off" \
-        "the milestone's. Put the ticket on a milestone first:" \
-        "" \
-        "    cliban issue edit $ISSUE_KEY --milestone \"<name>\""
+        "the milestone's. Put the ticket on a milestone first:"
 
-    local mbranch
-    mbranch=$(milestone_branch "$ISSUE_MILESTONE")
-    [ "$mbranch" != "milestone/" ] || refuse_ticket "$ISSUE_KEY" \
-        "milestone \"$ISSUE_MILESTONE\" has no usable branch name" \
-        "Its name slugifies to nothing, so there is no branch it could refer to." \
-        "Rename the milestone to something containing letters or digits."
-
-    local start_milestone="    $PROG milestone start \"$ISSUE_MILESTONE\" -p $ISSUE_PROJECT"
-
-    have_branch "$mbranch" || refuse_ticket "$ISSUE_KEY" \
-        "the milestone branch $mbranch does not exist here" \
-        "$ISSUE_KEY is on milestone \"$ISSUE_MILESTONE\", whose branch would be" \
-        "$mbranch. Refusing rather than creating it: inventing the branch here" \
-        "would decide what this ticket integrates into. Start the milestone:" \
-        "" \
-        "$start_milestone"
+    local mbranch start_milestone
+    mbranch=$TICKET_MBRANCH
+    start_milestone="    $PROG milestone start \"$ISSUE_MILESTONE\" -p $ISSUE_PROJECT"
 
     local primary mwt
     primary=$(primary_worktree) || refuse \
@@ -858,38 +988,13 @@ cmd_ticket_status() {
     require_repo
     load_issue "$key"
 
-    [ -n "$ISSUE_MILESTONE" ] || refuse_ticket "$ISSUE_KEY" \
-        "$ISSUE_KEY is on no milestone, so it has no integration target" \
+    load_ticket_milestone_branch "it has no integration target" \
         "Mergeability is a question about a milestone branch. Put the ticket on a" \
-        "milestone first:" \
-        "" \
-        "    cliban issue edit $ISSUE_KEY --milestone \"<name>\""
+        "milestone first:"
+    require_ticket_branch
 
-    local mbranch
-    mbranch=$(milestone_branch "$ISSUE_MILESTONE")
-    [ "$mbranch" != "milestone/" ] || refuse_ticket "$ISSUE_KEY" \
-        "milestone \"$ISSUE_MILESTONE\" has no usable branch name" \
-        "Its name slugifies to nothing, so there is no branch it could refer to." \
-        "Rename the milestone to something containing letters or digits."
-
-    have_branch "$mbranch" || refuse_ticket "$ISSUE_KEY" \
-        "the milestone branch $mbranch does not exist here" \
-        "$ISSUE_KEY is on milestone \"$ISSUE_MILESTONE\", whose branch would be" \
-        "$mbranch. Create it, in its own worktree:" \
-        "" \
-        "    cliban-flow milestone start \"$ISSUE_MILESTONE\" -p $ISSUE_PROJECT" \
-        "" \
-        "Refusing rather than creating it here: a milestone branch invented at" \
-        "gate time would answer the question by defining it away."
-
-    have_branch "$ISSUE_BRANCH" || refuse_ticket "$ISSUE_KEY" \
-        "the ticket branch $ISSUE_BRANCH does not exist here" \
-        "Nothing has been implemented on $ISSUE_KEY yet, or this repository is" \
-        "not where it was. Start it with:" \
-        "" \
-        "    cliban-flow ticket start $ISSUE_KEY"
-
-    local msha tsha
+    local mbranch msha tsha
+    mbranch=$TICKET_MBRANCH
     msha=$(short_sha "$mbranch")
     tsha=$(short_sha "$ISSUE_BRANCH")
 
