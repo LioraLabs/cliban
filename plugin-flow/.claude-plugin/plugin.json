@@ -1,7 +1,7 @@
 {
   "name": "cliban-flow",
   "description": "Cliban-native workflow skills, with two ways onto the board: explore a feature into a shared design and grill it into tickets on a milestone, or triage a bug report into a ticket and diagnose its root cause. Both converge on executing a single ticket or orchestrating a whole milestone end-to-end. Carries the cliban workflow contract (where specs, plans, and lessons live). Requires the cliban plugin for CLI mechanics",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "Liora Labs"
   },
