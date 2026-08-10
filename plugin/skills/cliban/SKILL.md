@@ -89,6 +89,7 @@ environment.
 | `issue archive\|unarchive\|archive-done` | keep the board clean; nothing ever deletes |
 | `activity` | what changed since \<time\>; `--issue KEY` = one full history |
 | `milestone add\|ls\|show\|edit\|waves` | milestones; `waves` = dependency order for parallel dispatch |
+| `milestone log` | `issue log` for work that is about the whole milestone — atomic append to its `## Activity Log` |
 | `label add\|ls\|rm` | labels (`label rm` deletes — labels have no history) |
 | `linear import\|push\|sync` | Linear bridge — read references/linear-bridge.md first |
 
@@ -127,6 +128,7 @@ cliban issue ls --search "ordering"        # fuzzy across title/key/labels/descr
 cliban issue cat PROJ-42 --section plan    # section body: spec|plan|activity|notes or any verbatim H2
 cliban milestone ls                        # scoped: lean rows · unscoped: per-project counts only
 cliban milestone waves "v0.1"              # {"waves":[[...],...],"done":[...],"external_blocked":[...]}
+cliban milestone log "v0.1" "wave 2 dispatched"   # milestone-wide note; per-ticket notes go to `issue log`
 ```
 
 Wave N of `waves` is dispatchable once waves 1..N-1 are done;
@@ -151,8 +153,14 @@ cliban issue log PROJ-12 "note"         # writes ## Activity Log AND the durable
   `--create-section` when you mean to add one. Payloads are the section
   *body* — an inner H2 is exit 2. `--section activity` is refused on
   writes: the log belongs to `issue log`.
-- `issue log` / `append-section` / `project note add` read piped stdin when
-  the text argument is absent.
+- `issue log` / `milestone log` / `append-section` / `project note add` read
+  piped stdin when the text argument is absent.
+- Milestone descriptions follow the same contract, and `milestone log` owns
+  `## Activity Log` there the way `issue log` owns it on an issue — same line
+  shape, one parser reads both. `milestone edit --description` is
+  full-replace, so it is never how you add an entry. Unlike `issue log` there
+  is no second durable record behind it: the section is the only copy, and a
+  `--description` rewrite erases it.
 - Racy round-trips: pass `--if-updated-at <updated_at>` from a prior `show`
   or echo (exit 2 = stale; re-read and retry). `project edit` takes it too.
 

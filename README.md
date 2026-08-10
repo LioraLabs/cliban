@@ -233,6 +233,13 @@ durable record, so a note survives a later description rewrite (and the
 rewrite itself is recorded: `description rewritten, dropped ## Activity
 Log`).
 
+Work that is about a whole milestone rather than one ticket — an orchestrator
+setting a milestone up, a landing attempted — has `cliban milestone log "v0.4"
+"wave 2 dispatched"`. Same line shape, appended to the milestone description's
+`## Activity Log` under a write lock, so several agents can record against one
+milestone at once and no `--description` rewrite is involved to lose anybody's
+entry.
+
 Nothing is ever deleted. A deleted row would take its timeline with it, so
 `issue rm` and `project rm` archive, `milestone rm` cancels — a unix reflex
 lands on the closest safe thing, says what it really did, and names the undo,
