@@ -153,7 +153,27 @@ run_flow ticket status "$key"
 assert_status 2 "a tag named like the milestone branch does not satisfy the guard"
 assert_out_lacks "mergeable" "no verdict is given against a tag"
 
-# Trailing arguments are a typo, not something to ignore silently.
+# A tag alongside the branch of the same name. git disambiguates a bare name
+# tags-before-branches, so any lookup that is not explicitly refs/heads answers
+# about the tag — and here the tag is at the commit the branch has moved off,
+# which turns a branch that is behind into a false `mergeable`.
+fixture_new
+key=$(new_issue "Tag shadows the milestone branch")
+branch=$(branch_of "$key")
+gitf checkout -q -b "$branch" milestone/test-milestone
+commit_file ticket-side.txt "ticket work"
+gitf checkout -q milestone/test-milestone
+stale=$(gitf rev-parse HEAD)
+commit_file milestone-side.txt "another ticket landed"
+gitf tag milestone/test-milestone "$stale"
+
+run_flow ticket status "$key"
+assert_status 1 "a tag shadowing the milestone branch cannot produce a false mergeable"
+assert_out_lacks "mergeable" "the stale tag is not mistaken for the branch"
+
+# Trailing arguments are a typo, not something to ignore silently — and a
+# refusal reached before the ticket is loaded has nowhere to record itself, so
+# it must leave the board alone rather than half-write to it.
 fixture_new
 key=$(new_issue "One key only")
 branch=$(branch_of "$key")
@@ -162,6 +182,7 @@ gitf branch "$branch" milestone/test-milestone
 run_flow ticket status "$key" --json
 assert_status 2 "an unrecognised trailing argument is refused"
 assert_out_has "--json" "the refusal names the argument it did not understand"
+assert_board_lacks "$key" "[cliban-flow]" "a refusal before the ticket loads writes no board line"
 
 # ------------------------------------------------------- board unavailability
 #

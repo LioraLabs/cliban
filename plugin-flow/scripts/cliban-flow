@@ -12,7 +12,8 @@
 #
 #   0  the action succeeded, or a read-only verdict is affirmative
 #   1  the verdict is negative — a real, legitimate state that is not what was
-#      asked for. Stdout names the command that changes it.
+#      asked for. Stdout carries the verdict; stderr names the command that
+#      changes it.
 #   2  refused. A guard failed or the invocation was malformed, so the question
 #      could not be answered at all. Nothing was changed.
 #
@@ -136,11 +137,17 @@ have_branch() { gitr rev-parse --verify --quiet "refs/heads/$1" >/dev/null; }
 
 short_sha() { gitr rev-parse --short "refs/heads/$1"; }
 
-# is_ancestor <a> <b> — true when every commit of <a> is reachable from <b>.
-# Strict ancestry is the whole gate: never a trial merge, because a trial merge
-# answers "would this apply cleanly", and the question that matters is "was the
-# tree that was tested the tree that will land".
-is_ancestor() { gitr merge-base --is-ancestor "$1" "$2"; }
+# is_ancestor <branch-a> <branch-b> — true when every commit of <a> is reachable
+# from <b>. Strict ancestry is the whole gate: never a trial merge, because a
+# trial merge answers "would this apply cleanly", and the question that matters
+# is "was the tree that was tested the tree that will land".
+#
+# Both sides are resolved as refs/heads, like every other lookup here. Bare
+# names would be disambiguated tags-before-branches, so a stray tag sharing a
+# branch's name would answer this with a different commit than the one the
+# guard checked and the one the message reports — a false `mergeable`, which is
+# the single failure this gate exists to prevent.
+is_ancestor() { gitr merge-base --is-ancestor "refs/heads/$1" "refs/heads/$2"; }
 
 # ---------------------------------------------------------------- the board's issues
 

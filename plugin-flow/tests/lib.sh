@@ -9,9 +9,9 @@
 #   * CLIBAN_DB is pointed at a file inside that directory before any cliban
 #     call, and `fixture_new` aborts the whole run if it is not
 #
-# Layout: each `*.test.sh` beside this file sources it, calls `fixture_new` per
-# case, and ends with `finish`. Adding a subcommand means adding a file, never
-# editing one.
+# Layout: each `*.test.sh` beside this file sources it, calls `fixture_new`
+# before any case that needs its own history, and ends with `finish`. Adding a
+# subcommand means adding a file, never editing one.
 
 set -uo pipefail
 
@@ -31,15 +31,15 @@ abort() { printf 'ABORT: %s\n' "$1" >&2; exit 1; }
 
 # ---------------------------------------------------------------- fixtures
 
+FIXTURE_PARENT=${TMPDIR:-/tmp}
+FIXTURE_PARENT=${FIXTURE_PARENT%/}
+
 # fixture_new — a throwaway git repo plus a throwaway board, wired together.
 #
 # The repo gets `main` with one commit, a `milestone/test-milestone` branch off
 # it, and nothing else; each case builds the history it needs on top. The board
 # gets project FLOW and milestone "Test milestone", whose slug is the milestone
 # branch name the script under test is expected to derive.
-FIXTURE_PARENT=${TMPDIR:-/tmp}
-FIXTURE_PARENT=${FIXTURE_PARENT%/}
-
 fixture_new() {
     fixture_cleanup
     FIXTURE_ROOT=$(mktemp -d "$FIXTURE_PARENT/cliban-flow-test.XXXXXX") ||
@@ -159,9 +159,9 @@ run_flow() {
 $FLOW_STDERR"
 }
 
-# The three helpers below substitute an external boundary — the board, and the
-# JSON reader — for the script under test only. They set FLOW_PATH; a case ends
-# with `unset FLOW_PATH`. Anything that talks to a tool this suite does not own
+# The helpers below substitute an external boundary — the board, or the JSON
+# reader — for the script under test only, via stub_bin. They set FLOW_PATH; a
+# case ends with `unset FLOW_PATH`. Anything that talks to a tool this suite does not own
 # is a legitimate place to substitute; nothing inside the script is.
 
 stub_bin() {
@@ -271,6 +271,18 @@ Output:
 $FLOW_OUT"
     else
         pass "$2"
+    fi
+}
+
+assert_board_lacks() {
+    local log
+    log=$(cb issue cat "$1" --section activity 2>&1)
+    if printf '%s' "$log" | grep -qF -- "$2"; then
+        fail "$3" "expected $1's activity log NOT to contain: $2
+Activity log:
+$log"
+    else
+        pass "$3"
     fi
 }
 
