@@ -68,6 +68,50 @@ pub fn resolve(
     }
 }
 
+/// Where a `log`-shaped command's entry comes from: a positional message, a
+/// `--message-file` sibling (with `-` for stdin), or — when neither was
+/// given — a bare pipe. Never empty: an entry nobody wrote is a refusal, not
+/// a blank line spliced into someone's `## Activity Log`.
+///
+/// Shared because `issue log` and `milestone log` splice the identical line
+/// into the identical section grammar, so they must also agree on where that
+/// line comes from. Two spellings of "where does the message come from" would
+/// drift, and the drift would only show up as one of them silently accepting
+/// input the other refused.
+///
+/// Unlike [`resolve`], a bare `-` in the *positional* stays literal: a
+/// positional payload has no second spelling to disambiguate it from, so
+/// `cliban issue log KEY -` logs a dash.
+pub fn log_message(message: Option<String>, message_file: Option<String>) -> CliResult<String> {
+    let positional = message.is_some();
+    let mut msg = message.unwrap_or_default();
+    if let Some(file) = message_file {
+        if !msg.is_empty() {
+            return Err(CliError::validation(
+                "pass <message> OR --message-file, not both",
+            ));
+        }
+        let content = if file == "-" {
+            read_stdin()?
+        } else {
+            std::fs::read_to_string(file).map_err(|e| CliError::validation(e.to_string()))?
+        };
+        msg = content.trim_end_matches('\n').to_string();
+    } else if !positional {
+        // No positional, no --message-file: piped/redirected stdin IS the
+        // message (a TTY yields None and keeps the fast error below).
+        if let Some(piped) = fallback()? {
+            msg = piped.trim_end_matches('\n').to_string();
+        }
+    }
+    if msg.is_empty() {
+        return Err(CliError::validation(
+            "message required (positional or --message-file)",
+        ));
+    }
+    Ok(msg)
+}
+
 /// Unconditional read of stdin — the `-` sentinel says the user meant it, so
 /// there is no `is_terminal` check here and a bare `-` at a terminal waits
 /// for input, as `cat -` does.

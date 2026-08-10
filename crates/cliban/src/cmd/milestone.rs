@@ -1,6 +1,7 @@
 //! `cliban milestone` subcommands.
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Utc};
+use rusqlite::{Transaction, TransactionBehavior};
 use serde_json::{json, Map, Value};
 
 use cliban_core::contexts::issues::ListOpts;
@@ -123,6 +124,26 @@ pub enum MilestoneCmd {
         #[arg(long, conflicts_with = "json")]
         table: bool,
     },
+    /// Append an entry to the milestone's ## Activity Log section
+    Log {
+        /// milestone name
+        name: String,
+        /// log message (leading "-" is fine)
+        #[arg(allow_hyphen_values = true)]
+        message: Option<String>,
+        /// read message from file (use '-' for stdin)
+        #[arg(long = "message-file")]
+        message_file: Option<String>,
+        /// project key (default: $CLIBAN_PROJECT)
+        #[arg(long, short = 'p')]
+        project: Option<String>,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+        /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
+        #[arg(long, conflicts_with = "json")]
+        table: bool,
+    },
     /// A unix reflex, not a real deleter (hidden): cancels, says so, names
     /// the undo.
     #[command(hide = true)]
@@ -222,6 +243,24 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
                 println!("updated milestone {} in {}", m.name, project_key);
             }
             Ok(())
+        }
+        MilestoneCmd::Log {
+            name,
+            message,
+            message_file,
+            project,
+            json,
+            table,
+        } => {
+            log(
+                db,
+                project,
+                name,
+                message,
+                message_file,
+                crate::output::mode(json, table),
+            )
+            .await
         }
         MilestoneCmd::Rm { project, name } => {
             // `cancelled` is a milestone's archived state, so that is what a
@@ -643,6 +682,77 @@ async fn apply_edit(
         .await?;
     let count = issue_count(&store, project_key, m.name.clone()).await?;
     Ok((m, count))
+}
+
+/// `milestone log`: append one timestamped entry to the milestone's
+/// `## Activity Log`, creating the section when it is absent. The
+/// milestone-scoped sibling of `issue log`, and the only place an action that
+/// is about the milestone rather than about one ticket — a milestone being
+/// set up, a landing attempted — has to record itself. The line it writes is
+/// built by the same `descmd::append_activity_log` the issue side uses, so one
+/// parser reads both.
+///
+/// The append is a splice inside a transaction, never a `--description`
+/// rewrite. `milestone edit --description` is full-replace, and a milestone
+/// description is exactly the document several agents record against at once:
+/// a rewrite drops whatever landed between one writer's read and its write.
+///
+/// The transaction is `IMMEDIATE` rather than the deferred one `issue log`
+/// opens. A deferred transaction reads first and only then tries to upgrade
+/// its snapshot to a write; when another process wrote in between, SQLite
+/// answers `SQLITE_BUSY_SNAPSHOT`, which the connection's `busy_timeout` does
+/// not retry — measured on this board as 7 of 12 concurrent `issue log`
+/// processes failing outright rather than queueing. Taking the write lock at
+/// `BEGIN` moves the contention into the class `busy_timeout` does retry, so
+/// concurrent writers wait their turn instead of losing it. Nothing here reads
+/// before the lock is held, so there is no cost to paying for it up front.
+async fn log(
+    db: &Option<String>,
+    project: Option<String>,
+    name: String,
+    message: Option<String>,
+    message_file: Option<String>,
+    mode: Mode,
+) -> CliResult<()> {
+    let project_key = crate::scope::required_project(project)?;
+    let msg = crate::stdin_input::log_message(message, message_file)?;
+
+    let store = store_open::open(db).await?;
+    let now = Utc::now();
+    let (call_key, call_name, entry) = (project_key.clone(), name.clone(), msg.clone());
+    store
+        .call(move |conn| {
+            let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+            let cur =
+                milestones::get(&tx, &call_key, &call_name)?.ok_or(cliban_core::Error::NotFound)?;
+            let new_desc = crate::descmd::append_activity_log(&cur.description, &entry, now);
+            milestones::update(
+                &tx,
+                &cur,
+                UpdateMilestone {
+                    description: Some(new_desc),
+                    ..Default::default()
+                },
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+
+    if mode.is_json() {
+        println!(
+            "{}",
+            json!({
+                "entry": msg,
+                "milestone": name,
+                "project": project_key,
+                "timestamp": format_usec(now),
+            })
+        );
+    } else {
+        println!("logged on milestone {name} in {project_key}: {msg}");
+    }
+    Ok(())
 }
 
 /// `milestone waves`: print the dependency-wave partition the core computes —
