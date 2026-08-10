@@ -314,6 +314,70 @@ fn a_leading_hyphen_is_a_message_not_a_flag() {
     assert!(got[0].ends_with(" — - already a bullet"), "{got:?}");
 }
 
+/// The load-bearing one. Several agents record against one milestone at the
+/// same time, and `board_record()` in `plugin-flow/scripts/cliban-flow`
+/// discards a failed append with a warning — so a writer that is *rejected*
+/// leaves the board just as wrong as one that is *clobbered*, and only exit
+/// codes distinguish the two.
+///
+/// Hence both halves of the assertion. Checking only "no entry was lost" would
+/// pass on a run where eleven of twelve writers died before writing anything,
+/// which is exactly what the deferred transaction `issue log` uses does:
+/// against that version this test fails with `database is locked` exit-3
+/// children and a short section.
+#[test]
+fn concurrent_appends_all_survive() {
+    const WRITERS: usize = 12;
+
+    let db = seeded("concurrent", "## Spec\n\nbody\n");
+    let handles: Vec<_> = (0..WRITERS)
+        .map(|i| {
+            let db = db.clone();
+            std::thread::spawn(move || {
+                let out = cmd(&db)
+                    .args([
+                        "milestone",
+                        "log",
+                        "Deterministic integration",
+                        "-p",
+                        "CLI",
+                        &format!("writer {i}"),
+                    ])
+                    .output()
+                    .expect("run cliban");
+                (
+                    out.status.code().unwrap_or(-1),
+                    String::from_utf8_lossy(&out.stderr).to_string(),
+                )
+            })
+        })
+        .collect();
+
+    let results: Vec<(i32, String)> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    let failed: Vec<&(i32, String)> = results.iter().filter(|(code, _)| *code != 0).collect();
+    assert!(
+        failed.is_empty(),
+        "{} of {WRITERS} concurrent writers were rejected: {failed:?}",
+        failed.len()
+    );
+
+    let got = entries(&db);
+    assert_eq!(got.len(), WRITERS, "entries lost or duplicated: {got:?}");
+    for i in 0..WRITERS {
+        assert!(
+            got.iter().any(|e| e.ends_with(&format!(" — writer {i}"))),
+            "writer {i}'s entry is missing from {got:?}"
+        );
+    }
+    assert_eq!(
+        description(&db).matches("## Activity Log").count(),
+        1,
+        "concurrent writers must share one section"
+    );
+    // The description they were all splicing into is still intact.
+    assert!(description(&db).starts_with("## Spec\n\nbody\n"));
+}
+
 #[test]
 fn unknown_milestone_and_unknown_project_exit_non_zero() {
     let db = seeded("missing", "## Spec\n\nbody\n");
