@@ -23,6 +23,12 @@ A repo that has run `setup-cliban` carries `docs/agents/issue-tracker.md` — th
 
 If the user is wiring up a new repo, point them at `setup-cliban`; don't improvise a binding. If `cliban` itself is missing from `$PATH`, skip all board actions silently for the session.
 
+## The Dispatcher
+
+The workflow's git-and-board transitions live in `plugin-flow/scripts/cliban-flow`. The workflow skills abbreviate that executable as `cliban-flow`; before using either workflow, resolve it at that location. If it is absent or not executable, stop and say so. There is no fallback: enforcing this protocol only when convenient is the failure the dispatcher removes.
+
+Its surface is `milestone start`, `milestone finish`, `ticket start`, `ticket status`, `ticket sync`, `ticket ready`, and `ticket integrate`. Invoke the subcommand instead of describing or recreating the git operation it owns. Exit 0 is success or an affirmative verdict, exit 1 is a legitimate negative verdict with its next step, and exit 2 is a refusal whose instruction must be followed before retrying.
+
 ## Status Mapping
 
 | Workflow event | Board action |
@@ -31,6 +37,7 @@ If the user is wiring up a new repo, point them at `setup-cliban`; don't improvi
 | First step picked up | `mv KEY in-progress` |
 | Stuck on a dependency | `mv KEY blocked --note "<why>"` |
 | PR opened | `mv KEY in-review --note "PR <url>"` |
+| Dispatched ticket ready for integration | `ticket ready KEY` moves it to `in-review` |
 | PR merged / local merge | `mv KEY done --note "merged as <sha>"` |
 | Discarded / abandoned | keep status, `issue log KEY "work discarded: <why>"` |
 

@@ -13,7 +13,7 @@ One ticket, end to end. It already carries a `## Spec`; this skill supplies the 
 Two modes, differing only at the end:
 
 - **Standalone** — you own the branch through to `in-review` or `done` and hand it to the user.
-- **Dispatched by `complete-milestone`** — you are one agent in a wave. Commit on your ticket branch and **report**; the orchestrator merges. Never merge, never touch `main` or the milestone branch, never move the issue to `done`. Your brief says when you're in this mode.
+- **Dispatched by `complete-milestone`** — you are one agent in a wave. Commit on your ticket branch, sync it, and signal readiness through the dispatcher; the orchestrator integrates it. Never integrate, never touch `main` or the milestone branch, never move the issue to `done`. Your brief says when you're in this mode.
 
 ## 1. Resolve and claim
 
@@ -103,7 +103,9 @@ cliban issue mv <KEY> done --note "merged as <sha>"
 cliban linear push <KEY> || true      # only if the ticket came from Linear
 ```
 
-**Dispatched** — report: commit SHA, branch, test status, one-line summary, **any amendment you made to `## Spec`**, and merge-risk notes. Report only after every commit has landed; never commit after reporting. The orchestrator moves it to `done`.
+**Dispatched** — after the final commit, run `cliban-flow ticket sync <KEY>`. If it exits 1, resolve the conflicts in your ticket worktree, log why each resolution is correct, and commit the resolution. When a resolution changes behavior rather than mechanically combining both sides, run one focused fresh-context review over the resolution diff and fix any spec failure or serious finding before continuing.
+
+Run the focused and full verification again on the synced tree, then run `cliban-flow ticket ready <KEY>`. Only its exit 0 signals the orchestrator; a chat report alone does not. Report the immutable SHA printed by `ticket ready`, branch, test status, one-line summary, **any amendment you made to `## Spec`**, and merge-risk notes. Never commit after `ticket ready`; if anything changes, sync, verify, and ready again. The orchestrator integrates and moves the ticket to `done`.
 
 **Sweep one durable lesson**, both modes. What will still be true on the *next* ticket — a repo convention learned the hard way, non-obvious tool behavior, a hazard that will recur? Search first (`cliban project search`), then `project note add` or update the `###` that already covers it. It's an atomic append, so wave siblings sweeping concurrently is the intended shape, not a race. Most tickets teach nothing durable and sweep to zero; ticket-specific narration belongs in `issue log`.
 
