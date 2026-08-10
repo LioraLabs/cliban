@@ -136,14 +136,16 @@ A SessionStart hook injects live board state into every
 session opened in a bound repo. Pull this one alone if you just want agents to
 drive the board.
 
-[**`cliban-flow`**](plugin-flow/) is the opinionated workflow on top:
-`explore-feature` diverges a rough idea into an approved design,
-`scope-milestone` grills it closed and publishes tracer-bullet tickets with
-native blocking edges, `complete-issue` plans and executes one ticket
-test-first, and `complete-milestone` orchestrates a whole milestone in
-dependency waves — one agent per ticket, each in an isolated git worktree. It
-carries `cliban-workflow`, the contract for where specs, plans, and lessons
-live.
+[**`cliban-flow`**](plugin-flow/) is the opinionated workflow on top, with two
+ways onto the board. Building something: `explore-feature` diverges a rough idea
+into an approved design, `scope-milestone` grills it closed and publishes
+tracer-bullet tickets with native blocking edges. Something broken:
+`triage-bug` turns a report into a ticket with a reproduction, `diagnose-issue`
+proves the root cause and logs the hypothesis ledger to the ticket. Both
+converge on `complete-issue`, which plans and executes one ticket test-first,
+and `complete-milestone`, which orchestrates a whole milestone in dependency
+waves — one agent per ticket, each in an isolated git worktree. It carries
+`cliban-workflow`, the contract for where specs, plans, and lessons live.
 
 ```bash
 claude plugin marketplace add LioraLabs/claude-plugins

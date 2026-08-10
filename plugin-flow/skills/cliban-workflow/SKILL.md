@@ -75,14 +75,22 @@ The first step is a loop, not two steps: every test then every implementation is
 
 ## The Stages
 
-Four skills carry the work, and each owns one artifact in the table above:
+Two ways onto the board — building something, or something being broken — converging on the same executors. Each stage owns one artifact from the table above:
 
 | Stage | Skill | Lands |
 |---|---|---|
 | Design | `explore-feature` | a ticket, or an empty milestone, carrying `## Spec` |
 | Slice | `scope-milestone` | tracer-bullet issues with `--blocked-by` edges |
+| Report → ticket | `triage-bug` | a `bug` issue whose `## Spec` holds a reproduction |
+| Root cause | `diagnose-issue` | the hypothesis ledger and proven cause in `## Activity Log` |
 | Execute one | `complete-issue` | `## Plan`, then code, `tick`, `log`, and a status move |
 | Execute many | `complete-milestone` | wave-ordered tickets merged onto a milestone branch |
+
+```
+idea    → explore-feature → scope-milestone ─┐
+                                             ├→ complete-issue → (complete-milestone)
+report  → triage-bug      → diagnose-issue ──┘
+```
 
 Working without them — plan mode, or plain conversation — is fully supported and changes nothing about the contract: create the issue with its `## Spec`, write the plan via `issue edit KEY --section plan --create-section --description-file -` (never a whole-description rewrite), `issue lint KEY` to confirm it parses, then `mv` → `tick` → `log` as the status table dictates.
 

@@ -53,6 +53,10 @@ The `cliban-flow` plugin carries the workflow:
   ticket or an empty milestone carrying `## Spec`.
 - `scope-milestone` — grill that container until the slicing is settled, then
   fill it with tracer-bullet tickets and `--blocked-by` edges.
+- `triage-bug` — turn a bug report into a ticket with a reproduction, label and
+  priority, after searching the board for duplicates.
+- `diagnose-issue` — find and prove a root cause, logging the hypothesis ledger
+  to the ticket's `## Activity Log` as it goes.
 - `complete-issue` — take one ticket: `## Plan`, then test-first execution with
   `cliban issue tick` / `cliban issue log`.
 - `complete-milestone` — orchestrate a whole milestone in dependency waves.
