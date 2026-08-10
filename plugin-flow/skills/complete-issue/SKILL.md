@@ -57,6 +57,13 @@ cliban issue lint <KEY>
 cliban issue cat <KEY> --section plan     # confirm it actually landed
 ```
 
+The confirmed board plan is the recoverability guarantee: **before execution
+begins** means another agent must be able to see the intended work and exact progress
+without this transcript. Do not write the first test or implementation until
+the final `cat` shows the plan. Commit new files early so a crashed worktree does
+not leave its only recoverable copy untracked. In short: the plan must be present
+before execution begins.
+
 - **`--create-section` on the first write.** A ticket from `scope-milestone` has only `## Spec`, so a plain `--section plan` exits 2. Harmless once the section exists — pass it every time.
 - **`lint` proves the plan parses, not that it exists.** On an issue with no `## Plan` it reports zero findings and exits 0, so a failed write and a clean plan look identical by exit code. Hence the `cat`.
 - **Never write the whole description** — that destroys `## Spec` and `## Activity Log`.

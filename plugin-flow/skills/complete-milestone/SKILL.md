@@ -68,7 +68,24 @@ The brief:
 
 Never pre-plan a ticket for its agent. The agent runs plan and execute itself; that's where the per-ticket review checkpoints live.
 
-## 4. Integrate as each agent finishes
+## 4. Sweep running work
+
+Periodically run a cheap, read-only liveness sweep over running and dead agents:
+
+```bash
+cliban issue cat <KEY> --section plan
+cliban issue cat <KEY> --section activity
+git log <base>..<ticket-branch>
+git -C <ticket-worktree> status -s
+```
+
+A healthy branch has a plan on the board and, over time, advancing activity,
+ticked steps, or commits. The status output also exposes uncommitted work. Do not interrupt
+a working agent to perform the sweep. If all signals are empty or
+stale, ask the agent for its current phase and blocker before concluding it is
+stuck; a hard ticket can legitimately stay silent for a long stretch.
+
+## 5. Integrate as each agent finishes
 
 The orchestrator integrates, not the agent. **A "done" notification is a claim to verify, not a fact.** Confirm the issue is `in-review`, its plan is fully ticked, and the report includes the SHA returned by `ticket ready`, then:
 
@@ -85,7 +102,7 @@ The dispatcher accepts only strict ancestry: the tested ticket tree already cont
 
 The resulting squash has no ticket-side merge parent. Compare the agent's reported ready SHA with the SHA recorded by the dispatcher before integration; if they differ, a late commit exists and the ticket must be synced, verified, readied, and integrated again rather than copied in by hand.
 
-## 5. Sweep lessons, then finalize
+## 6. Sweep lessons, then finalize
 
 When every issue is `done` and the milestone branch is green, sweep before the knowledge evaporates.
 
