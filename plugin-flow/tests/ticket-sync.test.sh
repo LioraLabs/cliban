@@ -9,6 +9,9 @@
 # shellcheck source=lib.sh
 . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
+# CLI-81: every state shared with `ticket ready` must reach the same guard.
+assert_ticket_mutation_guards sync
+
 # ------------------------------------------------------------- a clean merge
 
 fixture_new

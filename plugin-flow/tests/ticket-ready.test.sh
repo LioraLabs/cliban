@@ -12,6 +12,9 @@
 # shellcheck source=lib.sh
 . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
+# CLI-81: every state shared with `ticket sync` must reach the same guard.
+assert_ticket_mutation_guards ready
+
 # ------------------------------------------------------------- the happy path
 
 fixture_new
@@ -70,8 +73,7 @@ assert_board_has "$key" "[cliban-flow] ticket ready $key: refused" \
 # A branch that is merely behind would merge without a conflict, which is why
 # "no conflicts" is the wrong gate and ancestry is the right one. Proving that
 # here as well as in ticket-status is the point: the two must agree.
-gitf checkout -q "$branch"
-gitf merge -q --no-edit milestone/test-milestone
+gitt "$branch" merge -q --no-edit milestone/test-milestone
 assert_eq "$?" "0" "the refused branch would in fact have merged without conflict"
 
 # --------------------------------------------------------------- a dirty tree

@@ -130,6 +130,105 @@ fixture_ticket_worktree() {
     fi
 }
 
+# assert_ticket_mutation_guards <sync|ready> — the shared guard matrix for the
+# two commands that act on a ticket worktree. Keeping the fixtures here makes
+# each command's suite run the same states while still proving its own route
+# reaches every guard.
+assert_ticket_mutation_guards() {
+    local command=$1 key branch wt
+
+    fixture_new
+    key=$(new_issue_no_milestone "Loose ticket for $command")
+    branch=$(branch_of "$key")
+    gitf branch "$branch" main
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses a ticket on no milestone"
+    assert_stderr_has "is on no milestone" "$command reaches the no-milestone guard"
+
+    fixture_new
+    cb milestone add "!!!" --project FLOW >/dev/null
+    key=$(new_issue "Unslugifiable milestone for $command" "!!!")
+    branch=$(branch_of "$key")
+    gitf branch "$branch" main
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses an unusable milestone name"
+    assert_stderr_has "no usable branch name" "$command reaches the slug guard"
+
+    fixture_new
+    gitf branch -D milestone/test-milestone >/dev/null
+    key=$(new_issue "Missing milestone branch for $command")
+    branch=$(branch_of "$key")
+    gitf branch "$branch" main
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses a missing milestone branch"
+    assert_stderr_has "milestone/test-milestone does not exist here" \
+        "$command reaches the milestone-branch guard"
+
+    fixture_new
+    fixture_milestone_worktree
+    key=$(new_issue "Missing ticket branch for $command")
+    branch=$(branch_of "$key")
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses a missing ticket branch"
+    assert_stderr_has "ticket branch $branch does not exist here" \
+        "$command reaches the ticket-branch guard"
+
+    fixture_new
+    fixture_milestone_worktree
+    key=$(new_issue "No ticket worktree for $command")
+    branch=$(branch_of "$key")
+    gitf branch "$branch" milestone/test-milestone
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses a branch checked out nowhere"
+    assert_stderr_has "checked out in no worktree" \
+        "$command reaches the absent-worktree guard"
+
+    fixture_new
+    fixture_milestone_worktree
+    key=$(new_issue "Primary ticket worktree for $command")
+    branch=$(branch_of "$key")
+    gitf checkout -q -b "$branch" milestone/test-milestone
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses the primary checkout"
+    assert_stderr_has "checked out in the primary checkout" \
+        "$command reaches the primary-worktree guard"
+
+    fixture_new
+    fixture_milestone_worktree
+    key=$(new_issue "Missing registered worktree for $command")
+    branch=$(branch_of "$key")
+    fixture_ticket_worktree "$branch"
+    wt=$(fixture_ticket_wt "$branch")
+    rm -rf "$wt"
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses a registered worktree whose directory is gone"
+    assert_stderr_has "which no longer exists" \
+        "$command reaches the missing-directory guard"
+
+    fixture_new
+    fixture_milestone_worktree
+    key=$(new_issue "Merge in progress for $command")
+    branch=$(branch_of "$key")
+    fixture_ticket_worktree "$branch"
+    commit_file_at "$(fixture_ticket_wt "$branch")" ticket.txt ticket
+    commit_file_at "$(fixture_milestone_wt)" milestone.txt milestone
+    gitt "$branch" merge -q --no-commit milestone/test-milestone
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses a merge already in progress"
+    assert_stderr_has "a merge is already in progress" \
+        "$command reaches the merge-in-progress guard"
+
+    fixture_new
+    fixture_milestone_worktree
+    key=$(new_issue "Dirty worktree for $command")
+    branch=$(branch_of "$key")
+    fixture_ticket_worktree "$branch"
+    printf 'uncommitted\n' >"$(fixture_ticket_wt "$branch")/scratch.txt"
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses a dirty worktree"
+    assert_stderr_has "has uncommitted changes" "$command reaches the dirty-tree guard"
+}
+
 # gitt <branch> <args>... — git inside a ticket's worktree.
 gitt() {
     local branch=$1
