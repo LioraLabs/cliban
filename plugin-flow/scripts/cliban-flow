@@ -49,7 +49,7 @@ ACTION=""
 # The repository every git call runs against; set by require_repo.
 REPO=""
 # The loaded ticket; set by load_issue.
-ISSUE_KEY="" ISSUE_BRANCH="" ISSUE_MILESTONE="" ISSUE_PROJECT="" ISSUE_STATUS=""
+ISSUE_KEY="" ISSUE_BRANCH="" ISSUE_MILESTONE="" ISSUE_PROJECT="" ISSUE_STATUS="" ISSUE_TITLE=""
 # The loaded milestone; set by load_milestone.
 MILESTONE_NAME="" MILESTONE_BRANCH=""
 # The project key milestone reads and writes are scoped by; set by
@@ -136,6 +136,10 @@ usage: cliban-flow <group> <command> [args]
 
   ticket ready <KEY>    Verify the synced branch and clean worktree, then move
                         the ticket to in-review. Prints the ticket tip SHA.
+
+  ticket integrate <KEY> [--dry-run]
+                        Squash a ready ticket onto its milestone branch, mark it
+                        done, and remove its worktree. Dry-run only reports.
 
 Both start subcommands are idempotent: a second run reports what is already
 there rather than recreating it.
@@ -388,11 +392,11 @@ load_issue() {
     json=$(cliban issue show "$1" --json 2>/dev/null) || refuse \
         "no issue named $1 on the board" \
         "Check the key. If this is a scratch board, check CLIBAN_DB points at it."
-    row=$(printf '%s' "$json" | json_fields key git_branch_name milestone status) || refuse \
+    row=$(printf '%s' "$json" | json_fields key git_branch_name milestone status title) || refuse \
         "could not read $1 from the board" \
         "\`cliban issue show $1 --json\` returned something this script could not" \
         "parse. cliban may be newer or older than this dispatcher expects."
-    IFS=$'\x1f' read -r ISSUE_KEY ISSUE_BRANCH ISSUE_MILESTONE ISSUE_STATUS <<<"$row"
+    IFS=$'\x1f' read -r ISSUE_KEY ISSUE_BRANCH ISSUE_MILESTONE ISSUE_STATUS ISSUE_TITLE <<<"$row"
     # The board's own spelling of the key, so the audit trail stays greppable
     # when someone types `flow-1`.
     [ -n "$ISSUE_KEY" ] && [ -n "$ISSUE_BRANCH" ] || refuse \
@@ -691,6 +695,10 @@ ticket_dispatch() {
         ready)
             ACTION="ticket ready"
             cmd_ticket_ready "$@"
+            ;;
+        integrate)
+            ACTION="ticket integrate"
+            cmd_ticket_integrate "$@"
             ;;
         '') usage_error "ticket needs a command" ;;
         *) usage_error "unknown ticket command: $command" ;;
@@ -1265,6 +1273,99 @@ cmd_ticket_ready() {
         ""
     board_record "$ISSUE_KEY" "ready ($detail)"
     exit 0
+}
+
+# ticket integrate <KEY> [--dry-run] — serialize one tested ticket tree onto
+# the milestone branch as one squash commit. Strict ancestry makes that tree
+# byte-identical to the one the implementer tested; this command never builds.
+cmd_ticket_integrate() {
+    local key=${1:-} dry_run=0
+    [ -n "$key" ] || usage_error "ticket integrate needs an issue key"
+    shift
+    if [ "${1:-}" = --dry-run ]; then dry_run=1; shift; fi
+    [ $# -eq 0 ] || usage_error "ticket integrate takes one issue key and optional --dry-run, got: $key $*"
+    require_repo
+    load_issue "$key"
+
+    [ "$ISSUE_STATUS" = in-review ] || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY is $ISSUE_STATUS, not in-review" \
+        "The implementer must finish, sync, test, and hand off the branch first:" \
+        "" \
+        "    $PROG ticket ready $ISSUE_KEY"
+    load_ticket_milestone_branch "it has no integration target" \
+        "Put the ticket on the milestone it should integrate into first:"
+    require_ticket_branch
+    load_ticket_worktree
+
+    local mbranch=$TICKET_MBRANCH mtip ttip mwt subject subjects
+    mtip=$(full_sha "$mbranch")
+    ttip=$(full_sha "$ISSUE_BRANCH")
+
+    have_branch main || refuse_ticket "$ISSUE_KEY" \
+        "the local main branch does not exist" \
+        "This protocol lands the milestone by fast-forwarding main, so main must" \
+        "exist before a ticket can be integrated."
+    is_ancestor main "$mbranch" || refuse_ticket "$ISSUE_KEY" \
+        "main is not an ancestor of $mbranch (main drift)" \
+        "Merge main into $mbranch via a dispatched agent in the milestone worktree," \
+        "resolve and verify it there, then retry. The orchestrator must not resolve it."
+    is_ancestor "$mbranch" "$ISSUE_BRANCH" || refuse_ticket "$ISSUE_KEY" \
+        "$mbranch@$(short_sha "$mbranch") is not an ancestor of $ISSUE_BRANCH@$(short_sha "$ISSUE_BRANCH")" \
+        "The agent implementing $ISSUE_KEY must sync, resolve, build, test, and" \
+        "hand the branch back:" \
+        "" \
+        "    $PROG ticket sync $ISSUE_KEY" \
+        "    <re-run this repo's build and its full test suite>" \
+        "    $PROG ticket ready $ISSUE_KEY" \
+        "" \
+        "The orchestrator must not resolve this itself."
+
+    subject="$ISSUE_KEY: $ISSUE_TITLE"
+    if [ "$dry_run" -eq 1 ]; then
+        say "mergeable: $mbranch@$mtip is an ancestor of $ISSUE_BRANCH@$ttip"
+        say "squash: $subject"
+        say "milestone: $mbranch@$mtip"
+        say "ticket: $ISSUE_BRANCH@$ttip"
+        board_record "$ISSUE_KEY" "dry-run (mergeable; $mbranch@$mtip; $ISSUE_BRANCH@$ttip; squash: $subject)"
+        exit 0
+    fi
+
+    mwt=$(worktree_for_branch "$mbranch") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    [ -n "$mwt" ] || refuse_ticket "$ISSUE_KEY" \
+        "$mbranch is checked out in no worktree" \
+        "Start the milestone worktree first: $PROG milestone start \"$ISSUE_MILESTONE\" -p $ISSUE_PROJECT"
+    ! worktree_dirty "$mwt" || refuse_ticket "$ISSUE_KEY" \
+        "the milestone worktree $mwt has uncommitted changes" \
+        "Commit or stash them before integrating another ticket."
+
+    subjects=$(gitr log --reverse --format='- %s' "refs/heads/$mbranch..refs/heads/$ISSUE_BRANCH")
+    announce "squashing $ISSUE_BRANCH@$ttip onto $mbranch@$mtip"
+    git -C "$mwt" merge --squash "refs/heads/$ISSUE_BRANCH" >&2 || refuse_ticket "$ISSUE_KEY" \
+        "git could not squash $ISSUE_BRANCH onto $mbranch" \
+        "The index may contain a partial squash. Inspect $mwt; the orchestrator must not resolve it."
+    git -C "$mwt" commit -m "$subject" -m "Discarded commit subjects:
+$subjects" -m "Ticket: $ISSUE_KEY" >&2 || refuse_ticket "$ISSUE_KEY" \
+        "git could not commit the squash for $ISSUE_KEY" \
+        "The squash is staged in $mwt. Inspect it before retrying."
+
+    local squash_sha now
+    squash_sha=$(full_sha "$mbranch")
+    now=$(full_sha "$ISSUE_BRANCH")
+    [ "$now" = "$ttip" ] || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_BRANCH moved after integration started ($ttip -> $now)" \
+        "$mbranch now contains squash $squash_sha of the earlier tip. Do not mark" \
+        "$ISSUE_KEY done; inspect the late commit and repair deliberately."
+
+    cliban issue mv "$ISSUE_KEY" done --note "squashed as $squash_sha" >/dev/null || refuse_ticket "$ISSUE_KEY" \
+        "could not move $ISSUE_KEY to done after squash $squash_sha" \
+        "The git commit exists; retry the board move before integrating anything else."
+    cliban linear push "$ISSUE_KEY" >/dev/null 2>&1 || true
+    gitr worktree remove "$TICKET_WT" >&2 || refuse_ticket "$ISSUE_KEY" \
+        "could not remove ticket worktree $TICKET_WT" \
+        "The squash and board move succeeded. Remove only that worktree manually."
+    board_record "$ISSUE_KEY" "integrated ($ISSUE_BRANCH@$ttip as $squash_sha on $mbranch; branch retained)"
+    say "$squash_sha"
 }
 
 main "$@"
