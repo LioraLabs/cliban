@@ -31,6 +31,17 @@ probe rust:toolchain
 probe shell:linter
     tools { shellcheck }
 
+# `bash -n` is a bash parse, so bash's own version determines the answer.
+probe flow:linter
+    tools { bash shellcheck }
+
+# What the cliban-flow shell suite drives. cliban is in here deliberately: the
+# suite asserts on what cliban writes to a board, so a new cliban is a reason to
+# re-run it rather than replay a green from the last one. It is also why
+# test-flow stays off `check` — see below.
+probe flow:tools
+    tools { bash cliban git python3 }
+
 probe node:toolchain
     tools { node npm }
 
@@ -53,6 +64,31 @@ recipe lint-install
     seal shell:linter
     test { sh -n $<in> }
     test { shellcheck -s sh $<in> }
+
+# The cliban-flow dispatcher drives git and the board unattended on an agent's
+# behalf, so it gets the same parse-and-lint treatment as install.sh. The parse
+# is `bash -n` rather than `sh -n`: these files declare bash, and dash's grammar
+# is not the one they have to satisfy.
+recipe lint-flow
+    ingredients "plugin-flow/scripts/cliban-flow" "plugin-flow/tests/*.sh"
+    seal flow:linter
+    test { bash -n $<in> }
+    test { shellcheck -x $<in> }
+
+# No $<in> in the body, so this is one unit over the whole set. Each case builds
+# a throwaway git repo and a throwaway board, so fanning out per file would pay
+# that cost once per file to prove nothing extra.
+#
+# `cook test` picks this up like any other test recipe, but it is deliberately
+# NOT on `chore check`. The suite drives whatever `cliban` is on PATH — during a
+# release that is the *previous* version, so a green here would say nothing
+# about the version being released — and `release` and `publish` hang off
+# `check`, which would make releasing cliban require an already-installed
+# cliban. Fixtures are hermetic; the binary they drive is not this tree's.
+recipe test-flow
+    ingredients "plugin-flow/scripts/cliban-flow" "plugin-flow/tests/*.sh"
+    seal flow:tools
+    test { plugin-flow/tests/run.sh }
 
 # No $<in> in the body, so this is one unit over the whole source set rather
 # than one cargo run per file.
@@ -77,7 +113,7 @@ recipe vscode-ext
 
 # The whole gate, and what `release` and `publish` hang off. Red here means
 # `skipped (upstream-failed)` there, with the body never running.
-chore check: version-sync lint-install test-workspace clippy vscode-ext
+chore check: version-sync lint-install lint-flow test-workspace clippy vscode-ext
 
 # ---------------------------------------------------------------- mutating
 

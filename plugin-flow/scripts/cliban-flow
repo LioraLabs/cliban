@@ -1,0 +1,309 @@
+#!/usr/bin/env bash
+# cliban-flow — the git-and-board half of the cliban workflow.
+#
+# Subcommands map one-to-one onto a board transition or a board-visible verdict.
+# The script owns git and the board and nothing else: it never builds, never
+# tests, and never interprets a build or test result. That line is deliberate —
+# build commands vary per repo and reading their output is judgement, which
+# belongs to the agent that called this, not to a shell script.
+#
+# EXIT CODES are a contract every subcommand keeps, because callers branch on
+# them rather than on message text:
+#
+#   0  the action succeeded, or a read-only verdict is affirmative
+#   1  the verdict is negative — a real, legitimate state that is not what was
+#      asked for. Stdout carries the verdict; stderr names the command that
+#      changes it.
+#   2  refused. A guard failed or the invocation was malformed, so the question
+#      could not be answered at all. Nothing was changed.
+#
+# The verdict goes to stdout because it is the answer; refusals, warnings and
+# instructions go to stderr.
+#
+# BOARD LINES. Every invocation that resolves a ticket appends one line to that
+# ticket's activity log under the stable prefix "[cliban-flow]", in the shape
+#
+#   [cliban-flow] <group> <command> <KEY>: <outcome> (<detail>)
+#
+# so a compacted orchestrator, a recovery survey, or a test assertion can
+# reconstruct what ran. An invocation that never resolves a ticket — a usage
+# error, an unknown key — has no log to append to and prints only.
+#
+# cliban has no `milestone log`, so a subcommand acting on a milestone rather
+# than a ticket has no per-milestone place to write. Whoever adds the first one
+# decides where its line goes; board_line() is the single place the shape is
+# built, so only the destination is open.
+
+set -euo pipefail
+
+PROG=cliban-flow
+BOARD_PREFIX='[cliban-flow]'
+
+# "<group> <command>", set by the dispatcher and used in every board line.
+ACTION=""
+# The repository every git call runs against; set by require_repo.
+REPO=""
+# The loaded ticket; set by load_issue.
+ISSUE_KEY="" ISSUE_BRANCH="" ISSUE_MILESTONE=""
+
+# ---------------------------------------------------------------- output
+
+say() { printf '%s\n' "$*"; }
+warn() { printf '%s: %s\n' "$PROG" "$*" >&2; }
+
+# instruct <line>... — the "what to do next" that follows a verdict or refusal.
+# Indented on stderr so it reads as guidance rather than as more output.
+instruct() {
+    local line
+    for line in "$@"; do printf '  %s\n' "$line" >&2; done
+}
+
+# refuse <summary> <instruction>... — a guard failed. Nothing was changed.
+refuse() {
+    local summary=$1
+    shift
+    printf '%s: refused: %s\n' "$PROG" "$summary" >&2
+    instruct "$@"
+    exit 2
+}
+
+# refuse_ticket <KEY> <summary> <instruction>... — a guard failed on a ticket
+# that did resolve, so the refusal is recorded before exiting. Refusals reached
+# before a key is known (a bad key, the wrong directory) have nowhere to write
+# and print only.
+refuse_ticket() {
+    local key=$1 summary=$2
+    shift 2
+    board_record "$key" "refused ($summary)"
+    refuse "$summary" "$@"
+}
+
+usage_error() {
+    printf '%s: %s\n' "$PROG" "$1" >&2
+    usage >&2
+    exit 2
+}
+
+usage() {
+    cat <<EOF
+usage: cliban-flow <group> <command> [args]
+
+  ticket status <KEY>   Is <KEY>'s branch integrable? Read-only: prints
+                        "mergeable" (exit 0) when the milestone branch tip is
+                        an ancestor of the ticket branch, "sync-required"
+                        (exit 1) when it is not.
+
+Exit codes: 0 affirmative or done, 1 a negative verdict with the fix printed,
+2 refused — a guard failed and nothing was changed.
+EOF
+}
+
+# ---------------------------------------------------------------- board
+#
+# The activity log is this system's audit trail: recovery reads it to work out
+# where an interrupted milestone stands, and a behavioural scenario greps it to
+# prove an orchestrator reached for the tool. It is not the authority on whether
+# anything happened, so writing it is best-effort — an unreachable board must
+# never turn a clean verdict into a failure, only into a warning.
+
+# board_line <subject> <outcome>... — the documented shape, and the only place
+# it is built. Anything that has to parse these lines parses this format.
+board_line() { printf '%s %s %s: %s' "$BOARD_PREFIX" "$ACTION" "$1" "${*:2}"; }
+
+# board_record <KEY> <outcome>... — append one line to a ticket's activity log.
+board_record() {
+    cliban issue log "$1" "$(board_line "$@")" >/dev/null 2>&1 ||
+        warn "could not record on $1's activity log; the board is out of date"
+}
+
+# ---------------------------------------------------------------- git
+#
+# Everything runs as `git -C "$REPO"` rather than relying on the caller's cwd,
+# so a subcommand cannot be talked into acting on whatever directory a shell
+# happened to be left in.
+
+require_repo() {
+    REPO=$(git rev-parse --show-toplevel 2>/dev/null) || refuse \
+        "not inside a git repository" \
+        "cd into the repository, or into the ticket worktree, and try again."
+}
+
+gitr() { git -C "$REPO" "$@"; }
+
+# have_branch <name> — a local branch, specifically. Resolving the bare name
+# would also match a tag or a remote-tracking ref, and this protocol only ever
+# merges local branches.
+have_branch() { gitr rev-parse --verify --quiet "refs/heads/$1" >/dev/null; }
+
+short_sha() { gitr rev-parse --short "refs/heads/$1"; }
+
+# is_ancestor <branch-a> <branch-b> — true when every commit of <a> is reachable
+# from <b>. Strict ancestry is the whole gate: never a trial merge, because a
+# trial merge answers "would this apply cleanly", and the question that matters
+# is "was the tree that was tested the tree that will land".
+#
+# Both sides are resolved as refs/heads, like every other lookup here. Bare
+# names would be disambiguated tags-before-branches, so a stray tag sharing a
+# branch's name would answer this with a different commit than the one the
+# guard checked and the one the message reports — a false `mergeable`, which is
+# the single failure this gate exists to prevent.
+is_ancestor() { gitr merge-base --is-ancestor "refs/heads/$1" "refs/heads/$2"; }
+
+# ---------------------------------------------------------------- the board's issues
+
+# json_tsv <field>... — the named fields of the JSON object on stdin, tab
+# separated, empty for absent. One python3 call per subcommand rather than one
+# per field, so there is a single place for a parse to fail loudly. Adding a
+# field is one name here and one variable in the `read` that consumes it.
+json_tsv() {
+    python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print("\t".join("" if d.get(f) is None else str(d[f]) for f in sys.argv[1:]))' "$@"
+}
+
+require_python() {
+    command -v python3 >/dev/null || refuse \
+        "python3 is not on PATH" \
+        "cliban-flow reads cliban's JSON with python3."
+}
+
+# load_issue <KEY> — populate the ISSUE_* globals, or refuse. Every read here
+# either succeeds or refuses: a half-loaded issue would let a later guard answer
+# the wrong question about the wrong branch.
+load_issue() {
+    require_python
+    local json row
+    json=$(cliban issue show "$1" --json 2>/dev/null) || refuse \
+        "no issue named $1 on the board" \
+        "Check the key. If this is a scratch board, check CLIBAN_DB points at it."
+    row=$(printf '%s' "$json" | json_tsv key git_branch_name milestone) || refuse \
+        "could not read $1 from the board" \
+        "\`cliban issue show $1 --json\` returned something this script could not" \
+        "parse. cliban may be newer or older than this dispatcher expects."
+    IFS=$'\t' read -r ISSUE_KEY ISSUE_BRANCH ISSUE_MILESTONE <<<"$row"
+    # The board's own spelling of the key, so the audit trail stays greppable
+    # when someone types `flow-1`.
+    [ -n "$ISSUE_KEY" ] && [ -n "$ISSUE_BRANCH" ] || refuse \
+        "the board gave no key or branch name for $1" \
+        "This dispatcher needs \`key\` and \`git_branch_name\` on \`issue show --json\`."
+}
+
+# slugify <text> — cliban's own branch-name rules, reimplemented: lowercase,
+# every run of non-alphanumerics collapsed to one dash, trimmed, capped at 60.
+# cliban publishes `git_branch_name` for an issue but nothing equivalent for a
+# milestone, so the milestone branch name is derived here and has to stay in
+# step with git_branch_name() in crates/cliban/src/output.rs. LC_ALL is pinned
+# because the character classes below are ASCII by intent, not by accident.
+slugify() {
+    LC_ALL=C printf '%s' "$1" |
+        LC_ALL=C tr '[:upper:]' '[:lower:]' |
+        LC_ALL=C sed -e 's/[^a-z0-9][^a-z0-9]*/-/g' -e 's/^-//' -e 's/-$//' |
+        LC_ALL=C cut -c 1-60 |
+        LC_ALL=C sed -e 's/-$//'
+}
+
+milestone_branch() { printf 'milestone/%s' "$(slugify "$1")"; }
+
+# ---------------------------------------------------------------- dispatch
+#
+# One group per noun, one case arm per command. A new subcommand is one arm and
+# one cmd_* function; nothing else moves.
+
+ticket_dispatch() {
+    local command=${1:-}
+    if [ $# -gt 0 ]; then shift; fi
+    case $command in
+        status)
+            ACTION="ticket status"
+            cmd_ticket_status "$@"
+            ;;
+        '') usage_error "ticket needs a command" ;;
+        *) usage_error "unknown ticket command: $command" ;;
+    esac
+}
+
+main() {
+    [ $# -gt 0 ] || { usage >&2; exit 2; }
+    local group=$1
+    shift
+    case $group in
+        help | -h | --help) usage ;;
+        ticket) ticket_dispatch "$@" ;;
+        *) usage_error "unknown command group: $group" ;;
+    esac
+}
+
+# ---------------------------------------------------------------- commands
+
+cmd_ticket_status() {
+    local key=${1:-}
+    [ -n "$key" ] || usage_error "ticket status needs an issue key"
+    [ $# -le 1 ] || usage_error "ticket status takes one issue key, got: $*"
+    require_repo
+    load_issue "$key"
+
+    [ -n "$ISSUE_MILESTONE" ] || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY is on no milestone, so it has no integration target" \
+        "Mergeability is a question about a milestone branch. Put the ticket on a" \
+        "milestone first:" \
+        "" \
+        "    cliban issue edit $ISSUE_KEY --milestone \"<name>\""
+
+    local mbranch
+    mbranch=$(milestone_branch "$ISSUE_MILESTONE")
+    [ "$mbranch" != "milestone/" ] || refuse_ticket "$ISSUE_KEY" \
+        "milestone \"$ISSUE_MILESTONE\" has no usable branch name" \
+        "Its name slugifies to nothing, so there is no branch it could refer to." \
+        "Rename the milestone to something containing letters or digits."
+
+    have_branch "$mbranch" || refuse_ticket "$ISSUE_KEY" \
+        "the milestone branch $mbranch does not exist here" \
+        "$ISSUE_KEY is on milestone \"$ISSUE_MILESTONE\", whose branch would be" \
+        "$mbranch. Create it, in its own worktree:" \
+        "" \
+        "    cliban-flow milestone start \"$ISSUE_MILESTONE\"" \
+        "" \
+        "Refusing rather than creating it here: a milestone branch invented at" \
+        "gate time would answer the question by defining it away."
+
+    have_branch "$ISSUE_BRANCH" || refuse_ticket "$ISSUE_KEY" \
+        "the ticket branch $ISSUE_BRANCH does not exist here" \
+        "Nothing has been implemented on $ISSUE_KEY yet, or this repository is" \
+        "not where it was. Start it with:" \
+        "" \
+        "    cliban-flow ticket start $ISSUE_KEY"
+
+    local msha tsha
+    msha=$(short_sha "$mbranch")
+    tsha=$(short_sha "$ISSUE_BRANCH")
+
+    if is_ancestor "$mbranch" "$ISSUE_BRANCH"; then
+        say "mergeable"
+        instruct "$mbranch@$msha is an ancestor of $ISSUE_BRANCH@$tsha."
+        board_record "$ISSUE_KEY" \
+            "mergeable ($mbranch@$msha is an ancestor of $ISSUE_BRANCH@$tsha)"
+        exit 0
+    fi
+
+    say "sync-required: $mbranch@$msha is not an ancestor of $ISSUE_BRANCH"
+    instruct \
+        "$ISSUE_BRANCH is at $tsha and does not contain the milestone tip." \
+        "" \
+        "The agent implementing $ISSUE_KEY brings it forward and resolves whatever" \
+        "that surfaces:" \
+        "" \
+        "    cliban-flow ticket sync $ISSUE_KEY" \
+        "    <re-run this repo's build and its full test suite>" \
+        "    cliban-flow ticket ready $ISSUE_KEY" \
+        "" \
+        "The orchestrator must not resolve this itself. Integration squashes the" \
+        "ticket branch's tree unbuilt and untested, which is only safe while that" \
+        "tree is the one the implementer built and tested; a merge performed here" \
+        "would produce a tree nobody has ever run." \
+        ""
+    board_record "$ISSUE_KEY" \
+        "sync-required ($mbranch@$msha is not an ancestor of $ISSUE_BRANCH@$tsha)"
+    exit 1
+}
+
+main "$@"
