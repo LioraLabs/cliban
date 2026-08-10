@@ -1351,15 +1351,22 @@ async fn run_search(db: &Option<String>, a: &LsArgs, query: String) -> CliResult
 }
 
 /// Project-key prefix of an issue key (`CLI-12` → `CLI`).
-fn project_prefix(key: &str) -> &str {
+pub fn project_prefix(key: &str) -> &str {
     match key.rfind('-') {
         Some(idx) => &key[..idx],
         None => key,
     }
 }
 
-/// Base ordering: (project key, status, position).
-fn base_order(issues: &mut [Issue]) {
+/// Base ordering: (project key, status, position) — the Rust-side mirror of
+/// core's `ORDER BY p.key, i.status, i.position`.
+///
+/// Shared with the search module, which stable-sorts on top of it so its
+/// score/`updated_at` tiebreaks resolve deterministically. It used to keep a
+/// byte-identical copy of this function and of [`project_prefix`]; one
+/// ordering with two implementations is two chances for `issue ls` and
+/// `issue ls --search` to disagree about what "same rank" means.
+pub fn base_order(issues: &mut [Issue]) {
     issues.sort_by(|a, b| {
         project_prefix(&a.key)
             .cmp(project_prefix(&b.key))

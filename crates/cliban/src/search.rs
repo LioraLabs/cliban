@@ -229,29 +229,6 @@ pub struct Options {
     pub limit: i64,
 }
 
-/// Project-key prefix of an issue key (`CLI-12` → `CLI`).
-fn project_prefix(key: &str) -> &str {
-    match key.rfind('-') {
-        Some(idx) => &key[..idx],
-        None => key,
-    }
-}
-
-/// Base ordering (`ORDER BY p.key, i.status, i.position`): the stable-sort
-/// input order, so score/updated_at tiebreaks resolve deterministically.
-fn base_order(issues: &mut [Issue]) {
-    issues.sort_by(|a, b| {
-        project_prefix(&a.key)
-            .cmp(project_prefix(&b.key))
-            .then_with(|| a.status.cmp(&b.status))
-            .then_with(|| {
-                a.position
-                    .partial_cmp(&b.position)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-    });
-}
-
 /// Run a fuzzy search according to `opts`. Fetches the candidate set with the
 /// same project/status/priority/milestone/label/parent/no-subs/archived
 /// filters as `issue ls`, scores each candidate's title/key/labels/description
@@ -332,7 +309,7 @@ pub async fn search(store: &Store, opts: Options) -> CliResult<Vec<Match>> {
     }
 
     // Establish the base input ordering before the stable result sort.
-    base_order(&mut issues);
+    crate::cmd::issue::base_order(&mut issues);
 
     let q = opts.query.trim();
 
