@@ -1,0 +1,52 @@
+---
+name: recover-milestone
+description: "Diagnose an interrupted cliban milestone from its durable board and git state, then recommend the existing action that can resume it."
+requires_skills: [cliban-workflow]
+---
+
+# Recover Milestone
+
+Recovery is diagnosis, not repair. Load `cliban-workflow` and `cliban`, resolve
+`plugin-flow/scripts/cliban-flow`, then survey the milestone without changing it:
+
+```bash
+cliban-flow milestone status "<milestone name>" --project <KEY>
+```
+
+Never run builds or tests during recovery. If verification is deliberately
+taken on by the orchestrator, do it in one worktree at a time. Normal
+verification belongs to a respawned ticket agent.
+
+## Interpret each ticket
+
+- **Nearly finished:** commits ahead, a clean worktree, no merge, and completed
+  plan steps. Respawn the agent in the existing worktree; it verifies and uses
+  `ticket status <KEY>`, `ticket sync <KEY>`, then `ticket ready <KEY>`.
+- **Abandoned:** no ticket commits and no dirty or merge state. Only after
+  confirming the last `[cliban-flow]` action and the claimant is gone, recommend
+  releasing the board claim and restarting through `ticket start <KEY>`.
+- **Silent agent:** `in-progress`, commits ahead, and no ticked plan steps is not
+  abandonment. Ask the claimant for its phase and blocker; if it is gone,
+  respawn onto the existing worktree so it can inspect and verify the work.
+- **Interrupted merge:** unmerged paths belong to the implementer's ticket
+  worktree, not the orchestrator. Respawn there to resolve the conflicts,
+  inspect the resolution diff, verify, commit, and continue with `ticket sync
+  <KEY>` and `ticket ready <KEY>`.
+- **Dirty worktree:** treat uncommitted files as unique work until an agent has
+  inspected them. Never discard them based only on age or board status.
+- **Already integrated:** trust the recorded squash and ancestry evidence; do
+  not dispatch the ticket again. A late ticket commit requires a new sync,
+  verification, and ready cycle before any further integration.
+
+Compare the survey's main-drift and ancestry fields before recommending a
+dispatcher action. Read each ticket's last recorded `[cliban-flow]` action: a
+requested sync without its completion is an interrupted operation, not proof
+that the resulting tree was verified.
+
+## Boundary
+
+Do not execute repairs. Report the evidence and recommend the applicable
+dispatcher or board command. In particular, do not abort merges, release
+claims, prune worktrees, integrate tickets, or mutate refs. Those actions need
+the human or resumed orchestrator to judge the context that the lost session
+may have taken with it.

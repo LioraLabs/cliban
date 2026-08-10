@@ -18,6 +18,8 @@ assert_out_has "ticket status" "help lists the subcommands that exist"
 # claiming `ticket start` before it was routed was caught exactly this way.
 assert_out_has "milestone start" "help lists milestone start"
 assert_out_has "milestone finish" "help lists milestone finish"
+# CLI-84 — the recovery survey is part of the advertised dispatcher surface.
+assert_out_has "milestone status" "help lists milestone status"
 assert_out_has "ticket start" "help lists ticket start"
 assert_out_has "ticket sync" "help lists ticket sync"
 assert_out_has "ticket ready" "help lists ticket ready"
@@ -63,6 +65,9 @@ assert_status 2 "milestone start with no name is refused"
 
 run_flow milestone finish
 assert_status 2 "milestone finish with no name is refused"
+
+run_flow milestone status
+assert_status 2 "milestone status with no name is refused"
 
 run_flow milestone start "Test milestone" "Another milestone" -p FLOW
 assert_status 2 "milestone start with two names is refused"

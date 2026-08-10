@@ -27,7 +27,7 @@ If the user is wiring up a new repo, point them at `setup-cliban`; don't improvi
 
 The workflow's git-and-board transitions live in `plugin-flow/scripts/cliban-flow`. The workflow skills abbreviate that executable as `cliban-flow`; before using either workflow, resolve it at that location. If it is absent or not executable, stop and say so. There is no fallback: enforcing this protocol only when convenient is the failure the dispatcher removes.
 
-Its surface is `milestone start`, `milestone finish`, `ticket start`, `ticket status`, `ticket sync`, `ticket ready`, and `ticket integrate`. Invoke the subcommand instead of describing or recreating the git operation it owns. Exit 0 is success or an affirmative verdict, exit 1 is a legitimate negative verdict with its next step, and exit 2 is a refusal whose instruction must be followed before retrying.
+Its surface is `milestone start`, `milestone status`, `milestone finish`, `ticket start`, `ticket status`, `ticket sync`, `ticket ready`, and `ticket integrate`. Invoke the subcommand instead of describing or recreating the git operation it owns. Exit 0 is success or an affirmative verdict, exit 1 is a legitimate negative verdict with its next step, and exit 2 is a refusal whose instruction must be followed before retrying.
 
 ## Status Mapping
 
@@ -94,6 +94,7 @@ Two ways onto the board — building something, or something being broken — co
 | Root cause | `diagnose-issue` | the hypothesis ledger and proven cause in `## Activity Log` |
 | Execute one | `complete-issue` | `## Plan`, then code, `tick`, `log`, and a status move |
 | Execute many | `complete-milestone` | wave-ordered tickets merged onto a milestone branch |
+| Recover | `recover-milestone` | read-only diagnosis from the board and git |
 
 ```
 idea    → explore-feature → scope-milestone ─┐

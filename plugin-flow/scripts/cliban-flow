@@ -126,6 +126,10 @@ usage: cliban-flow <group> <command> [args]
                         Fast-forward main to the milestone branch. Prints the
                         landed SHA.
 
+  milestone status <NAME> [-p KEY]
+                        Read-only recovery survey of the board, milestone,
+                        ticket branches and their registered worktrees.
+
   ticket start <KEY>    Create <KEY>'s branch off the current milestone tip and
                         check it out in a worktree under the milestone
                         worktree. Prints the worktree path.
@@ -679,6 +683,10 @@ milestone_dispatch() {
             ACTION="milestone finish"
             cmd_milestone_finish "$@"
             ;;
+        status)
+            ACTION="milestone status"
+            cmd_milestone_status "$@"
+            ;;
         '') usage_error "milestone needs a command" ;;
         *) usage_error "unknown milestone command: $command" ;;
     esac
@@ -726,6 +734,145 @@ main() {
 }
 
 # ---------------------------------------------------------------- commands
+
+# milestone status <NAME> [-p KEY] — reconstruct every durable fact needed to
+# resume an interrupted milestone. Unlike action subcommands, a survey records
+# no board line: observation must not become the newest action it is reporting.
+cmd_milestone_status() {
+    parse_project_option "$@"
+    set -- ${ARGS_REST[@]+"${ARGS_REST[@]}"}
+    local name=${1:-}
+    [ -n "$name" ] || usage_error "milestone status needs a milestone name"
+    [ $# -le 1 ] || usage_error "milestone status takes one milestone name, got: $*"
+    require_repo
+    require_project
+    load_milestone "$name"
+
+    REPO="$REPO" PROJECT="$PROJECT" MILESTONE_NAME="$MILESTONE_NAME" \
+        MILESTONE_BRANCH="$MILESTONE_BRANCH" python3 - <<'PY'
+import json
+import os
+import re
+import subprocess
+
+repo = os.environ["REPO"]
+project = os.environ["PROJECT"]
+name = os.environ["MILESTONE_NAME"]
+mbranch = os.environ["MILESTONE_BRANCH"]
+
+def run(*args, check=True):
+    p = subprocess.run(args, cwd=repo, text=True, stdout=subprocess.PIPE,
+                       stderr=subprocess.DEVNULL)
+    if check and p.returncode:
+        raise SystemExit(f"cliban-flow: survey could not run: {' '.join(args)}")
+    return p
+
+def git(*args, check=True):
+    return run("git", *args, check=check)
+
+def cliban(*args):
+    return run("cliban", *args).stdout
+
+def branch_exists(branch):
+    return git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}",
+               check=False).returncode == 0
+
+def ancestor(left, right):
+    return git("merge-base", "--is-ancestor", f"refs/heads/{left}",
+               f"refs/heads/{right}", check=False).returncode == 0
+
+worktrees = {}
+path = None
+for line in git("worktree", "list", "--porcelain").stdout.splitlines():
+    if line.startswith("worktree "):
+        path = line[9:]
+    elif line.startswith("branch refs/heads/") and path:
+        worktrees[line[18:]] = path
+    elif not line:
+        path = None
+
+issues = [json.loads(line) for line in cliban(
+    "issue", "ls", "-p", project, "-m", name, "--full", "--json"
+).splitlines() if line]
+waves = json.loads(cliban("milestone", "waves", name, "-p", project, "--json"))
+
+have_milestone = branch_exists(mbranch)
+if have_milestone and branch_exists("main"):
+    main_drift = "no" if ancestor("main", mbranch) else "yes"
+else:
+    main_drift = "unknown"
+
+parts = ["[" + ", ".join(wave) + "]" for wave in waves.get("waves", [])]
+print(f"milestone: {name}")
+print(f"project: {project}")
+print(f"branch: {mbranch if have_milestone else 'missing'}")
+print(f"main-drift: {main_drift}")
+print("waves: " + (" -> ".join(parts) if parts else "none"))
+if waves.get("done"):
+    print("done: " + ", ".join(waves["done"]))
+if waves.get("external_blocked"):
+    print("external-blocked: " + ", ".join(waves["external_blocked"]))
+
+for issue in issues:
+    key = issue["key"]
+    branch = issue["git_branch_name"]
+    claim = issue.get("claimed_by") or "none"
+    description = issue.get("description") or ""
+    actions = [line[line.index("[cliban-flow]"):].strip()
+               for line in description.splitlines() if "[cliban-flow]" in line]
+    last = actions[-1] if actions else "none"
+    have_ticket = branch_exists(branch)
+    integrated = "no"
+    if have_milestone:
+        found = git("log", f"refs/heads/{mbranch}", "--extended-regexp",
+                    f"--grep=^Ticket: {re.escape(key)}$", "-1",
+                    "--format=%H").stdout.strip()
+        integrated = "yes" if found else "no"
+    ahead = 0
+    relation = "missing"
+    if have_milestone and have_ticket:
+        ahead = int(git("rev-list", "--count",
+                        f"refs/heads/{mbranch}..refs/heads/{branch}").stdout)
+        if ancestor(mbranch, branch):
+            relation = "level" if ancestor(branch, mbranch) else "descendant"
+        elif ancestor(branch, mbranch):
+            relation = "ancestor"
+        else:
+            relation = "diverged"
+    ticked = bool(re.search(r"^- \[[xX]\]", description, re.MULTILINE))
+    silent = issue.get("status") == "in-progress" and ahead > 0 and not ticked
+
+    print(f"ticket: {key} status={issue['status']} claim={claim}")
+    print(f"  branch: {branch if have_ticket else 'missing'}")
+    print(f"  integrated: {integrated}")
+    print(f"  last-action: {last}")
+    print(f"  silent-agent: {'yes' if silent else 'no'}")
+    wt = worktrees.get(branch)
+    if not wt:
+        print("  worktree: none")
+        print(f"  ahead: {ahead}")
+        print(f"  relation: {relation}")
+        continue
+    if not os.path.isdir(wt):
+        print(f"  worktree: {wt} (missing)")
+        print(f"  ahead: {ahead}")
+        print(f"  relation: {relation}")
+        continue
+    print(f"  worktree: {wt}")
+    status = git("-C", wt, "status", "--porcelain", "--", ":(exclude).worktrees",
+                 check=False).stdout.strip().splitlines()
+    unmerged = git("-C", wt, "diff", "--name-only", "--diff-filter=U",
+                   check=False).stdout.strip().splitlines()
+    merging = git("-C", wt, "rev-parse", "--verify", "--quiet", "MERGE_HEAD",
+                  check=False).returncode == 0
+    print(f"  dirty: {'yes' if status else 'no'}")
+    print("  uncommitted: " + (", ".join(status) if status else "none"))
+    print(f"  merge: {'yes' if merging else 'no'}")
+    print("  unmerged: " + (", ".join(unmerged) if unmerged else "none"))
+    print(f"  ahead: {ahead}")
+    print(f"  relation: {relation}")
+PY
+}
 
 # milestone start <NAME> [-p KEY] — stand up the milestone's git layout.
 #
