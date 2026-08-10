@@ -8,6 +8,7 @@ the workflow contract that governs where each artifact lands is the
 - **Project key:** CLI
 - **Key policy:** everywhere (keys never appear in source code, prose comments, or docs as decoration; the one exception is a test citing the ticket it discharges)
 - **Branch convention:** worktree-per-issue at `.worktrees/`
+- **Reviewer:** none — a general-purpose agent with `complete-issue`'s inline brief
 
 ## Where artifacts live
 

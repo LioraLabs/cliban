@@ -10,7 +10,7 @@ Policy, not mechanics. Every command, flag, JSON shape, and the description gram
 
 ## Per-Repo Binding (the adapter)
 
-A repo that has run `setup-cliban` carries `docs/agents/issue-tracker.md` — the adapter. It binds three things and is authoritative over the defaults below. Read it once per session before the first cliban action.
+A repo that has run `setup-cliban` carries `docs/agents/issue-tracker.md` — the adapter. It binds four things and is authoritative over the defaults below. Read it once per session before the first cliban action.
 
 | Binding | Meaning | Default when no adapter |
 |---|---|---|
