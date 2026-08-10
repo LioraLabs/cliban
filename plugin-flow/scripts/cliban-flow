@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# cliban-flow — the git-and-board half of the cliban workflow.
+#
+# Subcommands map one-to-one onto a board transition or a board-visible verdict.
+# The script owns git and the board and nothing else: it never builds, never
+# tests, and never interprets a build or test result. That line is deliberate —
+# build commands vary per repo and reading their output is judgement, which
+# belongs to the agent that called this, not to a shell script.
+#
+# EXIT CODES are a contract every subcommand keeps, because callers branch on
+# them rather than on message text:
+#
+#   0  the action succeeded, or a read-only verdict is affirmative
+#   1  the verdict is negative — a real, legitimate state that is not what was
+#      asked for. Stdout names the command that changes it.
+#   2  refused. A guard failed or the invocation was malformed, so the question
+#      could not be answered at all. Nothing was changed.
+#
+# The verdict goes to stdout because it is the answer; refusals, warnings and
+# instructions go to stderr.
+#
+# BOARD LINES. Every invocation that resolves a ticket appends one line to that
+# ticket's activity log under the stable prefix "[cliban-flow]", in the shape
+#
+#   [cliban-flow] <group> <command> <KEY>: <outcome> (<detail>)
+#
+# so a compacted orchestrator, a recovery survey, or a test assertion can
+# reconstruct what ran. An invocation that never resolves a ticket — a usage
+# error, an unknown key — has no log to append to and prints only.
+
+set -euo pipefail
+
+PROG=cliban-flow
+
+# "<group> <command>", set by the dispatcher and used in every board line.
+ACTION=""
+
+# ---------------------------------------------------------------- output
+
+say() { printf '%s\n' "$*"; }
+warn() { printf '%s: %s\n' "$PROG" "$*" >&2; }
+
+# instruct <line>... — the "what to do next" that follows a verdict or refusal.
+# Indented on stderr so it reads as guidance rather than as more output.
+instruct() {
+    local line
+    for line in "$@"; do printf '  %s\n' "$line" >&2; done
+}
+
+# refuse <summary> <instruction>... — a guard failed. Nothing was changed.
+refuse() {
+    local summary=$1
+    shift
+    printf '%s: refused: %s\n' "$PROG" "$summary" >&2
+    instruct "$@"
+    exit 2
+}
+
+usage_error() {
+    printf '%s: %s\n' "$PROG" "$1" >&2
+    usage >&2
+    exit 2
+}
+
+usage() {
+    cat <<EOF
+usage: cliban-flow <group> <command> [args]
+
+  ticket status <KEY>   Is <KEY>'s branch integrable? Read-only: prints
+                        "mergeable" (exit 0) when the milestone branch tip is
+                        an ancestor of the ticket branch, "sync-required"
+                        (exit 1) when it is not.
+
+Exit codes: 0 affirmative or done, 1 a negative verdict with the fix printed,
+2 refused — a guard failed and nothing was changed.
+EOF
+}
+
+# ---------------------------------------------------------------- dispatch
+#
+# One group per noun, one case arm per command. A new subcommand is one arm and
+# one cmd_* function; nothing else moves.
+
+ticket_dispatch() {
+    local command=${1:-}
+    if [ $# -gt 0 ]; then shift; fi
+    case $command in
+        status)
+            ACTION="ticket status"
+            cmd_ticket_status "$@"
+            ;;
+        '') usage_error "ticket needs a command" ;;
+        *) usage_error "unknown ticket command: $command" ;;
+    esac
+}
+
+main() {
+    [ $# -gt 0 ] || { usage >&2; exit 2; }
+    local group=$1
+    shift
+    case $group in
+        help | -h | --help) usage ;;
+        ticket) ticket_dispatch "$@" ;;
+        *) usage_error "unknown command group: $group" ;;
+    esac
+}
+
+# ---------------------------------------------------------------- commands
+
+cmd_ticket_status() {
+    local key=${1:-}
+    [ -n "$key" ] || usage_error "ticket status needs an issue key"
+    refuse "not implemented" "ticket status is still being built."
+}
+
+main "$@"
