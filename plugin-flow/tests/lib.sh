@@ -110,6 +110,132 @@ fixture_milestone_worktree() {
     gitf worktree add -q "$(fixture_milestone_wt)" milestone/test-milestone
 }
 
+# fixture_ticket_wt <branch> — where a ticket's worktree belongs: under the
+# milestone worktree, named for the branch. Spelled out here rather than asked
+# of the script, so an assertion against it is a specification.
+fixture_ticket_wt() { printf '%s/.worktrees/%s' "$(fixture_milestone_wt)" "$1"; }
+
+# fixture_ticket_worktree <branch> — that worktree, branched off the fixture
+# milestone's tip and built with plain git rather than by running `ticket
+# start`. A sync or ready case must fail because sync or ready is wrong, never
+# because start is. An existing branch is adopted rather than recreated, so a
+# case can lay down history first and ask for a worktree over it.
+fixture_ticket_worktree() {
+    mkdir -p "$(fixture_milestone_wt)/.worktrees"
+    if gitf rev-parse --verify --quiet "refs/heads/$1" >/dev/null; then
+        gitf worktree add -q "$(fixture_ticket_wt "$1")" "$1"
+    else
+        gitf worktree add -q -b "$1" "$(fixture_ticket_wt "$1")" \
+            refs/heads/milestone/test-milestone
+    fi
+}
+
+# assert_ticket_mutation_guards <sync|ready> — the shared guard matrix for the
+# two commands that act on a ticket worktree. Keeping the fixtures here makes
+# each command's suite run the same states while still proving its own route
+# reaches every guard.
+assert_ticket_mutation_guards() {
+    local command=$1 key branch wt
+
+    fixture_new
+    key=$(new_issue_no_milestone "Loose ticket for $command")
+    branch=$(branch_of "$key")
+    gitf branch "$branch" main
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses a ticket on no milestone"
+    assert_stderr_has "is on no milestone" "$command reaches the no-milestone guard"
+
+    fixture_new
+    cb milestone add "!!!" --project FLOW >/dev/null
+    key=$(new_issue "Unslugifiable milestone for $command" "!!!")
+    branch=$(branch_of "$key")
+    gitf branch "$branch" main
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses an unusable milestone name"
+    assert_stderr_has "no usable branch name" "$command reaches the slug guard"
+
+    fixture_new
+    gitf branch -D milestone/test-milestone >/dev/null
+    key=$(new_issue "Missing milestone branch for $command")
+    branch=$(branch_of "$key")
+    gitf branch "$branch" main
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses a missing milestone branch"
+    assert_stderr_has "milestone/test-milestone does not exist here" \
+        "$command reaches the milestone-branch guard"
+
+    fixture_new
+    fixture_milestone_worktree
+    key=$(new_issue "Missing ticket branch for $command")
+    branch=$(branch_of "$key")
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses a missing ticket branch"
+    assert_stderr_has "ticket branch $branch does not exist here" \
+        "$command reaches the ticket-branch guard"
+
+    fixture_new
+    fixture_milestone_worktree
+    key=$(new_issue "No ticket worktree for $command")
+    branch=$(branch_of "$key")
+    gitf branch "$branch" milestone/test-milestone
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses a branch checked out nowhere"
+    assert_stderr_has "checked out in no worktree" \
+        "$command reaches the absent-worktree guard"
+
+    fixture_new
+    fixture_milestone_worktree
+    key=$(new_issue "Primary ticket worktree for $command")
+    branch=$(branch_of "$key")
+    gitf checkout -q -b "$branch" milestone/test-milestone
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses the primary checkout"
+    assert_stderr_has "checked out in the primary checkout" \
+        "$command reaches the primary-worktree guard"
+
+    fixture_new
+    fixture_milestone_worktree
+    key=$(new_issue "Missing registered worktree for $command")
+    branch=$(branch_of "$key")
+    fixture_ticket_worktree "$branch"
+    wt=$(fixture_ticket_wt "$branch")
+    rm -rf "$wt"
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses a registered worktree whose directory is gone"
+    assert_stderr_has "which no longer exists" \
+        "$command reaches the missing-directory guard"
+
+    fixture_new
+    fixture_milestone_worktree
+    key=$(new_issue "Merge in progress for $command")
+    branch=$(branch_of "$key")
+    fixture_ticket_worktree "$branch"
+    commit_file_at "$(fixture_ticket_wt "$branch")" ticket.txt ticket
+    commit_file_at "$(fixture_milestone_wt)" milestone.txt milestone
+    gitt "$branch" merge -q --no-commit milestone/test-milestone
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses a merge already in progress"
+    assert_stderr_has "a merge is already in progress" \
+        "$command reaches the merge-in-progress guard"
+
+    fixture_new
+    fixture_milestone_worktree
+    key=$(new_issue "Dirty worktree for $command")
+    branch=$(branch_of "$key")
+    fixture_ticket_worktree "$branch"
+    printf 'uncommitted\n' >"$(fixture_ticket_wt "$branch")/scratch.txt"
+    run_flow ticket "$command" "$key"
+    assert_status 2 "$command refuses a dirty worktree"
+    assert_stderr_has "has uncommitted changes" "$command reaches the dirty-tree guard"
+}
+
+# gitt <branch> <args>... — git inside a ticket's worktree.
+gitt() {
+    local branch=$1
+    shift
+    git -C "$(fixture_ticket_wt "$branch")" "$@"
+}
+
 # new_issue <title> [milestone] — an issue on the fixture milestone unless one
 # is named; echoes its key. Aborts rather than echoing nothing, so a broken
 # fixture cannot make a guard case pass for the wrong reason.
@@ -127,6 +253,16 @@ new_issue_no_milestone() {
     key=$(cb issue add "$1" --project FLOW --json | json_get key)
     [ -n "$key" ] || abort "fixture could not create an issue titled: $1"
     printf '%s' "$key"
+}
+
+# status_of <KEY> — the board's status for an issue. `ticket ready` claims to
+# move one, and the move is the deliverable rather than a side effect, so the
+# tests read it back rather than trusting the exit code.
+status_of() {
+    local status
+    status=$(cb issue show "$1" --json | json_get status)
+    [ -n "$status" ] || abort "fixture could not read a status for $1"
+    printf '%s' "$status"
 }
 
 branch_of() {
@@ -197,6 +333,22 @@ break_board_writes() {
     # shellcheck disable=SC2016
     stub_bin cliban '#!/usr/bin/env bash
 if [ "${1:-}" = issue ] && [ "${2:-}" = log ]; then
+    echo "stub: the board is unreachable" >&2
+    exit 1
+fi
+exec '"$real"' "$@"'
+}
+
+# break_board_moves — a cliban that fails every `issue mv` and passes
+# everything else through. The move is what `ticket ready` delivers, not
+# something it records afterwards, so unlike a failed activity-log append it may
+# not degrade into a warning over a successful-looking exit.
+break_board_moves() {
+    local real
+    real=$(command -v cliban) || abort "cliban is not on PATH"
+    # shellcheck disable=SC2016
+    stub_bin cliban '#!/usr/bin/env bash
+if [ "${1:-}" = issue ] && [ "${2:-}" = mv ]; then
     echo "stub: the board is unreachable" >&2
     exit 1
 fi
@@ -349,6 +501,22 @@ assert_board_has() {
         fail "$3" "expected $1's activity log to contain: $2
 Activity log:
 $log"
+    fi
+}
+
+# assert_timeline_has <KEY> <substring> <desc> — the issue's *timeline*, which
+# is where `issue mv --note` writes; the `## Activity Log` is a different place
+# and does not receive it. A subcommand that both moves a ticket and records a
+# [cliban-flow] line therefore has two things to prove, in two places.
+assert_timeline_has() {
+    local feed
+    feed=$(cb activity --issue "$1" 2>&1)
+    if printf '%s' "$feed" | grep -qF -- "$2"; then
+        pass "$3"
+    else
+        fail "$3" "expected $1's timeline to contain: $2
+Timeline:
+$feed"
     fi
 }
 
