@@ -8,6 +8,10 @@
 //! is required (log, append-section) and today's bare-heading note where it
 //! is optional (note add); a real TTY with no argument keeps the fast error
 //! and never blocks waiting for input.
+//!
+//! The other way in is explicit: a bare `-` on a text flag or its `--*-file`
+//! sibling. That one is a sentinel rather than a payload, and every command
+//! reads it the same way — the last block here is what keeps them agreeing.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -233,6 +237,152 @@ fn empty_pipe_note_add_keeps_the_bare_heading_note() {
     assert_eq!(r.code, 0, "stderr: {}", r.stderr);
     let notes = ok_null(&db, &["project", "cat", "SF", "--section", "notes"]);
     assert!(notes.contains("### Bare"), "notes: {notes}");
+}
+
+// --- an explicit `-` on the value flag reads stdin ---------------------------
+//
+// The `*-file` flags have always honoured `-`; the value flags on `project`
+// silently stored the dash itself, so a scripted `--body -` threw its body
+// away and still exited 0.
+
+// CLI-76
+#[test]
+fn dash_body_reads_stdin() {
+    let db = seeded("body_dash");
+    let r = run_piped_stdin(
+        &db,
+        &["project", "note", "add", "SF", "via body", "--body", "-"],
+        "BODY_FROM_STDIN\n",
+    );
+    assert_eq!(r.code, 0, "stderr: {}", r.stderr);
+    // The only note on the board, so assert the whole section: a body of `-`
+    // would otherwise still satisfy a `contains` check on the heading.
+    let notes = ok_null(&db, &["project", "cat", "SF", "--section", "notes"]);
+    assert_eq!(notes.trim(), "### via body\n\nBODY_FROM_STDIN", "{notes}");
+}
+
+// CLI-76
+#[test]
+fn dash_project_description_reads_stdin_on_add() {
+    let db = tmp_db("proj_add_dash");
+    let r = run_piped_stdin(
+        &db,
+        &["project", "add", "PD", "Dashed", "--description", "-"],
+        "DESC_FROM_STDIN\n",
+    );
+    assert_eq!(r.code, 0, "stderr: {}", r.stderr);
+    let shown = ok_null(&db, &["project", "show", "PD", "--json"]);
+    assert!(shown.contains("DESC_FROM_STDIN"), "shown: {shown}");
+}
+
+// CLI-76
+#[test]
+fn dash_project_description_reads_stdin_on_edit() {
+    let db = seeded("proj_edit_dash");
+    let r = run_piped_stdin(
+        &db,
+        &["project", "edit", "SF", "--description", "-"],
+        "EDITED_FROM_STDIN\n",
+    );
+    assert_eq!(r.code, 0, "stderr: {}", r.stderr);
+    let shown = ok_null(&db, &["project", "show", "SF", "--json"]);
+    assert!(shown.contains("EDITED_FROM_STDIN"), "shown: {shown}");
+}
+
+// CLI-76 — the sibling the spec asked to be checked for the same defect.
+#[test]
+fn dash_issue_description_reads_stdin() {
+    let db = seeded("issue_desc_dash");
+    let r = run_piped_stdin(
+        &db,
+        &[
+            "issue",
+            "add",
+            "dashed",
+            "--project",
+            "SF",
+            "--description",
+            "-",
+        ],
+        "ISSUE_DESC_FROM_STDIN\n",
+    );
+    assert_eq!(r.code, 0, "stderr: {}", r.stderr);
+    let shown = ok_null(&db, &["issue", "show", "SF-2", "--json"]);
+    assert!(shown.contains("ISSUE_DESC_FROM_STDIN"), "shown: {shown}");
+}
+
+// CLI-76 — only a *bare* dash is the stdin sentinel; a markdown bullet that
+// merely starts with one stays literal.
+#[test]
+fn hyphen_leading_body_is_not_the_stdin_sentinel() {
+    let db = seeded("bullet_body");
+    let r = run_piped_stdin(
+        &db,
+        &[
+            "project",
+            "note",
+            "add",
+            "SF",
+            "Bulleted",
+            "--body",
+            "- a bullet",
+        ],
+        "FROM_THE_PIPE\n",
+    );
+    assert_eq!(r.code, 0, "stderr: {}", r.stderr);
+    let notes = ok_null(&db, &["project", "cat", "SF", "--section", "notes"]);
+    assert!(notes.contains("- a bullet"), "notes: {notes}");
+    assert!(!notes.contains("FROM_THE_PIPE"), "notes: {notes}");
+}
+
+// CLI-76 — the shared resolver names the flags the command actually has;
+// `note add` used to report the mutual exclusion as `--description`.
+#[test]
+fn mutually_exclusive_error_names_the_commands_own_flags() {
+    let db = seeded("mutex_flags");
+    let r = run_null_stdin(
+        &db,
+        &[
+            "project",
+            "note",
+            "add",
+            "SF",
+            "T",
+            "--body",
+            "x",
+            "--body-file",
+            "y",
+        ],
+    );
+    assert_eq!(r.code, 2, "stdout: {} stderr: {}", r.stdout, r.stderr);
+    assert!(
+        r.stderr
+            .contains("--body and --body-file are mutually exclusive"),
+        "stderr: {}",
+        r.stderr
+    );
+}
+
+// CLI-76 — the arm that always worked keeps working.
+#[test]
+fn dash_body_file_still_reads_stdin() {
+    let db = seeded("body_file_dash");
+    let r = run_piped_stdin(
+        &db,
+        &[
+            "project",
+            "note",
+            "add",
+            "SF",
+            "via file",
+            "--body-file",
+            "-",
+        ],
+        "FILE_ARM_FROM_STDIN\n",
+    );
+    assert_eq!(r.code, 0, "stderr: {}", r.stderr);
+    let notes = ok_null(&db, &["project", "cat", "SF", "--section", "notes"]);
+    assert!(notes.contains("FILE_ARM_FROM_STDIN"), "notes: {notes}");
 }
 
 // --- a real TTY with no argument keeps the fast error, never blocks ----------
