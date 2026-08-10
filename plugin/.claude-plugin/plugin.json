@@ -1,7 +1,7 @@
 {
   "name": "cliban",
-  "description": "Cliban kanban/issue CLI workflow: issue and bug tracking, project status, ticket creation, progressive project memory, the Linear import/push bridge, end-to-end milestone orchestration, and per-repo setup that binds any craft stack (superpowers, mattpocock-skills, plan mode) to the board",
-  "version": "0.5.0",
+  "description": "Drive the cliban kanban board from the CLI: issues, projects, milestones, labels, progressive project memory, the Linear import/push bridge, and per-repo setup that binds a repo to its board. Live board state is injected into every session. Workflow skills ship separately as cliban-flow",
+  "version": "0.6.0",
   "author": {
     "name": "Liora Labs"
   },
@@ -11,7 +11,6 @@
     "cliban",
     "kanban",
     "issues",
-    "workflow",
     "milestones",
     "linear",
     "ai-agents"

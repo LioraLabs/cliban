@@ -22,8 +22,8 @@ Each scenario is a directory under `scenarios/`:
 ## Running
 
 Invoke the `test-plugin-skills` project skill from a Claude Code session **in
-this repo with the dev plugin loaded** — scenario agents must see the
-`plugin/skills/` under test, or you are testing the raw model instead of the
-skills. The runner seeds each fixture, dispatches one subagent per scenario in
-parallel, runs the assertions, and checks the real board's activity feed for
-leaked writes.
+this repo with the dev plugins loaded** — scenario agents must see both
+`plugin/skills/` and `plugin-flow/skills/` under test, or you are testing the
+raw model instead of the skills. The runner seeds each fixture, dispatches one
+subagent per scenario in parallel, runs the assertions, and checks the real
+board's activity feed for leaked writes.

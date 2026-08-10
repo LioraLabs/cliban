@@ -1,0 +1,19 @@
+{
+  "name": "cliban-flow",
+  "description": "Cliban-native workflow skills: explore a feature into a shared design, grill it into concrete tickets on a milestone, then execute a single ticket or orchestrate a whole milestone end-to-end. Carries the cliban workflow contract (where specs, plans, and lessons live). Requires the cliban plugin for CLI mechanics",
+  "version": "0.1.0",
+  "author": {
+    "name": "Liora Labs"
+  },
+  "repository": "https://github.com/LioraLabs/cliban",
+  "license": "MIT",
+  "keywords": [
+    "cliban",
+    "workflow",
+    "brainstorming",
+    "scoping",
+    "milestones",
+    "orchestration",
+    "ai-agents"
+  ]
+}

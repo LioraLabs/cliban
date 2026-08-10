@@ -1,12 +1,12 @@
 # Issue tracker: cliban
 
 Work for this repo is tracked on the local cliban board, driven by the `cliban` CLI.
-Every read takes `--json`; the description contract and mutation commands are
-specified by the cliban plugin's `cliban-workflow` skill.
+Every read takes `--json`. The command surface is specified by the `cliban` skill;
+the workflow contract that governs where each artifact lands is the
+`cliban-workflow` skill, which ships in the separate `cliban-flow` plugin.
 
 - **Project key:** CLI
-- **Craft stack:** mattpocock-skills
-- **Key policy:** everywhere (keys never appear in source code, comments, or docs under any policy)
+- **Key policy:** everywhere (keys never appear in source code, prose comments, or docs as decoration; the one exception is a test citing the ticket it discharges)
 - **Branch convention:** worktree-per-issue at `.worktrees/`
 
 ## Where artifacts live
@@ -45,22 +45,17 @@ cliban issue current --json                     # issue for the current branch
 `--blocks` / `--blocked-by` on `issue add` / `issue edit`. Relations live on the
 board — never as `Blocked by:` text lines in repo files.
 
-## Stage mapping
+## Stages
 
-The mattpocock-skills stack owns the craft; this contract owns where the
-artifacts live. Reach a design however you like (grilling, plan mode, plain
-conversation), then:
+The `cliban-flow` plugin carries the workflow:
 
-- `/to-spec` synthesizes the conversation into a spec and publishes it to the
-  issue's `## Spec` section.
-- `/to-tickets` breaks a spec or plan into tracer-bullet tickets as cliban
-  issues, declaring blocking edges natively with `--blocks` / `--blocked-by`.
-- `/implement` fetches the ticket from cliban, writes `## Plan`, and drives TDD
-  (red → green) with `cliban issue tick` / `cliban issue log`.
-- `/triage` labels are ordinary cliban labels.
-- `/wayfinder` maps huge efforts as a `wayfinder:map` issue whose tickets are
-  child issues on this board.
+- `explore-feature` — turn a rough idea into an approved design, landed as a
+  ticket or an empty milestone carrying `## Spec`.
+- `scope-milestone` — grill that container until the slicing is settled, then
+  fill it with tracer-bullet tickets and `--blocked-by` edges.
+- `complete-issue` — take one ticket: `## Plan`, then test-first execution with
+  `cliban issue tick` / `cliban issue log`.
+- `complete-milestone` — orchestrate a whole milestone in dependency waves.
 
-This file doubles as the `docs/agents/issue-tracker.md` that
-`setup-matt-pocock-skills` would write for an "other" tracker — do not run
-that setup's tracker section on top of it.
+None of it is required. Plan mode or plain conversation works the same way, as
+long as the artifacts land where the table above says.

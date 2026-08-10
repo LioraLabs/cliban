@@ -128,18 +128,27 @@ $ cliban milestone waves --project PROJ "v0.4" --json
 
 ## Agents
 
-The [Claude Code plugin](plugin/) ships the full workflow as four skills:
-the `cliban` CLI skill, `cliban-workflow` (the contract for where specs,
-plans, and lessons live), `setup-cliban` (binds a repo to its board and
-craft stack — superpowers, mattpocock-skills, or plain plan mode), and
-`complete-milestone`, an orchestrator that runs every issue in a milestone
-through its own agent in dependency order, each in an isolated git worktree.
-A SessionStart hook injects live board state into every session opened in a
-bound repo.
+Two Claude Code plugins, pulled independently.
+
+[**`cliban`**](plugin/) is the CLI itself: the `cliban` skill documenting the
+complete command surface, and `setup-cliban`, which binds a repo to its board.
+A SessionStart hook injects live board state into every
+session opened in a bound repo. Pull this one alone if you just want agents to
+drive the board.
+
+[**`cliban-flow`**](plugin-flow/) is the opinionated workflow on top:
+`explore-feature` diverges a rough idea into an approved design,
+`scope-milestone` grills it closed and publishes tracer-bullet tickets with
+native blocking edges, `complete-issue` plans and executes one ticket
+test-first, and `complete-milestone` orchestrates a whole milestone in
+dependency waves — one agent per ticket, each in an isolated git worktree. It
+carries `cliban-workflow`, the contract for where specs, plans, and lessons
+live.
 
 ```bash
 claude plugin marketplace add LioraLabs/claude-plugins
 claude plugin install cliban@lioralabs
+claude plugin install cliban-flow@lioralabs   # optional: the workflow skills
 ```
 
 Session recovery is the point. After a crash, `/clear`, or compaction, an

@@ -9,7 +9,7 @@ Each scenario in `plugin-tests/scenarios/<name>/` is `seed.sh <db>` + `prompt.md
 
 ## Preconditions
 
-1. Run from the cliban repo with the **dev** plugin skills loaded (the tree under `plugin/skills/` must be what subagents see — otherwise you are testing the installed release, or worse, the raw model). If you cannot confirm the dev skills are loaded, say so in the report header rather than silently proceeding.
+1. Run from the cliban repo with the **dev** plugin skills loaded — the trees under `plugin/skills/` (the `cliban` plugin: CLI mechanics, setup) **and** `plugin-flow/skills/` (the `cliban-flow` plugin: the workflow contract and the explore → scope → complete chain) must be what subagents see, otherwise you are testing the installed release, or worse, the raw model. Name which trees you confirmed in the report header; if you cannot confirm both, say so rather than silently proceeding.
 2. `cliban` and `jq` on `$PATH`.
 
 ## Procedure
@@ -66,8 +66,9 @@ and flag it loudly: the envelope or the skill under test failed containment.
 **6. Report** a table: scenario | PASS / FAIL / LEAKED | failure lines. Then
 clean up the tempdirs. On failures, quote the relevant board state (the
 offending `issue show` / `--section` output), and only then hypothesize which
-skill text caused it — the fix belongs in `plugin/skills/`, never in the
-scenario, unless the scenario's assertion is itself proven wrong.
+skill text caused it — the fix belongs in `plugin/skills/` or
+`plugin-flow/skills/`, never in the scenario, unless the scenario's assertion
+is itself proven wrong.
 
 ## Writing a new scenario
 

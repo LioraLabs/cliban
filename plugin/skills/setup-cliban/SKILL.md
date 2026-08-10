@@ -1,18 +1,17 @@
 ---
 name: setup-cliban
-description: "Bind a repo to its cliban board — project key, key-referencing policy, branch/worktree convention, and which craft stack (superpowers, mattpocock-skills, plan mode) publishes its specs and plans to cliban. Run once per repo; re-run to change the binding."
+description: "Bind a repo to its cliban board — project key, key-referencing policy, and branch/worktree convention. Run once per repo; re-run to change the binding."
 disable-model-invocation: true
-requires_skills: [cliban-workflow]
+requires_skills: [cliban]
 ---
 
 # Setup Cliban
 
-Scaffold the per-repo binding that every cliban workflow skill — and any third-party craft stack — reads:
+Scaffold the per-repo binding that every cliban skill reads:
 
-- **The adapter** — `docs/agents/issue-tracker.md`, declaring cliban as this repo's issue tracker and recording the four bindings (project key, craft stack, key policy, branch convention)
+- **The adapter** — `docs/agents/issue-tracker.md`, declaring cliban as this repo's issue tracker and recording the four bindings (project key, key policy, branch convention, reviewer)
 - **The pointer** — an `## Agent skills` block in `CLAUDE.md` / `AGENTS.md` so agents find the adapter
 - **The board** — the cliban project itself, created if missing
-- **Stack companions** — for the mattpocock stack, the triage-labels and domain-docs files its own setup skill would have written (step 4), so the user never has to run `setup-matt-pocock-skills` separately
 
 This is a prompt-driven skill, not a deterministic script. Explore, present what you found, confirm with the user, then write.
 
@@ -38,11 +37,7 @@ Read whatever exists; don't assume:
 - **Existing binding** — `docs/agents/issue-tracker.md` already present? Then this is a re-run: load it, present current values, and only ask about what the user wants changed. Re-runs regenerate the adapter, so diff the existing file against the template first and carry every hand-added section or edit forward into the draft unless the user is deliberately changing it — flag anything you carried (or couldn't place) in the draft rather than silently dropping it. Direct edits to the adapter are a blessed workflow, not drift to correct.
 - **Board state** — `cliban project ls --json`; match repo basename (case-insensitive) against `key` and `name`.
 - **Doc anchors** — `CLAUDE.md` and `AGENTS.md` at the repo root; an existing `## Agent skills` section in either.
-- **Installed craft stacks** — a stack is installed if *any* skill with its plugin prefix appears in the available-skills list. Do not conclude a specific member skill is missing just because it's not listed: user-invocable-only skills (`disable-model-invocation: true`) never appear in the model-visible list. In particular, the mattpocock workflow skills (`to-spec`, `to-tickets`, `implement`, `triage`, `wayfinder`) are all invocable only by the user — if you can see `mattpocock-skills:tdd` or `mattpocock-skills:grilling`, the whole suite including `to-spec` is installed.
-  - `superpowers:*` → superpowers (brainstorming, writing-plans, subagent-driven-development, using-git-worktrees, finishing-a-development-branch)
-  - `mattpocock-skills:*` → the mattpocock suite
-  - neither prefix anywhere → the stack is "none" (plan mode + the inline stage actions in `cliban-workflow`)
-- **Monorepo signals** — workspace manifests, populated `packages/*`. Relevant to Section A and, for the mattpocock stack, the domain-docs layout in step 4.
+- **Monorepo signals** — workspace manifests, populated `packages/*`. Relevant to Section A.
 
 ### 2. Present findings and ask
 
@@ -62,38 +57,31 @@ EOF
 
 Monorepo with genuinely independent packages: offer one project per package only if the user tracks them separately today; default remains one project per repo.
 
-**Section B — Craft stack.**
-
-Propose the detected stack. This decides the adapter's stage mapping — which skills own the *craft* of spec/plan/execute/finish, while the cliban contract owns *where the artifacts live*:
-
-- **superpowers** — brainstorming → `## Spec`; writing-plans → `## Plan`; subagent-driven-development executes with `tick`/`log`; finishing-a-development-branch drives the status moves.
-- **mattpocock-skills** — reach a design however you like (grilling, plan mode, plain conversation); `to-spec` publishes to `## Spec`; `to-tickets` creates issues with `--blocks` edges; `implement` reads the ticket from cliban, writes `## Plan`, and drives TDD with `tick`/`log`. Their `triage` labels are ordinary cliban labels, and their `/wayfinder` charts big fuzzy efforts as a map issue with decision sub-issues on the board (the adapter's "Wayfinding operations" section, written below, is what wires it up).
-- **none** — plan mode for design; the inline stage actions in `cliban-workflow` for everything else.
-
-If both stacks are installed, ask which one owns the rhythm; don't blend them.
-
-If **no stack is detected**, don't silently default — tell the user the choice exists, once and without pressure: "none" is fully supported (plan mode plus the inline stage actions; nothing about cliban degrades), and if they want a craft stack later they can install one and re-run this skill:
-
-- superpowers: `/plugin install superpowers@claude-plugins-official`
-- mattpocock-skills: `/plugin install mattpocock-skills@claude-plugins-official`
-
-Do not walk them through an install mid-setup; bind "none" now and let them come back.
-
-**Section C — Key policy.** Where may cliban issue keys (`PROJ-42`) appear in git-tracked artifacts?
+**Section B — Key policy.** Where may cliban issue keys (`PROJ-42`) appear in git-tracked artifacts?
 
 - **everywhere** (recommended default) — branch names and commit messages, like any tracker; greppable history
 - **branches-only** — keys in branch names (so `issue current` works) but never in commit messages; for repos whose history is public while the board is private
 - **never** — keys stay entirely on the board
 
-All three forbid keys in source code, comments, and docs — a tracker key in code rots the moment the board archives it. Only the commit/branch surface varies.
+All three forbid keys as decoration in source code, prose comments, and docs — only the commit/branch surface varies. The single exception, allowed under all three: a test **citing** the ticket it discharges (see the adapter section below). That works because a key is stable for the life of the board and stays resolvable after archive.
 
-**Section D — Branch convention.** What happens when work starts on an issue?
+**Section C — Branch convention.** What happens when work starts on an issue?
 
 - **branch-per-issue** (recommended default) — create/switch to the issue's `git_branch_name`
 - **worktree-per-issue** — `git worktree add <worktrees-dir>/<git_branch_name>` so parallel issues never share a checkout; ask where worktrees live (`.worktrees/` is the common answer)
 - **none** — the user manages branches by hand
 
 (This binds the *solo* flow. `complete-milestone` always uses wave-time worktrees off the milestone branch — orchestration is not configurable per repo.)
+
+**Section D — Reviewer.** Who runs the review gate at a plan's checkpoints?
+
+Exploration tells you what's available: a review skill in the installed suites, a `code-reviewer`-style agent type, or neither.
+
+- **an agent type** (recommended when one exists) — name it; the gate dispatches that agent
+- **a skill** — name it (`<plugin>:<skill>`); the gate invokes it with the two verdicts as its brief
+- **none** (recommended default) — the gate dispatches a general-purpose agent with the inline brief `complete-issue` carries
+
+Say plainly that this only chooses *who* reviews. *When* to review is the plan's call — checkpoints are placed while planning, and a ticket small enough for one gate at the end is a normal outcome, not a skipped review. Skip this section if `cliban-flow` isn't installed; nothing else reads it.
 
 ### 3. Confirm and write
 
@@ -117,13 +105,14 @@ The adapter, written to `docs/agents/issue-tracker.md` (create `docs/agents/` if
 # Issue tracker: cliban
 
 Work for this repo is tracked on the local cliban board, driven by the `cliban` CLI.
-Every read takes `--json`; the description contract and mutation commands are
-specified by the cliban plugin's `cliban-workflow` skill.
+Every read takes `--json`. The command surface is specified by the `cliban` skill;
+the workflow contract that governs where each artifact lands is the
+`cliban-workflow` skill, which ships in the separate `cliban-flow` plugin.
 
 - **Project key:** <KEY>
-- **Craft stack:** <superpowers | mattpocock-skills | none>
-- **Key policy:** <everywhere | branches-only | never> (keys never appear in source code, comments, or docs under any policy)
+- **Key policy:** <everywhere | branches-only | never> (a test may always cite the ticket it discharges; see below)
 - **Branch convention:** <branch-per-issue | worktree-per-issue at `<dir>` | none>
+- **Reviewer:** <agent type `<name>` | skill `<plugin>:<skill>` | none — general-purpose agent with the inline brief>
 
 ## Where artifacts live
 
@@ -136,6 +125,20 @@ specified by the cliban plugin's `cliban-workflow` skill.
 | ADRs, CONTEXT.md, domain docs | this repo, plaintext, git-tracked — never cliban |
 
 Implementation plans are deliberately not git-tracked. ADRs deliberately are.
+
+## Citing a ticket from a test
+
+A test **may** name the issue whose `## Spec` it discharges, in a comment beside
+the test, under every key policy:
+
+```
+// <KEY>
+```
+
+This is the one place a key belongs in source. It is a citation — the test is
+that ticket's spec in enforceable form — not decoration, and keys stay out of
+production code, prose comments, and docs. Issue keys are stable for the life of
+the board, including after archive.
 
 ## When a skill says "publish to the issue tracker"
 
@@ -160,66 +163,10 @@ cliban issue current --json                     # issue for the current branch
 
 `--blocks` / `--blocked-by` on `issue add` / `issue edit`. Relations live on the
 board — never as `Blocked by:` text lines in repo files.
-
-## Stage mapping
-
-<the craft-stack paragraph from Section B, expanded with the stack's actual skill names>
 ```
 
-For the **mattpocock-skills** stack, this file doubles as the `docs/agents/issue-tracker.md` their `setup-matt-pocock-skills` skill would have written for an "other" tracker — do not run their setup's Section A on top of it (their remaining sections run here as step 4). Their `/wayfinder` skill consults this doc's "Wayfinding operations" section to learn how the repo's tracker expresses maps, tickets, blocking, and claims — without it, wayfinder falls back to a local-markdown tracker and bypasses the board. So for this stack, **also append**:
+### 4. Done
 
-```markdown
-## Wayfinding operations
+Tell the user what now reads the binding: every cliban skill resolves the project key, key policy, branch convention, and reviewer from it, and the plugin's SessionStart hook starts injecting live board state (current-branch issue, in-progress, blocked) into every session opened in this repo — the adapter's existence is what switches it on. Editing `docs/agents/issue-tracker.md` directly later is fine; re-running this skill is only for changing a binding or starting over.
 
-Used by `/wayfinder`. The **map** is a cliban issue; its tickets are native sub-issues.
-
-- **Map**: an issue labelled `wayfinder:map`, holding the Destination / Notes /
-  Decisions-so-far / Not-yet-specified / Out-of-scope body:
-  `cliban issue add "<map name>" --project <KEY> --label wayfinder:map ...`
-- **Child ticket**: `cliban issue add --project <KEY> --parent <MAP-KEY> --label wayfinder:<type>`
-  (`research` / `prototype` / `grilling` / `task`). List them:
-  `cliban issue ls --parent <MAP-KEY> --json`.
-- **Blocking**: native edges — `--blocks` / `--blocked-by` on `issue add` / `issue edit`,
-  visible on the board. A ticket is unblocked when every blocker is done;
-  `cliban issue ls --blocked --project <KEY> --json` lists those still gated.
-- **Frontier query**: one call — `cliban issue ls --ready --parent <MAP-KEY> --json`
-  (backlog + unblocked + unclaimed IS the frontier).
-- **Claim**: `cliban issue claim <TICKET>`, the session's first write (the actor
-  defaults to the ambient Claude session, so claims are per-session automatically);
-  then `cliban issue mv <TICKET> in-progress`. Release with `cliban issue release`
-  if you stop without resolving.
-- **Resolve**: post the answer with `cliban issue log <TICKET> "<answer>"`, move it to
-  done with a `--note` gist, then index it on the map in one atomic call:
-  `cliban issue append-section <MAP-KEY> --section "Decisions so far" "- <name> (<TICKET>) — <gist>"`.
-```
-
-### 4. Companion setup for the mattpocock stack
-
-Skip this step entirely unless the bound craft stack is **mattpocock-skills**.
-
-The adapter supersedes only Section A (issue tracker) of their `setup-matt-pocock-skills` skill. Their other sections still matter — the engineering skills read the files those sections write — and running their setup separately would risk its Section A clobbering the cliban adapter. So finish their setup here instead.
-
-Locate the installed skill folder (glob `~/.claude/plugins/cache/*/mattpocock-skills/*/skills/engineering/setup-matt-pocock-skills/`), read its `SKILL.md`, and run every section of it **except** the issue-tracker one, following its own process — its file is the source of truth for its own sections; what follows is only orientation, current as of their v1.2:
-
-- **Triage labels** (their Section B; runs only when their `triage` skill is present in the installed version): one question — keep the five canonical default labels? (recommended **yes**; cliban labels are freeform strings, so the defaults need no mapping). Write `docs/agents/triage-labels.md` from their seed template.
-- **Domain docs** (their Section C): default **single-context** — root `CONTEXT.md` + `docs/adr/`, created lazily by their `/domain-modeling`; write it without asking. Offer multi-context only when exploration found monorepo signals. Write `docs/agents/domain.md` from their seed template.
-
-Then extend the same `## Agent skills` pointer block written in step 3 with their sub-blocks (in-place, no duplicates):
-
-```markdown
-### Triage labels
-
-[one-line summary of the label vocabulary]. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-[one-line summary — "single-context" or "multi-context"]. See `docs/agents/domain.md`.
-```
-
-On re-runs, leave existing companion files alone unless the user is deliberately changing them — like the adapter, direct edits to them are blessed.
-
-If the glob finds nothing (stack detected via skills list but cache layout has moved), say so and fall back to pointing the user at `/setup-matt-pocock-skills`, with the instruction to skip its issue-tracker section.
-
-### 5. Done
-
-Tell the user what now reads the binding: every workflow skill resolves the project key, key policy, and branch convention from it; `complete-milestone`'s per-ticket agents plan and execute with the bound craft stack; and the plugin's SessionStart hook starts injecting live board state (current-branch issue, in-progress, blocked) into every session opened in this repo — the adapter's existence is what switches it on. Editing `docs/agents/issue-tracker.md` directly later is fine; re-running this skill is only for switching stacks or starting over. When step 4 ran, also name the companion files it wrote and which of their skills read them.
+If `cliban-flow` is not installed, mention it once: it adds the feature workflow on top of the board — `explore-feature` → `scope-milestone` → `complete-issue` / `complete-milestone` — via `/plugin install cliban-flow@lioralabs`. Nothing here depends on it, so leave it at that.
