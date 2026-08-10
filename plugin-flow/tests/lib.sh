@@ -132,6 +132,15 @@ $FLOW_OUT"
     fi
 }
 
+assert_eq() {
+    if [ "$1" = "$2" ]; then
+        pass "$3"
+    else
+        fail "$3" "expected: $2
+     got: $1"
+    fi
+}
+
 assert_out_has() {
     if printf '%s' "$FLOW_OUT" | grep -qF -- "$1"; then
         pass "$2"

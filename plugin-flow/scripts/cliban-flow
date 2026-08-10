@@ -209,6 +209,26 @@ cmd_ticket_status() {
             "mergeable ($mbranch@$msha is an ancestor of $ISSUE_BRANCH@$tsha)"
         exit 0
     fi
+
+    say "sync-required: $mbranch@$msha is not an ancestor of $ISSUE_BRANCH"
+    instruct \
+        "$ISSUE_BRANCH is at $tsha and does not contain the milestone tip." \
+        "" \
+        "The agent implementing $ISSUE_KEY brings it forward and resolves whatever" \
+        "that surfaces:" \
+        "" \
+        "    cliban-flow ticket sync $ISSUE_KEY" \
+        "    <re-run this repo's build and its full test suite>" \
+        "    cliban-flow ticket ready $ISSUE_KEY" \
+        "" \
+        "The orchestrator must not resolve this itself. Integration squashes the" \
+        "ticket branch's tree unbuilt and untested, which is only safe while that" \
+        "tree is the one the implementer built and tested; a merge performed here" \
+        "would produce a tree nobody has ever run." \
+        ""
+    board_record "$ISSUE_KEY" \
+        "sync-required ($mbranch@$msha is not an ancestor of $ISSUE_BRANCH@$tsha)"
+    exit 1
 }
 
 main "$@"
