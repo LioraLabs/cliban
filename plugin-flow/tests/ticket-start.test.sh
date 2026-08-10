@@ -138,8 +138,15 @@ branch=$(branch_of "$key")
 
 run_flow ticket start "$key"
 assert_status 2 "a missing milestone branch is refused, not created"
+# The distinguishing text: the next guard down also exits 2 and also prints the
+# `milestone start` remedy, so without this the two are the same assertion and
+# deleting either guard leaves the suite green.
+assert_stderr_has "milestone/test-milestone does not exist here" \
+    "the refusal names the state it is refusing, not just the remedy"
 assert_stderr_has "cliban-flow milestone start \"Test milestone\" -p FLOW" \
     "the instruction is the subcommand that creates it, runnable as printed"
+assert_eq "$(gitf rev-parse --verify --quiet refs/heads/milestone/test-milestone || true)" "" \
+    "the milestone branch was not created implicitly"
 assert_eq "$(gitf rev-parse --verify --quiet "refs/heads/$branch" || true)" "" \
     "no ticket branch was created either"
 
@@ -202,5 +209,100 @@ assert_out_lacks "cliban-flow: creating" \
 unset FLOW_PATH
 assert_eq "$(ls -d "$FIXTURE_ROOT/escaped" 2>/dev/null)" "" \
     "nothing was created outside the milestone worktree"
+
+# The containment check is lexical, so a symlinked `.worktrees` would put every
+# ticket worktree outside the milestone root while spelling as if it were
+# inside. An operator moving that directory onto another volume is the ordinary
+# way to reach this.
+fixture_new
+fixture_milestone_worktree
+mkdir -p "$FIXTURE_ROOT/elsewhere"
+ln -s "$FIXTURE_ROOT/elsewhere" "$(fixture_milestone_wt)/.worktrees"
+key=$(new_issue "Symlinked worktrees directory")
+branch=$(branch_of "$key")
+
+run_flow ticket start "$key"
+assert_status 2 "a symlinked .worktrees is refused"
+assert_stderr_has "symlink" "the refusal says what it will not follow"
+assert_eq "$(ls -A "$FIXTURE_ROOT/elsewhere")" "" \
+    "nothing was created through the symlink"
+assert_eq "$(gitf rev-parse --verify --quiet "refs/heads/$branch" || true)" "" \
+    "no ticket branch was created"
+
+# Same hazard as the milestone branch in the primary checkout, one level down:
+# the caller's next step after this prints a path is to cd there and build.
+# Someone checking the branch out to look at it is all it takes to get here.
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "Ticket branch in the primary checkout")
+branch=$(branch_of "$key")
+gitf checkout -q -b "$branch" milestone/test-milestone
+
+run_flow ticket start "$key"
+assert_status 2 "a ticket branch checked out in the primary checkout is refused"
+assert_stdout_is "" "the primary checkout is never handed back as a ticket worktree"
+assert_stderr_has "primary checkout" "the refusal names what is wrong"
+assert_stderr_has "git -C \"$FIXTURE_REPO\" checkout main" \
+    "the instruction is the command that frees it"
+assert_board_has "$key" "[cliban-flow] ticket start $key: refused" \
+    "the refusal is recorded on the board"
+
+# Whatever is at the ticket's worktree path was put there by someone.
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "Worktree path occupied")
+branch=$(branch_of "$key")
+mkdir -p "$(fixture_milestone_wt)/.worktrees/$branch"
+printf 'not a worktree\n' >"$(fixture_milestone_wt)/.worktrees/$branch/someones-file"
+
+run_flow ticket start "$key"
+assert_status 2 "an occupied ticket worktree path is refused"
+assert_stderr_has "already exists and is not a worktree for $branch" \
+    "the refusal is this guard's, made before anything was attempted"
+assert_eq "$(cat "$(fixture_milestone_wt)/.worktrees/$branch/someones-file")" "not a worktree" \
+    "nothing at that path was removed or overwritten"
+assert_eq "$(gitf rev-parse --verify --quiet "refs/heads/$branch" || true)" "" \
+    "no branch was created either"
+
+# -e does not see a dangling symlink, so the same guard has to test -L too.
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "Worktree path is a dangling symlink")
+branch=$(branch_of "$key")
+mkdir -p "$(fixture_milestone_wt)/.worktrees"
+ln -s "$FIXTURE_ROOT/gone" "$(fixture_milestone_wt)/.worktrees/$branch"
+
+run_flow ticket start "$key"
+assert_status 2 "a dangling symlink at the ticket worktree path is refused"
+assert_stderr_has "already exists and is not a worktree for $branch" \
+    "the refusal is this guard's, not git's"
+assert_out_lacks "cliban-flow: creating" \
+    "nothing announced that it was about to create anything"
+
+# A milestone worktree left detached — a bisect, an inspection, an aborted
+# rebase. The branch exists and the worktree exists, but no worktree holds the
+# branch, and the repair is neither "start the milestone" nor "move it aside".
+fixture_new
+fixture_milestone_worktree
+git -C "$(fixture_milestone_wt)" checkout -q --detach
+key=$(new_issue "Milestone worktree left detached")
+
+run_flow ticket start "$key"
+assert_status 2 "a detached milestone worktree is refused"
+assert_stderr_has "detached" "the refusal names the state it actually found"
+assert_stderr_has "git -C \"$(fixture_milestone_wt)\" checkout milestone/test-milestone" \
+    "the instruction is the repair for that state, not for a missing worktree"
+
+# A milestone whose name slugifies to nothing has no branch a ticket could
+# start from.
+fixture_new
+cb milestone add "!!!" --project FLOW >/dev/null
+key=$(new_issue "Ticket on an unslugifiable milestone" "!!!")
+
+run_flow ticket start "$key"
+assert_status 2 "a ticket whose milestone has no usable branch name is refused"
+assert_stderr_has "no usable branch name" "the refusal says why"
+assert_eq "$(gitf worktree list --porcelain | grep -c '^worktree ')" "1" \
+    "no worktree was created"
 
 finish

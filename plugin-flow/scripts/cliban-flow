@@ -15,7 +15,9 @@
 #      asked for. Stdout carries the verdict; stderr names the command that
 #      changes it.
 #   2  refused. A guard failed or the invocation was malformed, so the question
-#      could not be answered at all. Nothing was changed.
+#      could not be answered at all. Every guard refuses before changing
+#      anything; the one exception is a git command that failed partway, and
+#      those refusals name in their own text what may have been left behind.
 #
 # The verdict goes to stdout because it is the answer; refusals, warnings and
 # instructions go to stderr.
@@ -243,6 +245,29 @@ worktree_for_branch() {
 # subcommand comes to report a path its caller cannot cd into.
 worktree_missing() { [ ! -d "$1" ]; }
 
+# worktree_head <path> — what is checked out in the worktree at <path>: a branch
+# name, the word `detached`, or empty when <path> is not a worktree of this
+# repository at all. The difference matters in the refusals: a live worktree
+# sitting on the wrong ref is repaired by checking the right one out, and
+# advising someone to move it aside instead would break git's registration.
+worktree_head() {
+    gitr worktree list --porcelain | awk -v want="worktree $1" '
+        $0 == want { here = 1; next }
+        here == 1 && /^branch refs\/heads\//{
+            sub(/^branch refs\/heads\//, ""); print; here = 0
+        }
+        here == 1 && $0 == "detached" { print "detached"; here = 0 }
+        $0 == "" { here = 0 }'
+}
+
+# worktree_head_desc <worktree_head answer> — the same, in a sentence.
+worktree_head_desc() {
+    case $1 in
+        detached) printf 'with a detached HEAD' ;;
+        *) printf 'on branch %s' "$1" ;;
+    esac
+}
+
 # prune_instructions — the guidance both start subcommands give for a
 # registration whose directory is gone. Written once because the two refusals
 # differ only in which log they land on, and drifting apart would leave one of
@@ -254,6 +279,16 @@ prune_instructions() {
         "is wanted, then:" \
         "" \
         "    git -C \"$REPO\" worktree prune"
+}
+
+# read_prune_instructions — the lines above, into PRUNE_INSTRUCTIONS, which a
+# refusal can splat. A read loop rather than `mapfile`, which would be the only
+# bash-4 construct in the file.
+PRUNE_INSTRUCTIONS=()
+read_prune_instructions() {
+    local line
+    PRUNE_INSTRUCTIONS=()
+    while IFS= read -r line; do PRUNE_INSTRUCTIONS+=("$line"); done < <(prune_instructions)
 }
 
 # worktree_dirty <path> — anything uncommitted, tracked or not, except the
@@ -395,7 +430,8 @@ load_milestone() {
         "This dispatcher needs \`name\` on \`milestone show --json\`."
     MILESTONE_NAME=$name
     MILESTONE_BRANCH=$(milestone_branch "$name")
-    [ "$MILESTONE_BRANCH" != "milestone/" ] || refuse \
+    # The milestone resolved, so from here every refusal lands on its log.
+    [ "$MILESTONE_BRANCH" != "milestone/" ] || refuse_milestone "$name" \
         "milestone \"$name\" has no usable branch name" \
         "Its name slugifies to nothing, so there is no branch it could refer to." \
         "Rename the milestone to something containing letters or digits."
@@ -405,16 +441,25 @@ load_milestone() {
     # accepts both. One branch and one worktree cannot serve two milestones:
     # whichever started second would be handed the first one's tree and told it
     # was already started. Caught here, before anything is created.
-    local other
+    local names other
+    # Captured rather than piped straight into the loop: a listing that failed
+    # would otherwise produce no lines, run the loop body zero times, and report
+    # no collision — a guard that answers "all clear" when it could not look.
+    names=$(cliban milestone ls -p "$PROJECT" --json 2>/dev/null | json_lines_field name) ||
+        refuse_milestone "$name" \
+            "could not list the milestones on project $PROJECT" \
+            "Two milestones can derive one branch name, so this has to be checked" \
+            "before a branch is created. It needs \`cliban milestone ls -p $PROJECT" \
+            "--json\` to be readable."
     while IFS= read -r other; do
         [ -n "$other" ] && [ "$other" != "$name" ] || continue
-        [ "$(milestone_branch "$other")" != "$MILESTONE_BRANCH" ] || refuse \
+        [ "$(milestone_branch "$other")" != "$MILESTONE_BRANCH" ] || refuse_milestone "$name" \
             "milestones \"$name\" and \"$other\" both name the branch $MILESTONE_BRANCH" \
             "Branch names are derived from milestone names, and these two derive" \
             "the same one, so a single branch and worktree would have to serve" \
             "both. Rename one of them so the two differ by more than punctuation" \
             "or case."
-    done < <(cliban milestone ls -p "$PROJECT" --json 2>/dev/null | json_lines_field name)
+    done <<<"$names"
 }
 
 # parse_project_option — strips --project/-p out of a subcommand's arguments and
@@ -546,13 +591,10 @@ cmd_milestone_start() {
         # to check the branch out anywhere else while the registration stands.
         # Clearing it is a repair, not a setup step, so this refuses rather than
         # pruning: the guard's whole job is to stop and say what is true.
+        read_prune_instructions
         ! worktree_missing "$existing" || refuse_milestone "$MILESTONE_NAME" \
             "$MILESTONE_BRANCH is registered to $existing, which no longer exists" \
-            "git still holds that worktree, so it will not check the branch out" \
-            "anywhere else until the registration is cleared. Confirm nothing is" \
-            "wanted there, then:" \
-            "" \
-            "    git -C \"$REPO\" worktree prune" \
+            "${PRUNE_INSTRUCTIONS[@]}" \
             "    $PROG milestone start \"$MILESTONE_NAME\" -p $PROJECT"
 
         say "$existing"
@@ -562,7 +604,22 @@ cmd_milestone_start() {
         exit 0
     fi
 
-    local path="$primary-${MILESTONE_BRANCH#milestone/}"
+    local path at_path
+    path="$primary-${MILESTONE_BRANCH#milestone/}"
+
+    # A live worktree of this repository already sitting there, just not on the
+    # milestone branch — detached after a bisect, or left on another branch.
+    # Told to "move it aside", an operator would break git's registration and
+    # land in a worse state than the one they started in.
+    at_path=$(worktree_head "$path") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    [ -z "$at_path" ] || refuse_milestone "$MILESTONE_NAME" \
+        "$path is already a worktree of this repository, $(worktree_head_desc "$at_path")" \
+        "That is where $MILESTONE_BRANCH belongs, and that is not what is checked" \
+        "out there. Check it out where it belongs:" \
+        "" \
+        "    git -C \"$path\" checkout $MILESTONE_BRANCH"
+
     # -L as well as -e: a dangling symlink is invisible to -e, and letting the
     # worktree add fail on it would report git's error instead of this guard's.
     { [ ! -e "$path" ] && [ ! -L "$path" ]; } || refuse_milestone "$MILESTONE_NAME" \
@@ -584,7 +641,8 @@ cmd_milestone_start() {
         # bare name makes the new worktree sit *on* the branch.
         gitr worktree add "$path" "$MILESTONE_BRANCH" >&2 || refuse_milestone "$MILESTONE_NAME" \
             "git could not add a worktree at $path for $MILESTONE_BRANCH" \
-            "git's own error is above."
+            "git's own error is above. The branch was not created by this step, so" \
+            "nothing about it has changed."
         outcome="adopted"
     else
         have_branch main || refuse_milestone "$MILESTONE_NAME" \
@@ -595,7 +653,11 @@ cmd_milestone_start() {
         gitr worktree add -b "$MILESTONE_BRANCH" "$path" refs/heads/main >&2 ||
             refuse_milestone "$MILESTONE_NAME" \
                 "git could not create $MILESTONE_BRANCH at $path" \
-                "git's own error is above."
+                "git's own error is above. git creates the branch before it checks" \
+                "it out, so $MILESTONE_BRANCH may exist even though the worktree" \
+                "does not:" \
+                "" \
+                "    git -C \"$REPO\" branch --list $MILESTONE_BRANCH"
         outcome="created"
     fi
 
@@ -652,12 +714,29 @@ cmd_ticket_start() {
     mwt=$(worktree_for_branch "$mbranch") || refuse \
         "could not read this repository's worktree list" "git's own error is above."
 
-    [ -n "$mwt" ] || refuse_ticket "$ISSUE_KEY" \
-        "$mbranch exists but is checked out in no worktree" \
-        "Ticket worktrees are rooted under the milestone's worktree, and this" \
-        "milestone does not have one. Make it:" \
-        "" \
-        "$start_milestone"
+    if [ -z "$mwt" ]; then
+        # The milestone's worktree may well be right where it belongs and simply
+        # not on the branch. Sending someone to `milestone start` here would
+        # bounce them into the occupied-path refusal and back, and neither
+        # message would name the state they are actually in.
+        local mpath at_mpath
+        mpath="$primary-${mbranch#milestone/}"
+        at_mpath=$(worktree_head "$mpath") || refuse \
+            "could not read this repository's worktree list" "git's own error is above."
+        [ -z "$at_mpath" ] || refuse_ticket "$ISSUE_KEY" \
+            "the milestone worktree $mpath is $(worktree_head_desc "$at_mpath"), not on $mbranch" \
+            "$ISSUE_BRANCH starts at $mbranch's tip and its worktree is rooted under" \
+            "that one. Put it back on the branch:" \
+            "" \
+            "    git -C \"$mpath\" checkout $mbranch"
+
+        refuse_ticket "$ISSUE_KEY" \
+            "$mbranch exists but is checked out in no worktree" \
+            "Ticket worktrees are rooted under the milestone's worktree, and this" \
+            "milestone does not have one. Make it:" \
+            "" \
+            "$start_milestone"
+    fi
 
     [ "$mwt" != "$primary" ] || refuse_ticket "$ISSUE_KEY" \
         "$mbranch is checked out in the primary checkout $primary" \
@@ -670,12 +749,11 @@ cmd_ticket_start() {
         "    git -C \"$primary\" checkout main" \
         "$start_milestone"
 
-    local -a prune
-    mapfile -t prune < <(prune_instructions)
+    read_prune_instructions
 
     ! worktree_missing "$mwt" || refuse_ticket "$ISSUE_KEY" \
         "$mbranch is registered to $mwt, which no longer exists" \
-        "${prune[@]}" \
+        "${PRUNE_INSTRUCTIONS[@]}" \
         "$start_milestone"
 
     ! worktree_dirty "$mwt" || refuse_ticket "$ISSUE_KEY" \
@@ -692,6 +770,17 @@ cmd_ticket_start() {
     local root path
     root="$mwt/.worktrees"
     path="$root/$ISSUE_BRANCH"
+
+    # path_within compares paths as written, which a symlink makes a lie: every
+    # ticket worktree would land outside the milestone root while spelling as if
+    # it were inside. Refusing rather than resolving it, because a resolved path
+    # would be *correctly* outside the root, which is the thing forbidden.
+    [ ! -L "$root" ] || refuse_ticket "$ISSUE_KEY" \
+        "$root is a symlink, so a worktree under it would not be inside $mwt" \
+        "Ticket worktrees have to stay within the milestone worktree. Replace the" \
+        "symlink with a real directory, or move the milestone worktree itself to" \
+        "wherever you wanted its contents to live."
+
     path_within "$root" "$path" || refuse_ticket "$ISSUE_KEY" \
         "$ISSUE_KEY's branch name puts its worktree outside $root" \
         "\`git_branch_name\` is \"$ISSUE_BRANCH\", which resolves out of the" \
@@ -703,9 +792,21 @@ cmd_ticket_start() {
         "could not read this repository's worktree list" "git's own error is above."
 
     if [ -n "$existing" ]; then
+        # The same hazard as the milestone branch in the primary checkout, one
+        # level down and easier to reach: someone checks the ticket branch out
+        # there to look at it, and a later `ticket start` would hand that path
+        # back to a caller whose next step is to cd in and build.
+        [ "$existing" != "$primary" ] || refuse_ticket "$ISSUE_KEY" \
+            "$ISSUE_BRANCH is checked out in the primary checkout $primary" \
+            "Reporting that as this ticket's worktree would send whoever asked" \
+            "into the tree the user works and runs from. Free the branch first:" \
+            "" \
+            "    git -C \"$primary\" checkout main" \
+            "    $PROG ticket start $ISSUE_KEY"
+
         ! worktree_missing "$existing" || refuse_ticket "$ISSUE_KEY" \
             "$ISSUE_BRANCH is registered to $existing, which no longer exists" \
-            "${prune[@]}" \
+            "${PRUNE_INSTRUCTIONS[@]}" \
             "    $PROG ticket start $ISSUE_KEY"
         say "$existing"
         instruct "$ISSUE_BRANCH is already checked out there; nothing to do."
@@ -728,14 +829,19 @@ cmd_ticket_start() {
         announce "adding a worktree at $path for the existing branch $ISSUE_BRANCH@$(short_sha "$ISSUE_BRANCH")"
         gitr worktree add "$path" "$ISSUE_BRANCH" >&2 || refuse_ticket "$ISSUE_KEY" \
             "git could not add a worktree at $path for $ISSUE_BRANCH" \
-            "git's own error is above."
+            "git's own error is above. The branch was not created by this step, so" \
+            "nothing about it has changed."
         outcome="adopted"
     else
         announce "creating $ISSUE_BRANCH off $mbranch@$(short_sha "$mbranch") and checking it out at $path"
         gitr worktree add -b "$ISSUE_BRANCH" "$path" "refs/heads/$mbranch" >&2 ||
             refuse_ticket "$ISSUE_KEY" \
                 "git could not create $ISSUE_BRANCH at $path" \
-                "git's own error is above."
+                "git's own error is above. git creates the branch before it checks" \
+                "it out, so $ISSUE_BRANCH may exist even though the worktree does" \
+                "not:" \
+                "" \
+                "    git -C \"$REPO\" branch --list $ISSUE_BRANCH"
         outcome="created"
     fi
 

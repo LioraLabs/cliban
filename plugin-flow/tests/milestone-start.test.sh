@@ -80,6 +80,9 @@ assert_eq "$(gitf rev-parse milestone/test-milestone)" "$tip" \
 assert_eq "$(git -C "$(milestone_wt)" rev-parse HEAD)" "$tip" \
     "the worktree carries the work the branch already had"
 assert_stderr_has "existing branch" "the narration says it is adopting, not creating"
+assert_eq "$(gitf rev-parse --abbrev-ref HEAD)" "main" \
+    "adopting leaves the primary checkout on what it was on"
+assert_eq "$(gitf status --porcelain)" "" "adopting leaves the primary checkout clean"
 assert_milestone_board_has "Test milestone" \
     "[cliban-flow] milestone start Test milestone: adopted" \
     "adopting is distinguishable on the board from creating"
@@ -131,6 +134,9 @@ assert_stderr_has "both name the branch milestone/test-milestone" \
     "the refusal names the collision and the branch they collide on"
 assert_eq "$(gitf rev-parse --verify --quiet refs/heads/milestone/test-milestone || true)" "" \
     "neither milestone got the branch"
+assert_milestone_board_has "Test-Milestone!" \
+    "[cliban-flow] milestone start Test-Milestone!: refused" \
+    "a refusal on a milestone that did resolve lands on its own log"
 
 # A typo would otherwise create a real branch and a real worktree for a
 # milestone nobody is tracking, and its board line would go nowhere.
@@ -180,6 +186,22 @@ assert_status 2 "a milestone whose name slugifies to nothing is refused"
 assert_stderr_has "no usable branch name" "the refusal says why"
 assert_eq "$(gitf rev-parse --verify --quiet refs/heads/milestone/ || true)" "" \
     "no branch was created from the empty slug"
+assert_milestone_board_has "!!!" "[cliban-flow] milestone start !!!: refused" \
+    "that refusal lands on the milestone's own log too"
+
+# The derived path is taken by a worktree of this same repository that is simply
+# not on the milestone branch — detached after a bisect, or left on another
+# branch. "Move it aside" would break git's registration; the repair is to check
+# the branch out where it belongs.
+fixture_new
+gitf worktree add -q --detach "$(fixture_milestone_wt)" main
+
+run_flow milestone start "Test milestone" -p FLOW
+assert_status 2 "a registered worktree at the derived path that is not on the branch is refused"
+assert_stderr_has "detached" "the refusal names the state it actually found"
+assert_stderr_has "git -C \"$(fixture_milestone_wt)\" checkout milestone/test-milestone" \
+    "the instruction is the repair for that state, not advice that would break it"
+assert_out_lacks "move it aside" "it does not suggest moving a live worktree"
 
 # An unreachable board must never turn a completed action into a failure.
 fixture_new
