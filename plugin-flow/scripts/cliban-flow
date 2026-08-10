@@ -122,6 +122,10 @@ usage: cliban-flow <group> <command> [args]
                         its own worktree, a sibling of the primary checkout.
                         Prints the worktree path.
 
+  milestone finish <NAME> [-p KEY]
+                        Fast-forward main to the milestone branch. Prints the
+                        landed SHA.
+
   ticket start <KEY>    Create <KEY>'s branch off the current milestone tip and
                         check it out in a worktree under the milestone
                         worktree. Prints the worktree path.
@@ -671,6 +675,10 @@ milestone_dispatch() {
             ACTION="milestone start"
             cmd_milestone_start "$@"
             ;;
+        finish)
+            ACTION="milestone finish"
+            cmd_milestone_finish "$@"
+            ;;
         '') usage_error "milestone needs a command" ;;
         *) usage_error "unknown milestone command: $command" ;;
     esac
@@ -841,6 +849,50 @@ cmd_milestone_start() {
     instruct "The primary checkout $primary was not touched."
     board_record_milestone "$MILESTONE_NAME" "$outcome ($MILESTONE_BRANCH at $path)"
     exit 0
+}
+
+# milestone finish <NAME> [-p KEY] — the one cutover: main only moves by a
+# fast-forward to the already-serialized milestone branch.
+cmd_milestone_finish() {
+    parse_project_option "$@"
+    set -- ${ARGS_REST[@]+"${ARGS_REST[@]}"}
+    local name=${1:-}
+    [ -n "$name" ] || usage_error "milestone finish needs a milestone name"
+    [ $# -le 1 ] || usage_error "milestone finish takes one milestone name, got: $*"
+    require_repo
+    require_project
+    load_milestone "$name"
+
+    have_branch main || refuse_milestone "$MILESTONE_NAME" \
+        "the local main branch does not exist" \
+        "This command only fast-forwards main; restore or create the intended main first."
+    have_branch "$MILESTONE_BRANCH" || refuse_milestone "$MILESTONE_NAME" \
+        "the milestone branch $MILESTONE_BRANCH does not exist here" \
+        "Start it first: $PROG milestone start \"$MILESTONE_NAME\" -p $PROJECT"
+    is_ancestor main "$MILESTONE_BRANCH" || refuse_milestone "$MILESTONE_NAME" \
+        "main is not an ancestor of $MILESTONE_BRANCH (main drift)" \
+        "Merge main into $MILESTONE_BRANCH via a dispatched agent in the milestone" \
+        "worktree, resolve and verify there, then retry. The orchestrator must not resolve it."
+
+    local primary head tip
+    primary=$(primary_worktree) || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    head=$(worktree_head "$primary") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    [ "$head" = main ] || refuse_milestone "$MILESTONE_NAME" \
+        "the primary checkout $primary is $(worktree_head_desc "$head"), not on main" \
+        "Switch that checkout to main before finishing the milestone."
+    ! worktree_dirty "$primary" || refuse_milestone "$MILESTONE_NAME" \
+        "the primary checkout $primary has uncommitted changes" \
+        "Commit or stash them before fast-forwarding main."
+
+    tip=$(full_sha "$MILESTONE_BRANCH")
+    announce "fast-forwarding main to $MILESTONE_BRANCH@$tip"
+    git -C "$primary" merge --ff-only "refs/heads/$MILESTONE_BRANCH" >&2 || refuse_milestone "$MILESTONE_NAME" \
+        "git could not fast-forward main to $MILESTONE_BRANCH" \
+        "Git's own error is above. Nothing here will attempt a non-fast-forward merge."
+    board_record_milestone "$MILESTONE_NAME" "finished (main at $tip from $MILESTONE_BRANCH)"
+    say "$tip"
 }
 
 # ticket start <KEY> — the ticket's worktree, under the milestone's.
