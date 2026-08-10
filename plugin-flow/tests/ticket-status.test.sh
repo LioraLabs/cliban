@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # CLI-79 — `cliban-flow ticket status <KEY>`: the mergeability gate.
-# shellcheck source=plugin-flow/tests/lib.sh
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=lib.sh
 . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 # ---------------------------------------------------------------- mergeable
