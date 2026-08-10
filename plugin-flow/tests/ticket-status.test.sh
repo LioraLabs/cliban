@@ -79,4 +79,64 @@ assert_out_has "sync-required: milestone/test-milestone@" "the verdict is sync-r
 assert_out_has "cliban-flow ticket sync $key" "the verdict names the command that fixes it"
 assert_eq "$(gitf status --porcelain)" "" "the working tree was left clean"
 
+# ------------------------------------------------------------------- guards
+#
+# Exit 2 is a different claim from exit 1 and the later subcommands branch on
+# the difference: 1 means the branch is behind and syncing fixes it, 2 means the
+# question could not be asked. A guard that answered "sync-required" would send
+# an agent to run a merge that cannot help.
+
+# No ticket branch yet.
+fixture_new
+key=$(new_issue "Never started")
+branch=$(branch_of "$key")
+
+run_flow ticket status "$key"
+assert_status 2 "a missing ticket branch is refused"
+assert_out_has "$branch" "the refusal names the branch that is missing"
+assert_out_lacks "sync-required" "a missing branch is not reported as sync-required"
+assert_board_has "$key" "[cliban-flow] ticket status $key: refused" \
+    "the refusal is recorded on the board"
+
+# No milestone branch yet.
+fixture_new
+key=$(new_issue "Milestone never started")
+branch=$(branch_of "$key")
+gitf branch "$branch" main
+gitf branch -q -D milestone/test-milestone
+
+run_flow ticket status "$key"
+assert_status 2 "a missing milestone branch is refused"
+assert_out_has "milestone/test-milestone" "the refusal names the milestone branch"
+assert_out_lacks "sync-required" "a missing milestone branch is not sync-required"
+assert_board_has "$key" "[cliban-flow] ticket status $key: refused" \
+    "the refusal is recorded on the board"
+
+# An issue with no milestone has no integration target at all.
+fixture_new
+key=$(new_issue_no_milestone "Loose ticket")
+branch=$(branch_of "$key")
+gitf branch "$branch" milestone/test-milestone
+
+run_flow ticket status "$key"
+assert_status 2 "a ticket on no milestone is refused"
+assert_out_has "milestone" "the refusal says the ticket is on no milestone"
+assert_board_has "$key" "[cliban-flow] ticket status $key: refused" \
+    "the refusal is recorded on the board"
+
+# A key the board has never heard of.
+fixture_new
+run_flow ticket status FLOW-404
+assert_status 2 "an unknown issue key is refused"
+assert_out_has "FLOW-404" "the refusal names the key it could not find"
+
+# Run from outside any repository.
+fixture_new
+key=$(new_issue "Wrong directory")
+FLOW_CWD="$FIXTURE_ROOT"
+run_flow ticket status "$key"
+unset FLOW_CWD
+assert_status 2 "running outside a git repository is refused"
+assert_out_has "git repository" "the refusal says where it should have been run"
+
 finish

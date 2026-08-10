@@ -38,7 +38,7 @@ ACTION=""
 # The repository every git call runs against; set by require_repo.
 REPO=""
 # The loaded ticket; set by load_issue.
-ISSUE_KEY="" ISSUE_TITLE="" ISSUE_STATUS="" ISSUE_BRANCH="" ISSUE_MILESTONE=""
+ISSUE_KEY="" ISSUE_BRANCH="" ISSUE_MILESTONE=""
 
 # ---------------------------------------------------------------- output
 
@@ -59,6 +59,17 @@ refuse() {
     printf '%s: refused: %s\n' "$PROG" "$summary" >&2
     instruct "$@"
     exit 2
+}
+
+# refuse_ticket <KEY> <summary> <instruction>... — a guard failed on a ticket
+# that did resolve, so the refusal is recorded before exiting. Refusals reached
+# before a key is known (a bad key, the wrong directory) have nowhere to write
+# and print only.
+refuse_ticket() {
+    local key=$1 summary=$2
+    shift 2
+    board_record "$key" "refused — $summary"
+    refuse "$summary" "$@"
 }
 
 usage_error() {
@@ -136,9 +147,9 @@ load_issue() {
     json=$(cliban issue show "$1" --json 2>/dev/null) || refuse \
         "no issue named $1 on the board" \
         "Check the key. If this is a scratch board, check CLIBAN_DB points at it."
+    # Extension point: `title` and `status` are on the same JSON and become
+    # ISSUE_TITLE / ISSUE_STATUS the moment a subcommand needs them.
     ISSUE_KEY=$1
-    ISSUE_TITLE=$(printf '%s' "$json" | json_field title)
-    ISSUE_STATUS=$(printf '%s' "$json" | json_field status)
     ISSUE_BRANCH=$(printf '%s' "$json" | json_field git_branch_name)
     ISSUE_MILESTONE=$(printf '%s' "$json" | json_field milestone)
 }
@@ -195,8 +206,32 @@ cmd_ticket_status() {
     require_repo
     load_issue "$key"
 
+    [ -n "$ISSUE_MILESTONE" ] || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY is on no milestone, so it has no integration target" \
+        "Mergeability is a question about a milestone branch. Put the ticket on a" \
+        "milestone first:" \
+        "" \
+        "    cliban issue edit $ISSUE_KEY --milestone \"<name>\""
+
     local mbranch
     mbranch=$(milestone_branch "$ISSUE_MILESTONE")
+
+    have_ref "$mbranch" || refuse_ticket "$ISSUE_KEY" \
+        "the milestone branch $mbranch does not exist here" \
+        "$ISSUE_KEY is on milestone \"$ISSUE_MILESTONE\", whose branch would be" \
+        "$mbranch. Create it, in its own worktree:" \
+        "" \
+        "    cliban-flow milestone start \"$ISSUE_MILESTONE\"" \
+        "" \
+        "Refusing rather than creating it here: a milestone branch invented at" \
+        "gate time would answer the question by defining it away."
+
+    have_ref "$ISSUE_BRANCH" || refuse_ticket "$ISSUE_KEY" \
+        "the ticket branch $ISSUE_BRANCH does not exist here" \
+        "Nothing has been implemented on $ISSUE_KEY yet, or this repository is" \
+        "not where it was. Start it with:" \
+        "" \
+        "    cliban-flow ticket start $ISSUE_KEY"
 
     local msha tsha
     msha=$(short_sha "$mbranch")
