@@ -24,7 +24,7 @@ Given neither a name nor a key, ask. If the user wants to scope from a conversat
 
 Then read the surroundings: `issue ls --json` for collisions, `project search <KEY> "<terms>" --json` for lessons that constrain the design.
 
-## 2. Grill toward the seams
+## 2. Grill toward the slice boundaries
 
 Interrogate the design as a **tree**: every decision branches into the decisions hanging off it. The **frontier** is every decision whose prerequisites are settled — what's answerable now, without guessing at answers you haven't heard.
 
@@ -43,7 +43,9 @@ Then wait. Each round's answers reshape the tree; recompute and ask the next. A 
 - **Facts are your job.** Anything the environment can answer — a file's contents, an API's shape, what the schema does today — go look up. Never bill the user for what a `grep` would settle. A lookup in flight is an unsettled prerequisite: ask the rest of the frontier while it runs.
 - **Decisions are the user's.** Put each one to them and wait.
 
-**Grill toward the seams.** Prioritise questions whose answers change *where the seam between two tickets falls* — what can land independently, what must exist before what. A question that cannot change the breakdown or its edges is a question for the executor: note it and move on.
+**Grill toward the slice boundaries.** Prioritise questions whose answers change *where one ticket ends and the next begins* — what can land independently, what must exist before what. A question that cannot change the breakdown or its edges is a question for the executor: note it and move on.
+
+("Slice boundary" partitions work. A **seam**, in `complete-issue`'s TDD reference, partitions observability — the boundary a test observes across. Different words on purpose.)
 
 Done when the frontier is empty.
 
