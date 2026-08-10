@@ -251,12 +251,10 @@ fn dash_body_reads_stdin() {
         "BODY_FROM_STDIN\n",
     );
     assert_eq!(r.code, 0, "stderr: {}", r.stderr);
+    // The only note on the board, so assert the whole section: a body of `-`
+    // would otherwise still satisfy a `contains` check on the heading.
     let notes = ok_null(&db, &["project", "cat", "SF", "--section", "notes"]);
-    assert!(notes.contains("BODY_FROM_STDIN"), "notes: {notes}");
-    assert!(
-        !notes.contains("\n-\n"),
-        "the literal dash must not become the body: {notes}"
-    );
+    assert_eq!(notes.trim(), "### via body\n\nBODY_FROM_STDIN", "{notes}");
 }
 
 // CLI-76
