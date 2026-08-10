@@ -614,6 +614,10 @@ fn resolve_description(
         ));
     }
     match (description, description_file) {
+        // A bare `-` is the stdin sentinel on the value flag too, not a
+        // one-character payload — same as `issue` and `milestone`. A
+        // hyphen-leading value like `- a bullet` is ordinary text.
+        (Some(value), None) if value == "-" => Ok(Some(read_stdin()?)),
         (Some(value), None) => Ok(Some(value)),
         (None, Some(path)) if path == "-" => Ok(Some(read_stdin()?)),
         (None, Some(path)) => std::fs::read_to_string(path)

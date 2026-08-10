@@ -179,21 +179,24 @@ fn project_notes_support_targeted_reads_and_progressive_search() {
     assert!(replacement.status.success());
     assert!(String::from_utf8_lossy(&replacement.stdout).contains("Replacement"));
 
-    assert!(run(
+    // CLI-76: a bare `-` on --description is the stdin sentinel here too, as
+    // it already was on issue and milestone. This used to store the dash
+    // itself, which read as a successful write of a one-character
+    // description.
+    let dashed = run_stdin(
         &db,
-        &[
-            "project",
-            "add",
-            "LIT",
-            "Literal",
-            "--description",
-            "-",
-        ],
-    )
-    .status
-    .success());
+        &["project", "add", "LIT", "Literal", "--description", "-"],
+        "PIPED_PROJECT_DESCRIPTION\n",
+    );
+    assert!(
+        dashed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dashed.stderr)
+    );
     let literal = run(&db, &["project", "show", "LIT", "--json"]);
-    assert!(String::from_utf8_lossy(&literal.stdout).contains(r#""description": "-""#));
+    let shown = String::from_utf8_lossy(&literal.stdout);
+    assert!(shown.contains("PIPED_PROJECT_DESCRIPTION"), "{shown}");
+    assert!(!shown.contains(r#""description": "-""#), "{shown}");
 
     let _ = std::fs::remove_dir_all(root);
 }

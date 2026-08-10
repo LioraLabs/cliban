@@ -235,6 +235,102 @@ fn empty_pipe_note_add_keeps_the_bare_heading_note() {
     assert!(notes.contains("### Bare"), "notes: {notes}");
 }
 
+// --- an explicit `-` on the value flag reads stdin ---------------------------
+//
+// The `*-file` flags have always honoured `-`; the value flags on `project`
+// silently stored the dash itself, so a scripted `--body -` threw its body
+// away and still exited 0.
+
+// CLI-76
+#[test]
+fn dash_body_reads_stdin() {
+    let db = seeded("body_dash");
+    let r = run_piped_stdin(
+        &db,
+        &["project", "note", "add", "SF", "via body", "--body", "-"],
+        "BODY_FROM_STDIN\n",
+    );
+    assert_eq!(r.code, 0, "stderr: {}", r.stderr);
+    let notes = ok_null(&db, &["project", "cat", "SF", "--section", "notes"]);
+    assert!(notes.contains("BODY_FROM_STDIN"), "notes: {notes}");
+    assert!(
+        !notes.contains("\n-\n"),
+        "the literal dash must not become the body: {notes}"
+    );
+}
+
+// CLI-76
+#[test]
+fn dash_project_description_reads_stdin_on_add() {
+    let db = tmp_db("proj_add_dash");
+    let r = run_piped_stdin(
+        &db,
+        &["project", "add", "PD", "Dashed", "--description", "-"],
+        "DESC_FROM_STDIN\n",
+    );
+    assert_eq!(r.code, 0, "stderr: {}", r.stderr);
+    let shown = ok_null(&db, &["project", "show", "PD", "--json"]);
+    assert!(shown.contains("DESC_FROM_STDIN"), "shown: {shown}");
+}
+
+// CLI-76
+#[test]
+fn dash_project_description_reads_stdin_on_edit() {
+    let db = seeded("proj_edit_dash");
+    let r = run_piped_stdin(
+        &db,
+        &["project", "edit", "SF", "--description", "-"],
+        "EDITED_FROM_STDIN\n",
+    );
+    assert_eq!(r.code, 0, "stderr: {}", r.stderr);
+    let shown = ok_null(&db, &["project", "show", "SF", "--json"]);
+    assert!(shown.contains("EDITED_FROM_STDIN"), "shown: {shown}");
+}
+
+// CLI-76 — the sibling the spec asked to be checked for the same defect.
+#[test]
+fn dash_issue_description_reads_stdin() {
+    let db = seeded("issue_desc_dash");
+    let r = run_piped_stdin(
+        &db,
+        &["issue", "add", "dashed", "--project", "SF", "--description", "-"],
+        "ISSUE_DESC_FROM_STDIN\n",
+    );
+    assert_eq!(r.code, 0, "stderr: {}", r.stderr);
+    let shown = ok_null(&db, &["issue", "show", "SF-2", "--json"]);
+    assert!(shown.contains("ISSUE_DESC_FROM_STDIN"), "shown: {shown}");
+}
+
+// CLI-76 — only a *bare* dash is the stdin sentinel; a markdown bullet that
+// merely starts with one stays literal.
+#[test]
+fn hyphen_leading_body_is_not_the_stdin_sentinel() {
+    let db = seeded("bullet_body");
+    let r = run_piped_stdin(
+        &db,
+        &["project", "note", "add", "SF", "Bulleted", "--body", "- a bullet"],
+        "FROM_THE_PIPE\n",
+    );
+    assert_eq!(r.code, 0, "stderr: {}", r.stderr);
+    let notes = ok_null(&db, &["project", "cat", "SF", "--section", "notes"]);
+    assert!(notes.contains("- a bullet"), "notes: {notes}");
+    assert!(!notes.contains("FROM_THE_PIPE"), "notes: {notes}");
+}
+
+// CLI-76 — the arm that always worked keeps working.
+#[test]
+fn dash_body_file_still_reads_stdin() {
+    let db = seeded("body_file_dash");
+    let r = run_piped_stdin(
+        &db,
+        &["project", "note", "add", "SF", "via file", "--body-file", "-"],
+        "FILE_ARM_FROM_STDIN\n",
+    );
+    assert_eq!(r.code, 0, "stderr: {}", r.stderr);
+    let notes = ok_null(&db, &["project", "cat", "SF", "--section", "notes"]);
+    assert!(notes.contains("FILE_ARM_FROM_STDIN"), "notes: {notes}");
+}
+
 // --- a real TTY with no argument keeps the fast error, never blocks ----------
 
 /// Open a pty pair and hand back (master fd, slave file). The master stays
