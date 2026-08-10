@@ -156,6 +156,16 @@ new_issue_no_milestone() {
     printf '%s' "$key"
 }
 
+# status_of <KEY> — the board's status for an issue. `ticket ready` claims to
+# move one, and the move is the deliverable rather than a side effect, so the
+# tests read it back rather than trusting the exit code.
+status_of() {
+    local status
+    status=$(cb issue show "$1" --json | json_get status)
+    [ -n "$status" ] || abort "fixture could not read a status for $1"
+    printf '%s' "$status"
+}
+
 branch_of() {
     local branch
     branch=$(cb issue show "$1" --json | json_get git_branch_name)
@@ -224,6 +234,22 @@ break_board_writes() {
     # shellcheck disable=SC2016
     stub_bin cliban '#!/usr/bin/env bash
 if [ "${1:-}" = issue ] && [ "${2:-}" = log ]; then
+    echo "stub: the board is unreachable" >&2
+    exit 1
+fi
+exec '"$real"' "$@"'
+}
+
+# break_board_moves — a cliban that fails every `issue mv` and passes
+# everything else through. The move is what `ticket ready` delivers, not
+# something it records afterwards, so unlike a failed activity-log append it may
+# not degrade into a warning over a successful-looking exit.
+break_board_moves() {
+    local real
+    real=$(command -v cliban) || abort "cliban is not on PATH"
+    # shellcheck disable=SC2016
+    stub_bin cliban '#!/usr/bin/env bash
+if [ "${1:-}" = issue ] && [ "${2:-}" = mv ]; then
     echo "stub: the board is unreachable" >&2
     exit 1
 fi
@@ -376,6 +402,22 @@ assert_board_has() {
         fail "$3" "expected $1's activity log to contain: $2
 Activity log:
 $log"
+    fi
+}
+
+# assert_timeline_has <KEY> <substring> <desc> — the issue's *timeline*, which
+# is where `issue mv --note` writes; the `## Activity Log` is a different place
+# and does not receive it. A subcommand that both moves a ticket and records a
+# [cliban-flow] line therefore has two things to prove, in two places.
+assert_timeline_has() {
+    local feed
+    feed=$(cb activity --issue "$1" 2>&1)
+    if printf '%s' "$feed" | grep -qF -- "$2"; then
+        pass "$3"
+    else
+        fail "$3" "expected $1's timeline to contain: $2
+Timeline:
+$feed"
     fi
 }
 

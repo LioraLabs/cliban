@@ -680,6 +680,10 @@ ticket_dispatch() {
             ACTION="ticket sync"
             cmd_ticket_sync "$@"
             ;;
+        ready)
+            ACTION="ticket ready"
+            cmd_ticket_ready "$@"
+            ;;
         '') usage_error "ticket needs a command" ;;
         *) usage_error "unknown ticket command: $command" ;;
     esac
@@ -1164,6 +1168,95 @@ cmd_ticket_sync() {
     board_record "$ISSUE_KEY" \
         "conflicted ($mbranch@$msha into $ISSUE_BRANCH@$tsha, unmerged: $(printf '%s' "$unmerged" | tr '\n' ' ' | sed 's/ $//'))"
     exit 1
+}
+
+# ticket ready <KEY> — hand the branch over, as a board state.
+#
+# Ready is not a message and not a claim made in prose: `in-review` is what it
+# means, and the orchestrator never looks at a branch whose ticket is not in
+# that state. So this subcommand is mostly its guards — everything an
+# orchestrator would otherwise have to re-check, checked once, here, by the only
+# context that knows what the branch was supposed to do.
+#
+# The move is the deliverable, which makes it the one board write in this script
+# that may not degrade to a warning. An activity-log line that failed to append
+# leaves an audit trail with a hole in it; a transition that failed to apply and
+# reported success leaves a finished branch nobody will ever look at, and
+# nothing anywhere saying so.
+cmd_ticket_ready() {
+    local key=${1:-}
+    [ -n "$key" ] || usage_error "ticket ready needs an issue key"
+    [ $# -le 1 ] || usage_error "ticket ready takes one issue key, got: $*"
+    require_repo
+    load_issue "$key"
+
+    load_ticket_milestone_branch "there is no tip it could be checked against" \
+        "Ready means the branch contains its milestone's tip, which needs a" \
+        "milestone. Put the ticket on one first:"
+    require_ticket_branch
+    load_ticket_worktree
+
+    local mbranch=$TICKET_MBRANCH
+    local msha tsha
+    msha=$(short_sha "$mbranch")
+    tsha=$(short_sha "$ISSUE_BRANCH")
+
+    # The same test `ticket status` reports on and `milestone integrate` will
+    # gate on: strict ancestry, never a trial merge. A branch that is merely
+    # behind would merge cleanly and is still not ready, because the tree that
+    # would land is not the tree that was built and tested.
+    is_ancestor "$mbranch" "$ISSUE_BRANCH" || refuse_ticket "$ISSUE_KEY" \
+        "$mbranch@$msha is not an ancestor of $ISSUE_BRANCH@$tsha" \
+        "Ready means integrable, and integration squashes this branch's tree" \
+        "unbuilt and untested — which is only safe while that tree is the one you" \
+        "built and tested. A branch that is behind is not that tree, however" \
+        "cleanly it would merge. Bring it forward, re-run the build and the full" \
+        "suite on what comes out, and come back:" \
+        "" \
+        "    $PROG ticket sync $ISSUE_KEY" \
+        "    <this repository's build>" \
+        "    <this repository's full test suite>" \
+        "    $PROG ticket ready $ISSUE_KEY"
+
+    local tip
+    tip=$(full_sha "$ISSUE_BRANCH")
+    local detail="$ISSUE_BRANCH@$tsha contains $mbranch@$msha"
+
+    # Already there. Re-running must not depend on cliban's handling of a move
+    # to the status something is already in, and must not read as a second
+    # handoff on the board.
+    if [ "$ISSUE_STATUS" = in-review ]; then
+        say "$tip"
+        instruct "$ISSUE_KEY is already in-review; nothing to move." \
+            "" \
+            "$detail, and its worktree is clean."
+        board_record "$ISSUE_KEY" "already ready ($detail)"
+        exit 0
+    fi
+
+    announce "moving $ISSUE_KEY to in-review at $ISSUE_BRANCH@$tsha"
+    cliban issue mv "$ISSUE_KEY" in-review \
+        --note "$(board_line "$ISSUE_KEY" "ready ($detail)")" >/dev/null 2>&1 ||
+        refuse_ticket "$ISSUE_KEY" \
+            "could not move $ISSUE_KEY to in-review on the board" \
+            "The branch is fine — this is the board write that failed, and ready is" \
+            "a board state, so nothing has been handed over. An orchestrator only" \
+            "looks at tickets in in-review, so reporting success here would strand" \
+            "$ISSUE_BRANCH silently. Check the board and re-run:" \
+            "" \
+            "    cliban issue show $ISSUE_KEY" \
+            "    $PROG ticket ready $ISSUE_KEY"
+
+    say "$tip"
+    instruct \
+        "$ISSUE_KEY is in-review and $detail." \
+        "" \
+        "The orchestrator integrates from here and owns the move to done. It" \
+        "will not build or test what it squashes, so whatever you ran on this" \
+        "tree is the last thing that did." \
+        ""
+    board_record "$ISSUE_KEY" "ready ($detail)"
+    exit 0
 }
 
 main "$@"
