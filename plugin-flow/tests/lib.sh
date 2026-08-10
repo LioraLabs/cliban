@@ -187,6 +187,21 @@ fi
 exec '"$real"' "$@"'
 }
 
+# break_milestone_board_writes — a cliban that fails every `milestone log` and
+# passes everything else through, including the `milestone show` the script
+# needs to resolve the milestone in the first place.
+break_milestone_board_writes() {
+    local real
+    real=$(command -v cliban) || abort "cliban is not on PATH"
+    # shellcheck disable=SC2016
+    stub_bin cliban '#!/usr/bin/env bash
+if [ "${1:-}" = milestone ] && [ "${2:-}" = log ]; then
+    echo "stub: the board is unreachable" >&2
+    exit 1
+fi
+exec '"$real"' "$@"'
+}
+
 # break_json_reader — a python3 that always fails.
 break_json_reader() {
     stub_bin python3 '#!/usr/bin/env bash

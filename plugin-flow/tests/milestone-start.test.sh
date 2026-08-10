@@ -31,7 +31,11 @@ assert_eq "$(git -C "$(milestone_wt)" rev-parse --abbrev-ref HEAD)" \
 assert_eq "$(gitf rev-parse --abbrev-ref HEAD)" "main" \
     "the primary checkout is left on what it was on"
 assert_eq "$(gitf status --porcelain)" "" "the primary checkout is left clean"
-assert_stderr_has "milestone/test-milestone" "the narration on stderr names the branch"
+# Prefixed, so this cannot be satisfied by git's own "Preparing worktree (new
+# branch …)" — the claim is that the script announced the step, not that
+# something in the pipeline mentioned the branch.
+assert_stderr_has "cliban-flow: creating milestone/test-milestone" \
+    "the script announces the branch it is about to create"
 assert_stderr_has "$(milestone_wt)" "the narration names the worktree it is about to add"
 assert_milestone_board_has "Test milestone" \
     "[cliban-flow] milestone start Test milestone: created" \
@@ -91,12 +95,42 @@ gitf checkout -q milestone/test-milestone
 run_flow milestone start "Test milestone" -p FLOW
 assert_status 2 "a milestone branch checked out in the primary checkout is refused"
 assert_stderr_has "primary checkout" "the refusal names what is wrong"
-assert_stderr_has "git -C $FIXTURE_REPO checkout main" \
-    "the instruction is the command that fixes it"
+assert_stderr_has "git -C \"$FIXTURE_REPO\" checkout main" \
+    "the instruction is the command that fixes it, quoted so it survives a path with spaces"
+assert_stdout_is "" "a refusal puts nothing on stdout"
 assert_eq "$(ls -d "$(milestone_wt)" 2>/dev/null)" "" "no worktree was created"
 assert_milestone_board_has "Test milestone" \
     "[cliban-flow] milestone start Test milestone: refused" \
     "the refusal is recorded on the board"
+
+# The state a crashed run plus a cleanup leaves: git still holds the
+# registration, so it will not check the branch out anywhere else, and a path
+# that no longer exists is not something a caller can cd into.
+fixture_new
+gitf branch -D milestone/test-milestone >/dev/null
+run_flow milestone start "Test milestone" -p FLOW
+assert_status 0 "the milestone starts"
+rm -rf "$(milestone_wt)"
+
+run_flow milestone start "Test milestone" -p FLOW
+assert_status 2 "a registered worktree whose directory is gone is refused, not reported"
+assert_stdout_is "" "no dead path is printed as if it were an answer"
+assert_stderr_has "no longer exists" "the refusal says what is wrong with it"
+assert_stderr_has "worktree prune" "the instruction names the repair it will not do for you"
+assert_eq "$(gitf worktree list --porcelain | grep -c '^worktree ')" "2" \
+    "the stale registration was left for the operator to clear"
+
+# Slugifying is lossy, and cliban accepts both of these names in one project.
+fixture_new
+cb milestone add "Test-Milestone!" --project FLOW >/dev/null
+gitf branch -D milestone/test-milestone >/dev/null
+
+run_flow milestone start "Test-Milestone!" -p FLOW
+assert_status 2 "two milestones deriving one branch name are refused"
+assert_stderr_has "both name the branch milestone/test-milestone" \
+    "the refusal names the collision and the branch they collide on"
+assert_eq "$(gitf rev-parse --verify --quiet refs/heads/milestone/test-milestone || true)" "" \
+    "neither milestone got the branch"
 
 # A typo would otherwise create a real branch and a real worktree for a
 # milestone nobody is tracking, and its board line would go nowhere.
@@ -112,12 +146,51 @@ assert_eq "$(ls -d "$FIXTURE_ROOT"/repo-no-such-milestone 2>/dev/null)" "" \
 # Milestone names are unique per project, not globally, so an unscoped lookup
 # would be a guess.
 fixture_new
+gitf checkout -q milestone/test-milestone
+commit_file integrated.txt "a ticket already landed here"
+gitf checkout -q main
+tip=$(gitf rev-parse milestone/test-milestone)
+
 run_flow milestone start "Test milestone"
 assert_status 2 "no project scope is refused"
 assert_stderr_has "no project scope" "the refusal says what is missing"
 assert_stderr_has "-p <KEY>" "the instruction shows how to supply it"
-assert_eq "$(gitf rev-parse --verify --quiet refs/heads/milestone/test-milestone || true)" \
-    "$(gitf rev-parse milestone/test-milestone)" "the milestone branch is untouched"
+# Compared against a sha read before the run: comparing the branch to itself
+# afterwards agrees by construction and would only ever catch a deletion.
+assert_eq "$(gitf rev-parse milestone/test-milestone)" "$tip" \
+    "the milestone branch was not moved"
+
+# $CLIBAN_PROJECT is the same scope by another route.
+CLIBAN_PROJECT=FLOW run_flow milestone start "Test milestone"
+assert_status 0 "the scope can come from the environment instead of -p"
+assert_stdout_is "$(milestone_wt)" "and produces the same worktree"
+
+# --project=KEY is the long option's other spelling.
+fixture_new
+gitf branch -D milestone/test-milestone >/dev/null
+run_flow milestone start "Test milestone" --project=FLOW
+assert_status 0 "--project=KEY is accepted"
+assert_stdout_is "$(milestone_wt)" "and names the same worktree"
+
+# A name that slugifies to nothing has no branch it could mean.
+fixture_new
+cb milestone add "!!!" --project FLOW >/dev/null
+run_flow milestone start "!!!" -p FLOW
+assert_status 2 "a milestone whose name slugifies to nothing is refused"
+assert_stderr_has "no usable branch name" "the refusal says why"
+assert_eq "$(gitf rev-parse --verify --quiet refs/heads/milestone/ || true)" "" \
+    "no branch was created from the empty slug"
+
+# An unreachable board must never turn a completed action into a failure.
+fixture_new
+gitf branch -D milestone/test-milestone >/dev/null
+break_milestone_board_writes
+run_flow milestone start "Test milestone" -p FLOW
+assert_status 0 "a board that will not take the line does not fail the action"
+assert_stdout_is "$(milestone_wt)" "the worktree path is still the answer"
+assert_stderr_has "the board is out of date" "the lost line is reported as a warning"
+unset FLOW_PATH
+assert_eq "$(gitf rev-parse --abbrev-ref HEAD)" "main" "the primary checkout is still on main"
 
 # The integration branch starts at main by definition; inventing a base would
 # be choosing what the milestone integrates into.
@@ -151,5 +224,19 @@ assert_eq "$(cat "$(milestone_wt)/someones-file")" "not a worktree" \
     "nothing at that path was removed or overwritten"
 assert_eq "$(gitf rev-parse --verify --quiet refs/heads/milestone/test-milestone || true)" "" \
     "no branch was created either"
+
+# A dangling symlink is invisible to -e, so the same guard has to test -L too;
+# without that it falls through, announces that it is creating, and reports
+# git's error instead of its own.
+fixture_new
+gitf branch -D milestone/test-milestone >/dev/null
+ln -s "$FIXTURE_ROOT/gone" "$(milestone_wt)"
+
+run_flow milestone start "Test milestone" -p FLOW
+assert_status 2 "a dangling symlink at the worktree path is refused"
+assert_stderr_has "already exists and is not a worktree for milestone/test-milestone" \
+    "the refusal is this guard's, not git's"
+assert_out_lacks "creating milestone/test-milestone" \
+    "nothing announced that it was about to create anything"
 
 finish
