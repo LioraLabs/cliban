@@ -243,6 +243,46 @@ worktree_for_branch() {
 # subcommand comes to report a path its caller cannot cd into.
 worktree_missing() { [ ! -d "$1" ]; }
 
+# prune_instructions — the guidance both start subcommands give for a
+# registration whose directory is gone. Written once because the two refusals
+# differ only in which log they land on, and drifting apart would leave one of
+# them telling the operator to do something subtly different.
+prune_instructions() {
+    printf '%s\n' \
+        "git still holds that worktree, so it will not check the branch out" \
+        "anywhere else until the registration is cleared. Confirm nothing there" \
+        "is wanted, then:" \
+        "" \
+        "    git -C \"$REPO\" worktree prune"
+}
+
+# worktree_dirty <path> — anything uncommitted, tracked or not, except the
+# ticket worktrees this script itself puts under `.worktrees/`.
+#
+# The exclusion is not a convenience. A repo that does not gitignore
+# `.worktrees/` — and nothing requires one to — would show the first ticket
+# worktree as untracked, and every later `ticket start` in the same milestone
+# would then refuse the milestone worktree as dirty because of a directory this
+# tool created. The guard is about the operator's work in flight, so this tool's
+# own artifacts are not evidence of it.
+worktree_dirty() {
+    [ -n "$(git -C "$1" status --porcelain -- ':(exclude).worktrees' 2>/dev/null)" ]
+}
+
+# path_within <root> <path> — is <path> inside <root>? Compared after purely
+# lexical normalisation, so neither path has to exist yet and no amount of `..`
+# in a name can spell its way past the check. python3 rather than `realpath -m`:
+# this script already requires the one and not the other.
+path_within() {
+    local root path
+    root=$(python3 -c 'import os, sys; print(os.path.normpath(sys.argv[1]))' "$1") || return 1
+    path=$(python3 -c 'import os, sys; print(os.path.normpath(sys.argv[1]))' "$2") || return 1
+    case $path in
+        "$root"/?*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # ---------------------------------------------------------------- the board's issues
 
 # json_tsv <field>... — the named fields of the JSON object on stdin, tab
@@ -582,19 +622,126 @@ cmd_ticket_start() {
     require_repo
     load_issue "$key"
 
-    local mbranch mwt path
-    mbranch=$(milestone_branch "$ISSUE_MILESTONE")
-    mwt=$(worktree_for_branch "$mbranch")
-    path="$mwt/.worktrees/$ISSUE_BRANCH"
+    [ -n "$ISSUE_MILESTONE" ] || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY is on no milestone, so it has nothing to branch from" \
+        "A ticket branch starts at its milestone's tip and its worktree hangs off" \
+        "the milestone's. Put the ticket on a milestone first:" \
+        "" \
+        "    cliban issue edit $ISSUE_KEY --milestone \"<name>\""
 
-    announce "creating $ISSUE_BRANCH off $mbranch@$(short_sha "$mbranch") and checking it out at $path"
-    gitr worktree add -b "$ISSUE_BRANCH" "$path" "refs/heads/$mbranch" >&2 ||
-        refuse_ticket "$ISSUE_KEY" \
-            "git could not create $ISSUE_BRANCH at $path" \
+    local mbranch
+    mbranch=$(milestone_branch "$ISSUE_MILESTONE")
+    [ "$mbranch" != "milestone/" ] || refuse_ticket "$ISSUE_KEY" \
+        "milestone \"$ISSUE_MILESTONE\" has no usable branch name" \
+        "Its name slugifies to nothing, so there is no branch it could refer to." \
+        "Rename the milestone to something containing letters or digits."
+
+    local start_milestone="    $PROG milestone start \"$ISSUE_MILESTONE\" -p $ISSUE_PROJECT"
+
+    have_branch "$mbranch" || refuse_ticket "$ISSUE_KEY" \
+        "the milestone branch $mbranch does not exist here" \
+        "$ISSUE_KEY is on milestone \"$ISSUE_MILESTONE\", whose branch would be" \
+        "$mbranch. Refusing rather than creating it: inventing the branch here" \
+        "would decide what this ticket integrates into. Start the milestone:" \
+        "" \
+        "$start_milestone"
+
+    local primary mwt
+    primary=$(primary_worktree) || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    mwt=$(worktree_for_branch "$mbranch") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+
+    [ -n "$mwt" ] || refuse_ticket "$ISSUE_KEY" \
+        "$mbranch exists but is checked out in no worktree" \
+        "Ticket worktrees are rooted under the milestone's worktree, and this" \
+        "milestone does not have one. Make it:" \
+        "" \
+        "$start_milestone"
+
+    [ "$mwt" != "$primary" ] || refuse_ticket "$ISSUE_KEY" \
+        "$mbranch is checked out in the primary checkout $primary" \
+        "Ticket worktrees are rooted under the milestone worktree, so this would" \
+        "put every ticket's build state inside the tree the user works and runs" \
+        "from — the layout that has already taken down a running service." \
+        "" \
+        "Give the milestone its own worktree first:" \
+        "" \
+        "    git -C \"$primary\" checkout main" \
+        "$start_milestone"
+
+    local -a prune
+    mapfile -t prune < <(prune_instructions)
+
+    ! worktree_missing "$mwt" || refuse_ticket "$ISSUE_KEY" \
+        "$mbranch is registered to $mwt, which no longer exists" \
+        "${prune[@]}" \
+        "$start_milestone"
+
+    ! worktree_dirty "$mwt" || refuse_ticket "$ISSUE_KEY" \
+        "the milestone worktree $mwt has uncommitted changes" \
+        "$ISSUE_BRANCH would start at $mbranch's tip, which is not what is in that" \
+        "tree — whatever is uncommitted there would silently not be in it. Commit" \
+        "or stash it first:" \
+        "" \
+        "    git -C \"$mwt\" status"
+
+    # Nothing this subcommand creates may land outside the milestone worktree.
+    # The name comes from the board, and a guard that trusts its input is not a
+    # guard; this one is checked before anything is announced or created.
+    local root path
+    root="$mwt/.worktrees"
+    path="$root/$ISSUE_BRANCH"
+    path_within "$root" "$path" || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY's branch name puts its worktree outside $root" \
+        "\`git_branch_name\` is \"$ISSUE_BRANCH\", which resolves out of the" \
+        "milestone worktree. Nothing was created. cliban does not produce names" \
+        "like this, so the board is reporting something it should not."
+
+    local existing
+    existing=$(worktree_for_branch "$ISSUE_BRANCH") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+
+    if [ -n "$existing" ]; then
+        ! worktree_missing "$existing" || refuse_ticket "$ISSUE_KEY" \
+            "$ISSUE_BRANCH is registered to $existing, which no longer exists" \
+            "${prune[@]}" \
+            "    $PROG ticket start $ISSUE_KEY"
+        say "$existing"
+        instruct "$ISSUE_BRANCH is already checked out there; nothing to do."
+        board_record "$ISSUE_KEY" "already started ($ISSUE_BRANCH at $existing)"
+        exit 0
+    fi
+
+    { [ ! -e "$path" ] && [ ! -L "$path" ]; } || refuse_ticket "$ISSUE_KEY" \
+        "$path already exists and is not a worktree for $ISSUE_BRANCH" \
+        "That is where this ticket's worktree belongs. Refusing rather than" \
+        "reusing or removing it — whatever is there was put there by someone." \
+        "" \
+        "Inspect it, then move it aside or run \`git worktree prune\` if it is a" \
+        "leftover, and re-run."
+
+    local outcome
+    if have_branch "$ISSUE_BRANCH"; then
+        # The branch outlived its worktree and carries work. Recreating it off
+        # the milestone tip would throw that away without saying so.
+        announce "adding a worktree at $path for the existing branch $ISSUE_BRANCH@$(short_sha "$ISSUE_BRANCH")"
+        gitr worktree add "$path" "$ISSUE_BRANCH" >&2 || refuse_ticket "$ISSUE_KEY" \
+            "git could not add a worktree at $path for $ISSUE_BRANCH" \
             "git's own error is above."
+        outcome="adopted"
+    else
+        announce "creating $ISSUE_BRANCH off $mbranch@$(short_sha "$mbranch") and checking it out at $path"
+        gitr worktree add -b "$ISSUE_BRANCH" "$path" "refs/heads/$mbranch" >&2 ||
+            refuse_ticket "$ISSUE_KEY" \
+                "git could not create $ISSUE_BRANCH at $path" \
+                "git's own error is above."
+        outcome="created"
+    fi
 
     say "$path"
-    board_record "$ISSUE_KEY" "created ($ISSUE_BRANCH at $path)"
+    instruct "The primary checkout $primary was not touched."
+    board_record "$ISSUE_KEY" "$outcome ($ISSUE_BRANCH at $path)"
     exit 0
 }
 

@@ -218,6 +218,26 @@ fi
 exec '"$real"' "$@"'
 }
 
+# forge_branch_name <name> — a cliban whose `issue show --json` reports <name>
+# as the issue's git_branch_name and is otherwise itself. The board is the
+# boundary being substituted: cliban's own slugifier cannot produce a name that
+# escapes a directory, so the only way to exercise a containment guard is to
+# have the board say something cliban would never say.
+forge_branch_name() {
+    local real
+    real=$(command -v cliban) || abort "cliban is not on PATH"
+    # shellcheck disable=SC2016
+    stub_bin cliban '#!/usr/bin/env bash
+if [ "${1:-}" = issue ] && [ "${2:-}" = show ]; then
+    '"$real"' "$@" | FORGED='"$1"' python3 -c '"'"'import json, os, sys
+d = json.load(sys.stdin)
+d["git_branch_name"] = os.environ["FORGED"]
+print(json.dumps(d))'"'"'
+    exit "${PIPESTATUS[0]}"
+fi
+exec '"$real"' "$@"'
+}
+
 # break_json_reader — a python3 that always fails.
 break_json_reader() {
     stub_bin python3 '#!/usr/bin/env bash
