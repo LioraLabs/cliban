@@ -85,7 +85,13 @@ fn seeded(tag: &str, description: &str) -> String {
 fn description(db: &str) -> String {
     let out = ok(
         db,
-        &["milestone", "show", "Deterministic integration", "-p", "CLI"],
+        &[
+            "milestone",
+            "show",
+            "Deterministic integration",
+            "-p",
+            "CLI",
+        ],
     );
     let v: serde_json::Value = serde_json::from_str(&out).expect("milestone show --json");
     v["description"].as_str().expect("description").to_string()
@@ -152,7 +158,14 @@ fn subsequent_entries_append_in_order_under_one_heading() {
     for msg in ["first", "second", "third"] {
         ok(
             &db,
-            &["milestone", "log", "Deterministic integration", "-p", "CLI", msg],
+            &[
+                "milestone",
+                "log",
+                "Deterministic integration",
+                "-p",
+                "CLI",
+                msg,
+            ],
         );
     }
 
@@ -210,7 +223,13 @@ fn the_section_survives_show_and_a_later_edit_of_another_field() {
     // --json still parses, and reports the section in `description`.
     let json = ok(
         &db,
-        &["milestone", "show", "Deterministic integration", "-p", "CLI"],
+        &[
+            "milestone",
+            "show",
+            "Deterministic integration",
+            "-p",
+            "CLI",
+        ],
     );
     let v: serde_json::Value = serde_json::from_str(&json).expect("show --json parses");
     assert!(v["description"]
@@ -249,11 +268,113 @@ fn the_section_survives_show_and_a_later_edit_of_another_field() {
 
     // `milestone ls --stats` and `waves` also still work on this milestone.
     ok(&db, &["milestone", "ls", "-p", "CLI", "--stats"]);
-    ok(&db, &["milestone", "waves", "Deterministic integration", "-p", "CLI"]);
+    ok(
+        &db,
+        &[
+            "milestone",
+            "waves",
+            "Deterministic integration",
+            "-p",
+            "CLI",
+        ],
+    );
+}
+
+/// The ticket promises the two logs write the same line, so one parser reads
+/// both. That holds structurally today because both go through
+/// `descmd::append_activity_log` — but "structurally" is exactly what quietly
+/// stops being true. So pin it against the real `issue log`, on one board,
+/// with one message: only the timestamp *value* may differ (the two writes are
+/// a moment apart), never its shape, the list marker, or the separator.
+#[test]
+fn the_entry_line_is_the_line_issue_log_writes() {
+    let db = seeded("mirror", "## Spec\n\nbody\n");
+    ok(&db, &["issue", "add", "a ticket", "-p", "CLI"]);
+    let msg = "[cliban-flow] milestone start CLI: set up (2 waves)";
+
+    ok(&db, &["issue", "log", "CLI-1", msg]);
+    ok(
+        &db,
+        &[
+            "milestone",
+            "log",
+            "Deterministic integration",
+            "-p",
+            "CLI",
+            msg,
+        ],
+    );
+
+    let issue_section = ok(&db, &["issue", "cat", "CLI-1", "--section", "activity"]);
+    let issue_line = issue_section
+        .lines()
+        .find(|l| l.starts_with("- "))
+        .expect("issue log wrote a list item")
+        .to_string();
+    let milestone_line = entries(&db).pop().expect("milestone log wrote an entry");
+
+    // `- <stamp> — <message>` split into its two variable parts; a panic here
+    // means the fixed parts have already diverged.
+    fn split(line: &str) -> (String, String) {
+        let rest = line.strip_prefix("- ").expect("list marker");
+        let (stamp, msg) = rest.split_once(" — ").expect("` — ` separator");
+        (stamp.to_string(), msg.to_string())
+    }
+    let (issue_stamp, issue_msg) = split(&issue_line);
+    let (milestone_stamp, milestone_msg) = split(&milestone_line);
+
+    assert_eq!(issue_msg, msg);
+    assert_eq!(
+        issue_msg, milestone_msg,
+        "one message, two renderings: {issue_line:?} vs {milestone_line:?}"
+    );
+    assert_eq!(
+        issue_stamp.len(),
+        milestone_stamp.len(),
+        "timestamp shapes differ: {issue_line:?} vs {milestone_line:?}"
+    );
+    for stamp in [&issue_stamp, &milestone_stamp] {
+        assert!(
+            chrono::NaiveDateTime::parse_from_str(stamp, "%Y-%m-%dT%H:%MZ").is_ok(),
+            "timestamp {stamp:?} is not the shape the other side writes"
+        );
+    }
+
+    // The JSON echoes differ only where the subject differs: an issue has a
+    // key, a milestone has a name and a project. Everything else is shared,
+    // and a rename on either side breaks this.
+    let echo = |raw: String| {
+        let v: serde_json::Value = serde_json::from_str(raw.trim()).expect("log --json");
+        let keys = v
+            .as_object()
+            .expect("object")
+            .keys()
+            .cloned()
+            .collect::<Vec<String>>();
+        (keys, v["entry"].clone())
+    };
+    let (issue_keys, issue_entry) = echo(ok(&db, &["issue", "log", "CLI-1", "second"]));
+    let (milestone_keys, milestone_entry) = echo(ok(
+        &db,
+        &[
+            "milestone",
+            "log",
+            "Deterministic integration",
+            "-p",
+            "CLI",
+            "second",
+        ],
+    ));
+    assert_eq!(issue_keys, ["entry", "key", "timestamp"]);
+    assert_eq!(
+        milestone_keys,
+        ["entry", "milestone", "project", "timestamp"]
+    );
+    assert_eq!(issue_entry, milestone_entry);
 }
 
 #[test]
-fn output_shape_mirrors_issue_log() {
+fn output_shape_is_the_documented_json_and_human_line() {
     let db = seeded("shape", "## Spec\n\nbody\n");
 
     // Piped stdout defaults to JSON, which is what the scripts read.
@@ -382,12 +503,26 @@ fn concurrent_appends_all_survive() {
 fn unknown_milestone_and_unknown_project_exit_non_zero() {
     let db = seeded("missing", "## Spec\n\nbody\n");
 
-    let r = run(&db, &["milestone", "log", "No Such Milestone", "-p", "CLI", "x"]);
-    assert_ne!(r.code, 0, "unknown milestone must not succeed: {}", r.stdout);
+    let r = run(
+        &db,
+        &["milestone", "log", "No Such Milestone", "-p", "CLI", "x"],
+    );
+    assert_ne!(
+        r.code, 0,
+        "unknown milestone must not succeed: {}",
+        r.stdout
+    );
 
     let r = run(
         &db,
-        &["milestone", "log", "Deterministic integration", "-p", "NOPE", "x"],
+        &[
+            "milestone",
+            "log",
+            "Deterministic integration",
+            "-p",
+            "NOPE",
+            "x",
+        ],
     );
     assert_ne!(r.code, 0, "unknown project must not succeed: {}", r.stdout);
 
@@ -399,7 +534,17 @@ fn unknown_milestone_and_unknown_project_exit_non_zero() {
 #[test]
 fn an_empty_message_is_refused() {
     let db = seeded("blank", "## Spec\n\nbody\n");
-    let r = run(&db, &["milestone", "log", "Deterministic integration", "-p", "CLI", ""]);
+    let r = run(
+        &db,
+        &[
+            "milestone",
+            "log",
+            "Deterministic integration",
+            "-p",
+            "CLI",
+            "",
+        ],
+    );
     assert_ne!(r.code, 0, "an empty entry is not a log line");
     assert!(
         r.stderr.contains("message required"),
@@ -453,10 +598,45 @@ fn the_message_can_come_from_a_pipe_or_a_file() {
         .unwrap();
     assert!(child.wait().expect("wait").success());
 
+    // An actual file on disk — the one arm of the shared resolver that no
+    // other test in this crate exercises, and the arm the flow scripts use for
+    // any entry too long or too quote-heavy to pass as an argument.
+    let path = std::env::temp_dir().join(format!("cliban_mlog_entry_{}.txt", std::process::id()));
+    std::fs::write(&path, "entry from a real file\n").expect("write fixture");
+    ok(
+        &db,
+        &[
+            "milestone",
+            "log",
+            "Deterministic integration",
+            "-p",
+            "CLI",
+            "--message-file",
+            path.to_str().unwrap(),
+        ],
+    );
+    std::fs::remove_file(&path).ok();
+
+    // A path that does not exist is refused, not silently logged as its name.
+    let r = run(
+        &db,
+        &[
+            "milestone",
+            "log",
+            "Deterministic integration",
+            "-p",
+            "CLI",
+            "--message-file",
+            "/nonexistent/entry.txt",
+        ],
+    );
+    assert_ne!(r.code, 0, "a missing --message-file must not succeed");
+
     let got = entries(&db);
-    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(got.len(), 3, "{got:?}");
     assert!(got[0].ends_with(" — piped entry"), "{got:?}");
     assert!(got[1].ends_with(" — filed entry"), "{got:?}");
+    assert!(got[2].ends_with(" — entry from a real file"), "{got:?}");
 
     // Both spellings at once is a refusal, not a silent winner.
     let r = run(
@@ -473,5 +653,5 @@ fn the_message_can_come_from_a_pipe_or_a_file() {
         ],
     );
     assert_ne!(r.code, 0);
-    assert_eq!(entries(&db).len(), 2, "the refusal must not have written");
+    assert_eq!(entries(&db).len(), 3, "the refusal must not have written");
 }
