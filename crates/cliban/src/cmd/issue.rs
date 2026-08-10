@@ -1796,31 +1796,7 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
 
 async fn log(db: &Option<String>, a: LogArgs, teach: Option<Teach>) -> CliResult<()> {
     let key = parse_issue_key(&a.key)?;
-    let mut msg = a.message.clone().unwrap_or_default();
-    if let Some(file) = &a.message_file {
-        if !msg.is_empty() {
-            return Err(CliError::validation(
-                "pass <message> OR --message-file, not both",
-            ));
-        }
-        let content = if file == "-" {
-            crate::stdin_input::read_stdin()?
-        } else {
-            std::fs::read_to_string(file).map_err(|e| CliError::validation(e.to_string()))?
-        };
-        msg = content.trim_end_matches('\n').to_string();
-    } else if a.message.is_none() {
-        // No positional, no --message-file: piped/redirected stdin IS the
-        // message (a TTY yields None and keeps the fast error below).
-        if let Some(piped) = crate::stdin_input::fallback()? {
-            msg = piped.trim_end_matches('\n').to_string();
-        }
-    }
-    if msg.is_empty() {
-        return Err(CliError::validation(
-            "message required (positional or --message-file)",
-        ));
-    }
+    let msg = crate::stdin_input::log_message(a.message.clone(), a.message_file.clone())?;
 
     let store = store_open::open(db).await?;
     let lookup = key.clone();
