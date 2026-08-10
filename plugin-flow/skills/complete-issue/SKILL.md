@@ -8,6 +8,8 @@ requires_skills: [cliban-workflow]
 
 One ticket, end to end. It already carries a `## Spec`; this skill supplies the `## Plan` and the code, and leaves the board telling the truth about both.
 
+**Load first:** invoke `cliban-flow:cliban-workflow` for the contract (status mapping, where each artifact lands) and `cliban:cliban` for CLI mechanics. Neither loads on its own — reach for them with the Skill tool before the first board action.
+
 Two modes, differing only at the end:
 
 - **Standalone** — you own the branch through to `in-review` or `done` and hand it to the user.

@@ -8,6 +8,8 @@ requires_skills: [cliban-workflow]
 
 A report arrives. Decide whether it is real, then leave the board holding something the next person can act on without re-asking the reporter anything.
 
+**Load first:** invoke `cliban-flow:cliban-workflow` for the contract (status mapping, where each artifact lands) and `cliban:cliban` for CLI mechanics. Neither loads on its own — reach for them with the Skill tool before the first board action.
+
 **Not this skill:** a ticket that already exists and needs a root cause — that's `diagnose-issue`. Feature work — that's `explore-feature`.
 
 ## 1. Search the board before anything else

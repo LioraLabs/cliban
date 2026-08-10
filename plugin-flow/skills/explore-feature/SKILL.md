@@ -8,6 +8,8 @@ requires_skills: [cliban-workflow]
 
 Diverge on a rough idea until the design is agreed, then publish a **container** for it: one issue, or a milestone with no tickets in it yet. `scope-milestone` grills that container and fills it.
 
+**Load first:** invoke `cliban-flow:cliban-workflow` for the contract (status mapping, where each artifact lands) and `cliban:cliban` for CLI mechanics. Neither loads on its own — reach for them with the Skill tool before the first board action.
+
 ## 1. Ground yourself
 
 Read the repo areas the idea touches. Then read the board — this is the part that isn't obvious:

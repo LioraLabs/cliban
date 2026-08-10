@@ -10,6 +10,8 @@ The orchestrator is a conductor, not a coder: it computes the dependency order, 
 
 Inside each ticket runs **`complete-issue` in dispatched mode**, which owns claiming, planning, test-first execution, and committing. This skill schedules that and integrates the results; it does not restate the rhythm.
 
+**Load first:** invoke `cliban-flow:cliban-workflow` for the contract (status mapping, where each artifact lands) and `cliban:cliban` for CLI mechanics. Neither loads on its own — reach for them with the Skill tool before the first board action.
+
 **Not this skill:** a single issue (`complete-issue`); work not yet sliced into tickets (`scope-milestone`); issues with no shared integration target.
 
 ## The integration branch rule

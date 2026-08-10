@@ -6,7 +6,9 @@ requires_skills: [cliban]
 
 # Cliban Workflow — The Contract
 
-Policy, not mechanics. Every command, flag, JSON shape, and the description grammar lives in the **`cliban:cliban`** skill, which ships in the separate `cliban` plugin this one depends on — if it isn't among your available skills, say so rather than guessing at the CLI.
+Policy, not mechanics. Every command, flag, JSON shape, and the description grammar lives in the **`cliban:cliban`** skill, which ships in the separate `cliban` plugin this one depends on.
+
+**Invoke `cliban:cliban` now** if you have not already — it does not load on its own, and nothing below restates it. If it is not among your available skills, say so rather than guessing at the CLI.
 
 ## Per-Repo Binding (the adapter)
 

@@ -8,6 +8,8 @@ requires_skills: [cliban-workflow]
 
 Take a container off the board and make it executable: interrogate the design until nothing affecting the slicing is still assumed, cut it into tracer bullets, publish them with real dependency edges. `explore-feature` diverges; this converges.
 
+**Load first:** invoke `cliban-flow:cliban-workflow` for the contract (status mapping, where each artifact lands) and `cliban:cliban` for CLI mechanics. Neither loads on its own — reach for them with the Skill tool before the first board action.
+
 ## 1. Read the container
 
 You are handed a milestone name or an issue key. Read it first — it carries the design, and the conversation that produced it may be long gone.

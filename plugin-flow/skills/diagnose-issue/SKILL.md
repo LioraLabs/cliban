@@ -8,6 +8,8 @@ requires_skills: [cliban-workflow]
 
 Find the cause and **prove** it. This skill does not fix — it ends when the cause is demonstrated and written down, and `complete-issue` turns the reproduction into a regression test and the fix.
 
+**Load first:** invoke `cliban-flow:cliban-workflow` for the contract (status mapping, where each artifact lands) and `cliban:cliban` for CLI mechanics. Neither loads on its own — reach for them with the Skill tool before the first board action.
+
 **The iron law:** no fix proposals before a root cause you have demonstrated. A symptom fix that happens to work is indistinguishable from one that hides the bug until later.
 
 **The ticket is the ledger.** Every hypothesis, result, and dead end goes to `## Activity Log` as you go — not summarised at the end. Context dies; the board doesn't. `cliban activity --issue <KEY>` is what makes a diagnosis resumable by a fresh session, and it is the first thing the next person reads.
