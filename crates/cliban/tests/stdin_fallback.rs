@@ -335,6 +335,34 @@ fn hyphen_leading_body_is_not_the_stdin_sentinel() {
     assert!(!notes.contains("FROM_THE_PIPE"), "notes: {notes}");
 }
 
+// CLI-76 — the shared resolver names the flags the command actually has;
+// `note add` used to report the mutual exclusion as `--description`.
+#[test]
+fn mutually_exclusive_error_names_the_commands_own_flags() {
+    let db = seeded("mutex_flags");
+    let r = run_null_stdin(
+        &db,
+        &[
+            "project",
+            "note",
+            "add",
+            "SF",
+            "T",
+            "--body",
+            "x",
+            "--body-file",
+            "y",
+        ],
+    );
+    assert_eq!(r.code, 2, "stdout: {} stderr: {}", r.stdout, r.stderr);
+    assert!(
+        r.stderr
+            .contains("--body and --body-file are mutually exclusive"),
+        "stderr: {}",
+        r.stderr
+    );
+}
+
 // CLI-76 — the arm that always worked keeps working.
 #[test]
 fn dash_body_file_still_reads_stdin() {
