@@ -15,7 +15,9 @@
 #      asked for. Stdout carries the verdict; stderr names the command that
 #      changes it.
 #   2  refused. A guard failed or the invocation was malformed, so the question
-#      could not be answered at all. Nothing was changed.
+#      could not be answered at all. Every guard refuses before changing
+#      anything; the one exception is a git command that failed partway, and
+#      those refusals name in their own text what may have been left behind.
 #
 # The verdict goes to stdout because it is the answer; refusals, warnings and
 # instructions go to stderr.
@@ -29,10 +31,11 @@
 # reconstruct what ran. An invocation that never resolves a ticket — a usage
 # error, an unknown key — has no log to append to and prints only.
 #
-# cliban has no `milestone log`, so a subcommand acting on a milestone rather
-# than a ticket has no per-milestone place to write. Whoever adds the first one
-# decides where its line goes; board_line() is the single place the shape is
-# built, so only the destination is open.
+# A subcommand acting on a milestone rather than a ticket writes its line to
+# that milestone's activity log via `cliban milestone log`, which is why those
+# subcommands take a project scope: milestone names are unique per project, not
+# globally. The line itself is still built by board_line(), so a recovery survey
+# parses one format across both logs.
 
 set -euo pipefail
 
@@ -44,12 +47,26 @@ ACTION=""
 # The repository every git call runs against; set by require_repo.
 REPO=""
 # The loaded ticket; set by load_issue.
-ISSUE_KEY="" ISSUE_BRANCH="" ISSUE_MILESTONE=""
+ISSUE_KEY="" ISSUE_BRANCH="" ISSUE_MILESTONE="" ISSUE_PROJECT=""
+# The loaded milestone; set by load_milestone.
+MILESTONE_NAME="" MILESTONE_BRANCH=""
+# The project key milestone reads and writes are scoped by; set by
+# require_project from --project or $CLIBAN_PROJECT.
+PROJECT=""
+# --project, when a subcommand parsed one.
+FLOW_PROJECT=""
 
 # ---------------------------------------------------------------- output
 
 say() { printf '%s\n' "$*"; }
 warn() { printf '%s: %s\n' "$PROG" "$*" >&2; }
+
+# announce <what> — what a creating or destructive step is about to do, printed
+# before it runs, so an interrupted run leaves a record of how far it got. On
+# stderr with everything else that is not the answer: a caller does
+# `wt=$(cliban-flow ticket start KEY)` and gets the path alone only while the
+# narration stays off stdout.
+announce() { printf '%s: %s\n' "$PROG" "$*" >&2; }
 
 # instruct <line>... — the "what to do next" that follows a verdict or refusal.
 # Indented on stderr so it reads as guidance rather than as more output.
@@ -78,6 +95,16 @@ refuse_ticket() {
     refuse "$summary" "$@"
 }
 
+# refuse_milestone <NAME> <summary> <instruction>... — refuse_ticket one level
+# up: a guard failed on a milestone that did resolve, so the refusal lands on
+# the milestone's own activity log before exiting.
+refuse_milestone() {
+    local name=$1 summary=$2
+    shift 2
+    board_record_milestone "$name" "refused ($summary)"
+    refuse "$summary" "$@"
+}
+
 usage_error() {
     printf '%s: %s\n' "$PROG" "$1" >&2
     usage >&2
@@ -88,13 +115,25 @@ usage() {
     cat <<EOF
 usage: cliban-flow <group> <command> [args]
 
+  milestone start <NAME> [-p KEY]
+                        Create milestone/<slug> off main and check it out in
+                        its own worktree, a sibling of the primary checkout.
+                        Prints the worktree path.
+
+  ticket start <KEY>    Create <KEY>'s branch off the current milestone tip and
+                        check it out in a worktree under the milestone
+                        worktree. Prints the worktree path.
+
   ticket status <KEY>   Is <KEY>'s branch integrable? Read-only: prints
                         "mergeable" (exit 0) when the milestone branch tip is
                         an ancestor of the ticket branch, "sync-required"
                         (exit 1) when it is not.
 
+Both start subcommands are idempotent: a second run reports what is already
+there rather than recreating it.
+
 Exit codes: 0 affirmative or done, 1 a negative verdict with the fix printed,
-2 refused — a guard failed and nothing was changed.
+2 refused — a guard failed; the refusal names what to do next.
 EOF
 }
 
@@ -108,12 +147,31 @@ EOF
 
 # board_line <subject> <outcome>... — the documented shape, and the only place
 # it is built. Anything that has to parse these lines parses this format.
+#
+# The subject is an issue key for a ticket line and a milestone name for a
+# milestone line, and a milestone name is free text that may itself contain
+# ": ". A parser therefore identifies a line by its fixed prefix — the literal
+# marker plus the group and command it already knows — and treats everything
+# after it as subject-and-outcome for the object whose log it is reading, rather
+# than splitting on the first or last colon.
 board_line() { printf '%s %s %s: %s' "$BOARD_PREFIX" "$ACTION" "$1" "${*:2}"; }
 
 # board_record <KEY> <outcome>... — append one line to a ticket's activity log.
 board_record() {
     cliban issue log "$1" "$(board_line "$@")" >/dev/null 2>&1 ||
         warn "could not record on $1's activity log; the board is out of date"
+}
+
+# board_record_milestone <NAME> <outcome>... — the same line, on a milestone's
+# activity log. A subcommand acting on a milestone has no ticket to append to,
+# and `cliban milestone log` is that destination; the line itself is still
+# built by board_line, so one parser reads both logs.
+#
+# Scoped by $PROJECT because milestone names are unique per project, not
+# globally — `milestone log` refuses without a scope.
+board_record_milestone() {
+    cliban milestone log "$1" -p "$PROJECT" "$(board_line "$@")" >/dev/null 2>&1 ||
+        warn "could not record on milestone \"$1\"'s activity log; the board is out of date"
 }
 
 # ---------------------------------------------------------------- git
@@ -149,6 +207,117 @@ short_sha() { gitr rev-parse --short "refs/heads/$1"; }
 # the single failure this gate exists to prevent.
 is_ancestor() { gitr merge-base --is-ancestor "refs/heads/$1" "refs/heads/$2"; }
 
+# ---------------------------------------------------------------- worktrees
+#
+# Two rules hold this layout up, and both come from an incident rather than a
+# preference. The milestone branch never enters the primary checkout — checking
+# it out there once live-patched a running service that execs out of the working
+# tree. Ticket worktrees hang off the milestone worktree, so the milestone's
+# build state never lands in the tree the user runs from.
+#
+# `git worktree list --porcelain` is the only machine-readable view git offers
+# of that layout, and the awk below never exits early: under `pipefail` an early
+# exit can leave git killed by SIGPIPE, which would turn a successful lookup
+# into a failed one.
+
+# primary_worktree — the repository's main worktree. git documents it as the
+# first record of `worktree list`, and it is the one checkout this script may
+# never create a branch in or hang a worktree off.
+primary_worktree() {
+    gitr worktree list --porcelain |
+        awk '/^worktree /{ if (!seen) { seen = 1; print substr($0, 10) } }'
+}
+
+# worktree_for_branch <branch> — the absolute path of the worktree that has
+# <branch> checked out, or empty when no worktree does. Matched against the full
+# `refs/heads/` ref that porcelain prints, for the same reason have_branch
+# resolves one: a bare name would also match a tag.
+worktree_for_branch() {
+    gitr worktree list --porcelain | awk -v want="branch refs/heads/$1" '
+        /^worktree /{ path = substr($0, 10) }
+        $0 == want { found = path }
+        END { if (found != "") print found }'
+}
+
+# worktree_missing <path> — registered with git but no longer on disk. git keeps
+# listing such a worktree, and keeps refusing to check its branch out anywhere
+# else, until someone prunes it; taking a registration at face value is how a
+# subcommand comes to report a path its caller cannot cd into.
+worktree_missing() { [ ! -d "$1" ]; }
+
+# worktree_head <path> — what is checked out in the worktree at <path>: a branch
+# name, the word `detached`, or empty when <path> is not a worktree of this
+# repository at all. The difference matters in the refusals: a live worktree
+# sitting on the wrong ref is repaired by checking the right one out, and
+# advising someone to move it aside instead would break git's registration.
+worktree_head() {
+    gitr worktree list --porcelain | awk -v want="worktree $1" '
+        $0 == want { here = 1; next }
+        here == 1 && /^branch refs\/heads\//{
+            sub(/^branch refs\/heads\//, ""); print; here = 0
+        }
+        here == 1 && $0 == "detached" { print "detached"; here = 0 }
+        $0 == "" { here = 0 }'
+}
+
+# worktree_head_desc <worktree_head answer> — the same, in a sentence.
+worktree_head_desc() {
+    case $1 in
+        detached) printf 'with a detached HEAD' ;;
+        *) printf 'on branch %s' "$1" ;;
+    esac
+}
+
+# prune_instructions — the guidance both start subcommands give for a
+# registration whose directory is gone. Written once because the two refusals
+# differ only in which log they land on, and drifting apart would leave one of
+# them telling the operator to do something subtly different.
+prune_instructions() {
+    printf '%s\n' \
+        "git still holds that worktree, so it will not check the branch out" \
+        "anywhere else until the registration is cleared. Confirm nothing there" \
+        "is wanted, then:" \
+        "" \
+        "    git -C \"$REPO\" worktree prune"
+}
+
+# read_prune_instructions — the lines above, into PRUNE_INSTRUCTIONS, which a
+# refusal can splat. A read loop rather than `mapfile`, which would be the only
+# bash-4 construct in the file.
+PRUNE_INSTRUCTIONS=()
+read_prune_instructions() {
+    local line
+    PRUNE_INSTRUCTIONS=()
+    while IFS= read -r line; do PRUNE_INSTRUCTIONS+=("$line"); done < <(prune_instructions)
+}
+
+# worktree_dirty <path> — anything uncommitted, tracked or not, except the
+# ticket worktrees this script itself puts under `.worktrees/`.
+#
+# The exclusion is not a convenience. A repo that does not gitignore
+# `.worktrees/` — and nothing requires one to — would show the first ticket
+# worktree as untracked, and every later `ticket start` in the same milestone
+# would then refuse the milestone worktree as dirty because of a directory this
+# tool created. The guard is about the operator's work in flight, so this tool's
+# own artifacts are not evidence of it.
+worktree_dirty() {
+    [ -n "$(git -C "$1" status --porcelain -- ':(exclude).worktrees' 2>/dev/null)" ]
+}
+
+# path_within <root> <path> — is <path> inside <root>? Compared after purely
+# lexical normalisation, so neither path has to exist yet and no amount of `..`
+# in a name can spell its way past the check. python3 rather than `realpath -m`:
+# this script already requires the one and not the other.
+path_within() {
+    local root path
+    root=$(python3 -c 'import os, sys; print(os.path.normpath(sys.argv[1]))' "$1") || return 1
+    path=$(python3 -c 'import os, sys; print(os.path.normpath(sys.argv[1]))' "$2") || return 1
+    case $path in
+        "$root"/?*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # ---------------------------------------------------------------- the board's issues
 
 # json_tsv <field>... — the named fields of the JSON object on stdin, tab
@@ -159,6 +328,18 @@ json_tsv() {
     python3 -c 'import json, sys
 d = json.load(sys.stdin)
 print("\t".join("" if d.get(f) is None else str(d[f]) for f in sys.argv[1:]))' "$@"
+}
+
+# json_lines_field <field> — one field per line, for cliban's JSONL listings.
+# Separate from json_tsv because that one reads a single object; this reads a
+# stream of them and the two failure modes should not be confused.
+json_lines_field() {
+    python3 -c 'import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if line:
+        v = json.loads(line).get(sys.argv[1])
+        print("" if v is None else str(v))' "$1"
 }
 
 require_python() {
@@ -186,6 +367,10 @@ load_issue() {
     [ -n "$ISSUE_KEY" ] && [ -n "$ISSUE_BRANCH" ] || refuse \
         "the board gave no key or branch name for $1" \
         "This dispatcher needs \`key\` and \`git_branch_name\` on \`issue show --json\`."
+    # `issue show --json` carries no project, but the key is `<PROJECT>-<n>` and
+    # project keys hold no dash. A ticket subcommand needs this whenever it has
+    # to name a milestone-scoped command in its own guidance.
+    ISSUE_PROJECT=${ISSUE_KEY%%-*}
 }
 
 # slugify <text> — cliban's own branch-name rules, reimplemented: lowercase,
@@ -204,15 +389,137 @@ slugify() {
 
 milestone_branch() { printf 'milestone/%s' "$(slugify "$1")"; }
 
+# ---------------------------------------------------------------- the board's milestones
+
+# require_project — the scope every milestone read and write needs, from
+# --project or the environment. Refusing rather than guessing: a milestone name
+# resolves per project, so the wrong scope would silently act on a different
+# milestone that happens to share a name.
+require_project() {
+    PROJECT=${FLOW_PROJECT:-${CLIBAN_PROJECT:-}}
+    [ -n "$PROJECT" ] || refuse \
+        "no project scope for the milestone" \
+        "Milestone names are unique per project, not globally. Name the project:" \
+        "" \
+        "    $PROG $ACTION ... -p <KEY>" \
+        "" \
+        "or export CLIBAN_PROJECT."
+}
+
+# load_milestone <NAME> — populate MILESTONE_*, or refuse. The milestone has to
+# exist on the board before a branch is named after it: a typo would otherwise
+# create a real branch and a real worktree for a milestone nobody is tracking,
+# and the board line recording it would go nowhere.
+load_milestone() {
+    require_python
+    local json name
+    json=$(cliban milestone show "$1" -p "$PROJECT" --json 2>/dev/null) || refuse \
+        "no milestone named \"$1\" on project $PROJECT" \
+        "Check the name and the project. Milestones are listed by:" \
+        "" \
+        "    cliban milestone ls -p $PROJECT" \
+        "" \
+        "Refusing rather than creating it: a branch named after a milestone that" \
+        "does not exist has nothing to integrate into."
+    name=$(printf '%s' "$json" | json_tsv name) || refuse \
+        "could not read milestone \"$1\" from the board" \
+        "\`cliban milestone show\` returned something this script could not parse."
+    # The board's own spelling, so the audit trail stays greppable.
+    [ -n "$name" ] || refuse \
+        "the board gave no name for milestone \"$1\"" \
+        "This dispatcher needs \`name\` on \`milestone show --json\`."
+    MILESTONE_NAME=$name
+    MILESTONE_BRANCH=$(milestone_branch "$name")
+    # The milestone resolved, so from here every refusal lands on its log.
+    [ "$MILESTONE_BRANCH" != "milestone/" ] || refuse_milestone "$name" \
+        "milestone \"$name\" has no usable branch name" \
+        "Its name slugifies to nothing, so there is no branch it could refer to." \
+        "Rename the milestone to something containing letters or digits."
+
+    # Slugifying is lossy, so two milestones in one project can name the same
+    # branch — "Test milestone" and "Test-Milestone!" both do, and cliban
+    # accepts both. One branch and one worktree cannot serve two milestones:
+    # whichever started second would be handed the first one's tree and told it
+    # was already started. Caught here, before anything is created.
+    local names other
+    # Captured rather than piped straight into the loop: a listing that failed
+    # would otherwise produce no lines, run the loop body zero times, and report
+    # no collision — a guard that answers "all clear" when it could not look.
+    names=$(cliban milestone ls -p "$PROJECT" --json 2>/dev/null | json_lines_field name) ||
+        refuse_milestone "$name" \
+            "could not list the milestones on project $PROJECT" \
+            "Two milestones can derive one branch name, so this has to be checked" \
+            "before a branch is created. It needs \`cliban milestone ls -p $PROJECT" \
+            "--json\` to be readable."
+    while IFS= read -r other; do
+        [ -n "$other" ] && [ "$other" != "$name" ] || continue
+        [ "$(milestone_branch "$other")" != "$MILESTONE_BRANCH" ] || refuse_milestone "$name" \
+            "milestones \"$name\" and \"$other\" both name the branch $MILESTONE_BRANCH" \
+            "Branch names are derived from milestone names, and these two derive" \
+            "the same one, so a single branch and worktree would have to serve" \
+            "both. Rename one of them so the two differ by more than punctuation" \
+            "or case."
+    done <<<"$names"
+}
+
+# parse_project_option — strips --project/-p out of a subcommand's arguments and
+# leaves the rest in ARGS_REST. Only milestone-scoped subcommands call it.
+ARGS_REST=()
+parse_project_option() {
+    ARGS_REST=()
+    while [ $# -gt 0 ]; do
+        case $1 in
+            -p | --project)
+                [ $# -ge 2 ] || usage_error "$1 needs a project key"
+                FLOW_PROJECT=$2
+                shift 2
+                ;;
+            --project=*)
+                FLOW_PROJECT=${1#--project=}
+                shift
+                ;;
+            --)
+                shift
+                while [ $# -gt 0 ]; do
+                    ARGS_REST+=("$1")
+                    shift
+                done
+                ;;
+            -*) usage_error "unknown option: $1" ;;
+            *)
+                ARGS_REST+=("$1")
+                shift
+                ;;
+        esac
+    done
+}
+
 # ---------------------------------------------------------------- dispatch
 #
 # One group per noun, one case arm per command. A new subcommand is one arm and
 # one cmd_* function; nothing else moves.
 
+milestone_dispatch() {
+    local command=${1:-}
+    if [ $# -gt 0 ]; then shift; fi
+    case $command in
+        start)
+            ACTION="milestone start"
+            cmd_milestone_start "$@"
+            ;;
+        '') usage_error "milestone needs a command" ;;
+        *) usage_error "unknown milestone command: $command" ;;
+    esac
+}
+
 ticket_dispatch() {
     local command=${1:-}
     if [ $# -gt 0 ]; then shift; fi
     case $command in
+        start)
+            ACTION="ticket start"
+            cmd_ticket_start "$@"
+            ;;
         status)
             ACTION="ticket status"
             cmd_ticket_status "$@"
@@ -228,12 +535,321 @@ main() {
     shift
     case $group in
         help | -h | --help) usage ;;
+        milestone) milestone_dispatch "$@" ;;
         ticket) ticket_dispatch "$@" ;;
         *) usage_error "unknown command group: $group" ;;
     esac
 }
 
 # ---------------------------------------------------------------- commands
+
+# milestone start <NAME> [-p KEY] — stand up the milestone's git layout.
+#
+# The worktree goes beside the primary checkout, at the primary checkout's own
+# path with the milestone slug appended, so `.../cliban` plus milestone
+# "Deterministic integration" gives `.../cliban-deterministic-integration`. A
+# sibling rather than a child: a worktree inside the primary checkout would put
+# the milestone's whole build state into the tree the user works and runs from,
+# which is the thing this layout exists to prevent.
+#
+# Stdout is the worktree path and nothing else, because the caller's next step
+# is to cd into it.
+cmd_milestone_start() {
+    parse_project_option "$@"
+    set -- ${ARGS_REST[@]+"${ARGS_REST[@]}"}
+    local name=${1:-}
+    [ -n "$name" ] || usage_error "milestone start needs a milestone name"
+    [ $# -le 1 ] || usage_error "milestone start takes one milestone name, got: $*"
+    require_repo
+    require_project
+    load_milestone "$name"
+
+    local primary existing
+    primary=$(primary_worktree) || refuse \
+        "could not read this repository's worktree list" \
+        "git's own error is above."
+    existing=$(worktree_for_branch "$MILESTONE_BRANCH") || refuse \
+        "could not read this repository's worktree list" \
+        "git's own error is above."
+
+    # Already checked out somewhere. Idempotent — except in the one place it
+    # must never be, where reporting it as fine would bless the hazard.
+    if [ -n "$existing" ]; then
+        [ "$existing" != "$primary" ] || refuse_milestone "$MILESTONE_NAME" \
+            "$MILESTONE_BRANCH is checked out in the primary checkout $primary" \
+            "The milestone branch must never be the primary checkout's branch: the" \
+            "user works and runs from that tree, and a milestone's half-integrated" \
+            "state has taken down a running service from exactly there." \
+            "" \
+            "Put it back and re-run:" \
+            "" \
+            "    git -C \"$primary\" checkout main" \
+            "    $PROG milestone start \"$MILESTONE_NAME\" -p $PROJECT"
+
+        # The state a crash plus a cleanup leaves behind. Reporting the path
+        # would hand the caller something it cannot cd into, and git will refuse
+        # to check the branch out anywhere else while the registration stands.
+        # Clearing it is a repair, not a setup step, so this refuses rather than
+        # pruning: the guard's whole job is to stop and say what is true.
+        read_prune_instructions
+        ! worktree_missing "$existing" || refuse_milestone "$MILESTONE_NAME" \
+            "$MILESTONE_BRANCH is registered to $existing, which no longer exists" \
+            "${PRUNE_INSTRUCTIONS[@]}" \
+            "    $PROG milestone start \"$MILESTONE_NAME\" -p $PROJECT"
+
+        say "$existing"
+        instruct "$MILESTONE_BRANCH is already checked out there; nothing to do."
+        board_record_milestone "$MILESTONE_NAME" \
+            "already started ($MILESTONE_BRANCH at $existing)"
+        exit 0
+    fi
+
+    local path at_path
+    path="$primary-${MILESTONE_BRANCH#milestone/}"
+
+    # A live worktree of this repository already sitting there, just not on the
+    # milestone branch — detached after a bisect, or left on another branch.
+    # Told to "move it aside", an operator would break git's registration and
+    # land in a worse state than the one they started in.
+    at_path=$(worktree_head "$path") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    [ -z "$at_path" ] || refuse_milestone "$MILESTONE_NAME" \
+        "$path is already a worktree of this repository, $(worktree_head_desc "$at_path")" \
+        "That is where $MILESTONE_BRANCH belongs, and that is not what is checked" \
+        "out there. Check it out where it belongs:" \
+        "" \
+        "    git -C \"$path\" checkout $MILESTONE_BRANCH"
+
+    # -L as well as -e: a dangling symlink is invisible to -e, and letting the
+    # worktree add fail on it would report git's error instead of this guard's.
+    { [ ! -e "$path" ] && [ ! -L "$path" ]; } || refuse_milestone "$MILESTONE_NAME" \
+        "$path already exists and is not a worktree for $MILESTONE_BRANCH" \
+        "That is where this milestone's worktree belongs. Refusing rather than" \
+        "reusing or removing it — whatever is there was put there by someone." \
+        "" \
+        "Inspect it, then move it aside or run \`git worktree prune\` if it is a" \
+        "leftover, and re-run."
+
+    local outcome
+    if have_branch "$MILESTONE_BRANCH"; then
+        # The branch outlived its worktree — adopt it. Recreating it would
+        # discard whatever it already carries.
+        announce "adding a worktree at $path for the existing branch $MILESTONE_BRANCH@$(short_sha "$MILESTONE_BRANCH")"
+        # The bare branch name is deliberate here, and the one place in this
+        # script that does not spell a ref `refs/heads/`. `git worktree add`
+        # treats a full ref as a commit and checks it out detached; only the
+        # bare name makes the new worktree sit *on* the branch.
+        gitr worktree add "$path" "$MILESTONE_BRANCH" >&2 || refuse_milestone "$MILESTONE_NAME" \
+            "git could not add a worktree at $path for $MILESTONE_BRANCH" \
+            "git's own error is above. The branch was not created by this step, so" \
+            "nothing about it has changed."
+        outcome="adopted"
+    else
+        have_branch main || refuse_milestone "$MILESTONE_NAME" \
+            "there is no main branch to create $MILESTONE_BRANCH from" \
+            "The integration branch starts at main. This repository has no local" \
+            "main, so there is nothing to branch off."
+        announce "creating $MILESTONE_BRANCH off main@$(short_sha main) and checking it out at $path"
+        gitr worktree add -b "$MILESTONE_BRANCH" "$path" refs/heads/main >&2 ||
+            refuse_milestone "$MILESTONE_NAME" \
+                "git could not create $MILESTONE_BRANCH at $path" \
+                "git's own error is above. git creates the branch before it checks" \
+                "it out, so $MILESTONE_BRANCH may exist even though the worktree" \
+                "does not:" \
+                "" \
+                "    git -C \"$REPO\" branch --list $MILESTONE_BRANCH"
+        outcome="created"
+    fi
+
+    say "$path"
+    instruct "The primary checkout $primary was not touched."
+    board_record_milestone "$MILESTONE_NAME" "$outcome ($MILESTONE_BRANCH at $path)"
+    exit 0
+}
+
+# ticket start <KEY> — the ticket's worktree, under the milestone's.
+#
+# Rooted at <milestone worktree>/.worktrees/<git_branch_name>, and branched off
+# the milestone branch's tip *as it is now*: ticket worktrees are made at wave
+# time, so each one starts from everything already integrated rather than from
+# wherever the milestone began.
+#
+# Under the milestone worktree rather than beside the primary checkout so that
+# the milestone's build state — every ticket's target directory, every
+# node_modules — stays out of the tree the user works and runs from.
+cmd_ticket_start() {
+    local key=${1:-}
+    [ -n "$key" ] || usage_error "ticket start needs an issue key"
+    [ $# -le 1 ] || usage_error "ticket start takes one issue key, got: $*"
+    require_repo
+    load_issue "$key"
+
+    [ -n "$ISSUE_MILESTONE" ] || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY is on no milestone, so it has nothing to branch from" \
+        "A ticket branch starts at its milestone's tip and its worktree hangs off" \
+        "the milestone's. Put the ticket on a milestone first:" \
+        "" \
+        "    cliban issue edit $ISSUE_KEY --milestone \"<name>\""
+
+    local mbranch
+    mbranch=$(milestone_branch "$ISSUE_MILESTONE")
+    [ "$mbranch" != "milestone/" ] || refuse_ticket "$ISSUE_KEY" \
+        "milestone \"$ISSUE_MILESTONE\" has no usable branch name" \
+        "Its name slugifies to nothing, so there is no branch it could refer to." \
+        "Rename the milestone to something containing letters or digits."
+
+    local start_milestone="    $PROG milestone start \"$ISSUE_MILESTONE\" -p $ISSUE_PROJECT"
+
+    have_branch "$mbranch" || refuse_ticket "$ISSUE_KEY" \
+        "the milestone branch $mbranch does not exist here" \
+        "$ISSUE_KEY is on milestone \"$ISSUE_MILESTONE\", whose branch would be" \
+        "$mbranch. Refusing rather than creating it: inventing the branch here" \
+        "would decide what this ticket integrates into. Start the milestone:" \
+        "" \
+        "$start_milestone"
+
+    local primary mwt
+    primary=$(primary_worktree) || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    mwt=$(worktree_for_branch "$mbranch") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+
+    if [ -z "$mwt" ]; then
+        # The milestone's worktree may well be right where it belongs and simply
+        # not on the branch. Sending someone to `milestone start` here would
+        # bounce them into the occupied-path refusal and back, and neither
+        # message would name the state they are actually in.
+        local mpath at_mpath
+        mpath="$primary-${mbranch#milestone/}"
+        at_mpath=$(worktree_head "$mpath") || refuse \
+            "could not read this repository's worktree list" "git's own error is above."
+        [ -z "$at_mpath" ] || refuse_ticket "$ISSUE_KEY" \
+            "the milestone worktree $mpath is $(worktree_head_desc "$at_mpath"), not on $mbranch" \
+            "$ISSUE_BRANCH starts at $mbranch's tip and its worktree is rooted under" \
+            "that one. Put it back on the branch:" \
+            "" \
+            "    git -C \"$mpath\" checkout $mbranch"
+
+        refuse_ticket "$ISSUE_KEY" \
+            "$mbranch exists but is checked out in no worktree" \
+            "Ticket worktrees are rooted under the milestone's worktree, and this" \
+            "milestone does not have one. Make it:" \
+            "" \
+            "$start_milestone"
+    fi
+
+    [ "$mwt" != "$primary" ] || refuse_ticket "$ISSUE_KEY" \
+        "$mbranch is checked out in the primary checkout $primary" \
+        "Ticket worktrees are rooted under the milestone worktree, so this would" \
+        "put every ticket's build state inside the tree the user works and runs" \
+        "from — the layout that has already taken down a running service." \
+        "" \
+        "Give the milestone its own worktree first:" \
+        "" \
+        "    git -C \"$primary\" checkout main" \
+        "$start_milestone"
+
+    read_prune_instructions
+
+    ! worktree_missing "$mwt" || refuse_ticket "$ISSUE_KEY" \
+        "$mbranch is registered to $mwt, which no longer exists" \
+        "${PRUNE_INSTRUCTIONS[@]}" \
+        "$start_milestone"
+
+    ! worktree_dirty "$mwt" || refuse_ticket "$ISSUE_KEY" \
+        "the milestone worktree $mwt has uncommitted changes" \
+        "$ISSUE_BRANCH would start at $mbranch's tip, which is not what is in that" \
+        "tree — whatever is uncommitted there would silently not be in it. Commit" \
+        "or stash it first:" \
+        "" \
+        "    git -C \"$mwt\" status"
+
+    # Nothing this subcommand creates may land outside the milestone worktree.
+    # The name comes from the board, and a guard that trusts its input is not a
+    # guard; this one is checked before anything is announced or created.
+    local root path
+    root="$mwt/.worktrees"
+    path="$root/$ISSUE_BRANCH"
+
+    # path_within compares paths as written, which a symlink makes a lie: every
+    # ticket worktree would land outside the milestone root while spelling as if
+    # it were inside. Refusing rather than resolving it, because a resolved path
+    # would be *correctly* outside the root, which is the thing forbidden.
+    [ ! -L "$root" ] || refuse_ticket "$ISSUE_KEY" \
+        "$root is a symlink, so a worktree under it would not be inside $mwt" \
+        "Ticket worktrees have to stay within the milestone worktree. Replace the" \
+        "symlink with a real directory, or move the milestone worktree itself to" \
+        "wherever you wanted its contents to live."
+
+    path_within "$root" "$path" || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY's branch name puts its worktree outside $root" \
+        "\`git_branch_name\` is \"$ISSUE_BRANCH\", which resolves out of the" \
+        "milestone worktree. Nothing was created. cliban does not produce names" \
+        "like this, so the board is reporting something it should not."
+
+    local existing
+    existing=$(worktree_for_branch "$ISSUE_BRANCH") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+
+    if [ -n "$existing" ]; then
+        # The same hazard as the milestone branch in the primary checkout, one
+        # level down and easier to reach: someone checks the ticket branch out
+        # there to look at it, and a later `ticket start` would hand that path
+        # back to a caller whose next step is to cd in and build.
+        [ "$existing" != "$primary" ] || refuse_ticket "$ISSUE_KEY" \
+            "$ISSUE_BRANCH is checked out in the primary checkout $primary" \
+            "Reporting that as this ticket's worktree would send whoever asked" \
+            "into the tree the user works and runs from. Free the branch first:" \
+            "" \
+            "    git -C \"$primary\" checkout main" \
+            "    $PROG ticket start $ISSUE_KEY"
+
+        ! worktree_missing "$existing" || refuse_ticket "$ISSUE_KEY" \
+            "$ISSUE_BRANCH is registered to $existing, which no longer exists" \
+            "${PRUNE_INSTRUCTIONS[@]}" \
+            "    $PROG ticket start $ISSUE_KEY"
+        say "$existing"
+        instruct "$ISSUE_BRANCH is already checked out there; nothing to do."
+        board_record "$ISSUE_KEY" "already started ($ISSUE_BRANCH at $existing)"
+        exit 0
+    fi
+
+    { [ ! -e "$path" ] && [ ! -L "$path" ]; } || refuse_ticket "$ISSUE_KEY" \
+        "$path already exists and is not a worktree for $ISSUE_BRANCH" \
+        "That is where this ticket's worktree belongs. Refusing rather than" \
+        "reusing or removing it — whatever is there was put there by someone." \
+        "" \
+        "Inspect it, then move it aside or run \`git worktree prune\` if it is a" \
+        "leftover, and re-run."
+
+    local outcome
+    if have_branch "$ISSUE_BRANCH"; then
+        # The branch outlived its worktree and carries work. Recreating it off
+        # the milestone tip would throw that away without saying so.
+        announce "adding a worktree at $path for the existing branch $ISSUE_BRANCH@$(short_sha "$ISSUE_BRANCH")"
+        gitr worktree add "$path" "$ISSUE_BRANCH" >&2 || refuse_ticket "$ISSUE_KEY" \
+            "git could not add a worktree at $path for $ISSUE_BRANCH" \
+            "git's own error is above. The branch was not created by this step, so" \
+            "nothing about it has changed."
+        outcome="adopted"
+    else
+        announce "creating $ISSUE_BRANCH off $mbranch@$(short_sha "$mbranch") and checking it out at $path"
+        gitr worktree add -b "$ISSUE_BRANCH" "$path" "refs/heads/$mbranch" >&2 ||
+            refuse_ticket "$ISSUE_KEY" \
+                "git could not create $ISSUE_BRANCH at $path" \
+                "git's own error is above. git creates the branch before it checks" \
+                "it out, so $ISSUE_BRANCH may exist even though the worktree does" \
+                "not:" \
+                "" \
+                "    git -C \"$REPO\" branch --list $ISSUE_BRANCH"
+        outcome="created"
+    fi
+
+    say "$path"
+    instruct "The primary checkout $primary was not touched."
+    board_record "$ISSUE_KEY" "$outcome ($ISSUE_BRANCH at $path)"
+    exit 0
+}
 
 cmd_ticket_status() {
     local key=${1:-}
@@ -261,7 +877,7 @@ cmd_ticket_status() {
         "$ISSUE_KEY is on milestone \"$ISSUE_MILESTONE\", whose branch would be" \
         "$mbranch. Create it, in its own worktree:" \
         "" \
-        "    cliban-flow milestone start \"$ISSUE_MILESTONE\"" \
+        "    cliban-flow milestone start \"$ISSUE_MILESTONE\" -p $ISSUE_PROJECT" \
         "" \
         "Refusing rather than creating it here: a milestone branch invented at" \
         "gate time would answer the question by defining it away."

@@ -111,6 +111,11 @@ run_flow ticket status "$key"
 assert_status 2 "a missing milestone branch is refused"
 assert_out_has "milestone/test-milestone" "the refusal names the milestone branch"
 assert_out_lacks "sync-required" "a missing milestone branch is not sync-required"
+# CLI-80 — the remedy this refusal prints has to be runnable as printed.
+# `milestone start` needs a project scope, and nothing else on this line would
+# notice if it stopped carrying one.
+assert_stderr_has "cliban-flow milestone start \"Test milestone\" -p FLOW" \
+    "the remedy names the milestone and the project scope it needs"
 assert_board_has "$key" "[cliban-flow] ticket status $key: refused" \
     "the refusal is recorded on the board"
 

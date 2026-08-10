@@ -88,10 +88,26 @@ cb() { cliban --db "$CLIBAN_DB" "$@"; }
 # gitf <args> — git inside the fixture repo.
 gitf() { git -C "$FIXTURE_REPO" "$@"; }
 
-commit_file() {
-    printf '%s\n' "$2" >>"$FIXTURE_REPO/$1"
-    gitf add "$1"
-    gitf commit -qm "$1: $2"
+commit_file() { commit_file_at "$FIXTURE_REPO" "$1" "$2"; }
+
+# commit_file_at <worktree> <file> <content> — the same, in a linked worktree.
+commit_file_at() {
+    printf '%s\n' "$3" >>"$1/$2"
+    git -C "$1" add "$2"
+    git -C "$1" commit -qm "$2: $3"
+}
+
+# fixture_milestone_wt — where the script under test is expected to put the
+# fixture milestone's worktree: the primary checkout's own path with the
+# milestone slug appended. Spelled out here rather than asked of the script, so
+# the assertion is a specification and not an echo.
+fixture_milestone_wt() { printf '%s' "$FIXTURE_ROOT/repo-test-milestone"; }
+
+# fixture_milestone_worktree — that worktree, built with plain git rather than
+# by running `milestone start`. A ticket-start case must fail because ticket
+# start is wrong, never because milestone start is.
+fixture_milestone_worktree() {
+    gitf worktree add -q "$(fixture_milestone_wt)" milestone/test-milestone
 }
 
 # new_issue <title> [milestone] — an issue on the fixture milestone unless one
@@ -183,6 +199,41 @@ break_board_writes() {
 if [ "${1:-}" = issue ] && [ "${2:-}" = log ]; then
     echo "stub: the board is unreachable" >&2
     exit 1
+fi
+exec '"$real"' "$@"'
+}
+
+# break_milestone_board_writes — a cliban that fails every `milestone log` and
+# passes everything else through, including the `milestone show` the script
+# needs to resolve the milestone in the first place.
+break_milestone_board_writes() {
+    local real
+    real=$(command -v cliban) || abort "cliban is not on PATH"
+    # shellcheck disable=SC2016
+    stub_bin cliban '#!/usr/bin/env bash
+if [ "${1:-}" = milestone ] && [ "${2:-}" = log ]; then
+    echo "stub: the board is unreachable" >&2
+    exit 1
+fi
+exec '"$real"' "$@"'
+}
+
+# forge_branch_name <name> — a cliban whose `issue show --json` reports <name>
+# as the issue's git_branch_name and is otherwise itself. The board is the
+# boundary being substituted: cliban's own slugifier cannot produce a name that
+# escapes a directory, so the only way to exercise a containment guard is to
+# have the board say something cliban would never say.
+forge_branch_name() {
+    local real
+    real=$(command -v cliban) || abort "cliban is not on PATH"
+    # shellcheck disable=SC2016
+    stub_bin cliban '#!/usr/bin/env bash
+if [ "${1:-}" = issue ] && [ "${2:-}" = show ]; then
+    '"$real"' "$@" | FORGED='"$1"' python3 -c '"'"'import json, os, sys
+d = json.load(sys.stdin)
+d["git_branch_name"] = os.environ["FORGED"]
+print(json.dumps(d))'"'"'
+    exit "${PIPESTATUS[0]}"
 fi
 exec '"$real"' "$@"'
 }
@@ -297,6 +348,23 @@ assert_board_has() {
     else
         fail "$3" "expected $1's activity log to contain: $2
 Activity log:
+$log"
+    fi
+}
+
+# assert_milestone_board_has <NAME> <substring> <desc> — the same assertion one
+# level up. A subcommand acting on a milestone rather than a ticket writes its
+# line to the milestone's own activity log, so proving it landed means reading a
+# different object; everything else about the line is identical, because
+# board_line() builds both.
+assert_milestone_board_has() {
+    local log
+    log=$(cb milestone show "$1" -p FLOW --json 2>&1 | json_get description)
+    if printf '%s' "$log" | grep -qF -- "$2"; then
+        pass "$3"
+    else
+        fail "$3" "expected milestone \"$1\"'s activity log to contain: $2
+Description:
 $log"
     fi
 }
