@@ -133,7 +133,7 @@ Both start subcommands are idempotent: a second run reports what is already
 there rather than recreating it.
 
 Exit codes: 0 affirmative or done, 1 a negative verdict with the fix printed,
-2 refused — a guard failed and nothing was changed.
+2 refused — a guard failed; the refusal names what to do next.
 EOF
 }
 
