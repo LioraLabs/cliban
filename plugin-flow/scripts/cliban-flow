@@ -31,9 +31,14 @@
 set -euo pipefail
 
 PROG=cliban-flow
+BOARD_PREFIX='[cliban-flow]'
 
 # "<group> <command>", set by the dispatcher and used in every board line.
 ACTION=""
+# The repository every git call runs against; set by require_repo.
+REPO=""
+# The loaded ticket; set by load_issue.
+ISSUE_KEY="" ISSUE_TITLE="" ISSUE_STATUS="" ISSUE_BRANCH="" ISSUE_MILESTONE=""
 
 # ---------------------------------------------------------------- output
 
@@ -76,6 +81,83 @@ Exit codes: 0 affirmative or done, 1 a negative verdict with the fix printed,
 EOF
 }
 
+# ---------------------------------------------------------------- board
+#
+# The activity log is this system's audit trail: recovery reads it to work out
+# where an interrupted milestone stands, and a behavioural scenario greps it to
+# prove an orchestrator reached for the tool. It is not the authority on whether
+# anything happened, so writing it is best-effort — an unreachable board must
+# never turn a clean verdict into a failure, only into a warning.
+
+# board_record <KEY> <outcome>... — one line, in the documented shape.
+board_record() {
+    local key=$1
+    shift
+    cliban issue log "$key" "$BOARD_PREFIX $ACTION $key: $*" >/dev/null 2>&1 ||
+        warn "could not record on $key's activity log; the board is out of date"
+}
+
+# ---------------------------------------------------------------- git
+#
+# Everything runs as `git -C "$REPO"` rather than relying on the caller's cwd,
+# so a subcommand cannot be talked into acting on whatever directory a shell
+# happened to be left in.
+
+require_repo() {
+    REPO=$(git rev-parse --show-toplevel 2>/dev/null) || refuse \
+        "not inside a git repository" \
+        "cd into the repository, or into the ticket worktree, and try again."
+}
+
+gitr() { git -C "$REPO" "$@"; }
+
+have_ref() { gitr rev-parse --verify --quiet "$1^{commit}" >/dev/null; }
+
+short_sha() { gitr rev-parse --short "$1"; }
+
+# is_ancestor <a> <b> — true when every commit of <a> is reachable from <b>.
+# Strict ancestry is the whole gate: never a trial merge, because a trial merge
+# answers "would this apply cleanly", and the question that matters is "was the
+# tree that was tested the tree that will land".
+is_ancestor() { gitr merge-base --is-ancestor "$1" "$2"; }
+
+# ---------------------------------------------------------------- the board's issues
+
+json_field() {
+    python3 -c 'import json, sys
+d = json.load(sys.stdin)
+v = d.get(sys.argv[1])
+sys.stdout.write("" if v is None else str(v))' "$1"
+}
+
+# load_issue <KEY> — populate the ISSUE_* globals, or refuse.
+load_issue() {
+    local json
+    json=$(cliban issue show "$1" --json 2>/dev/null) || refuse \
+        "no issue named $1 on the board" \
+        "Check the key. If this is a scratch board, check CLIBAN_DB points at it."
+    ISSUE_KEY=$1
+    ISSUE_TITLE=$(printf '%s' "$json" | json_field title)
+    ISSUE_STATUS=$(printf '%s' "$json" | json_field status)
+    ISSUE_BRANCH=$(printf '%s' "$json" | json_field git_branch_name)
+    ISSUE_MILESTONE=$(printf '%s' "$json" | json_field milestone)
+}
+
+# slugify <text> — cliban's own branch-name rules, reimplemented: lowercase,
+# every run of non-alphanumerics collapsed to one dash, trimmed, capped at 60.
+# cliban publishes `git_branch_name` for an issue but nothing equivalent for a
+# milestone, so the milestone branch name is derived here and has to stay in
+# step with git_branch_name() in crates/cliban/src/output.rs.
+slugify() {
+    printf '%s' "$1" |
+        tr '[:upper:]' '[:lower:]' |
+        sed -e 's/[^a-z0-9][^a-z0-9]*/-/g' -e 's/^-//' -e 's/-$//' |
+        cut -c 1-60 |
+        sed -e 's/-$//'
+}
+
+milestone_branch() { printf 'milestone/%s' "$(slugify "$1")"; }
+
 # ---------------------------------------------------------------- dispatch
 #
 # One group per noun, one case arm per command. A new subcommand is one arm and
@@ -110,7 +192,23 @@ main() {
 cmd_ticket_status() {
     local key=${1:-}
     [ -n "$key" ] || usage_error "ticket status needs an issue key"
-    refuse "not implemented" "ticket status is still being built."
+    require_repo
+    load_issue "$key"
+
+    local mbranch
+    mbranch=$(milestone_branch "$ISSUE_MILESTONE")
+
+    local msha tsha
+    msha=$(short_sha "$mbranch")
+    tsha=$(short_sha "$ISSUE_BRANCH")
+
+    if is_ancestor "$mbranch" "$ISSUE_BRANCH"; then
+        say "mergeable"
+        instruct "$mbranch@$msha is an ancestor of $ISSUE_BRANCH@$tsha."
+        board_record "$ISSUE_KEY" \
+            "mergeable ($mbranch@$msha is an ancestor of $ISSUE_BRANCH@$tsha)"
+        exit 0
+    fi
 }
 
 main "$@"
