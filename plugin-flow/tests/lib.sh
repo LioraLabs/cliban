@@ -301,6 +301,23 @@ $log"
     fi
 }
 
+# assert_milestone_board_has <NAME> <substring> <desc> — the same assertion one
+# level up. A subcommand acting on a milestone rather than a ticket writes its
+# line to the milestone's own activity log, so proving it landed means reading a
+# different object; everything else about the line is identical, because
+# board_line() builds both.
+assert_milestone_board_has() {
+    local log
+    log=$(cb milestone show "$1" -p FLOW --json 2>&1 | json_get description)
+    if printf '%s' "$log" | grep -qF -- "$2"; then
+        pass "$3"
+    else
+        fail "$3" "expected milestone \"$1\"'s activity log to contain: $2
+Description:
+$log"
+    fi
+}
+
 # ---------------------------------------------------------------- driver
 
 finish() {
