@@ -263,43 +263,19 @@ fn parse_target(s: &str) -> CliResult<Option<NaiveDate>> {
     }
 }
 
-/// `resolveDescription`: returns `(content, was_set)`. `--description` and
-/// `--description-file` are mutually exclusive; `-` reads stdin.
+/// `resolveDescription`: returns `(content, was_set)` over the shared
+/// resolver, which owns the mutual exclusion and the `-` sentinel.
 fn resolve_description(
     description: Option<String>,
     description_file: Option<String>,
 ) -> CliResult<(String, bool)> {
-    use std::io::Read;
-    if let Some(file) = description_file {
-        if description.is_some() {
-            return Err(CliError::validation(
-                "--description and --description-file are mutually exclusive",
-            ));
-        }
-        if file == "-" {
-            let mut buf = String::new();
-            std::io::stdin()
-                .read_to_string(&mut buf)
-                .map_err(|e| CliError::other(e.to_string()))?;
-            return Ok((buf, true));
-        }
-        match std::fs::read_to_string(&file) {
-            Ok(s) => Ok((s, true)),
-            Err(e) => Err(CliError::validation(e.to_string())),
-        }
-    } else if let Some(desc) = description {
-        if desc == "-" {
-            let mut buf = String::new();
-            std::io::stdin()
-                .read_to_string(&mut buf)
-                .map_err(|e| CliError::other(e.to_string()))?;
-            Ok((buf, true))
-        } else {
-            Ok((desc, true))
-        }
-    } else {
-        Ok((String::new(), false))
-    }
+    let resolved = crate::stdin_input::resolve(
+        description,
+        description_file,
+        "--description",
+        "--description-file",
+    )?;
+    Ok(resolved.map_or_else(|| (String::new(), false), |s| (s, true)))
 }
 
 /// Count non-archived issues with the given milestone name in the given project

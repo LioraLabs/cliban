@@ -1,6 +1,6 @@
 //! `cliban issue` subcommands.
 
-use std::io::{Read, Write};
+use std::io::Write;
 
 use cliban_core::contexts::issues::{CreateIssue, ListOpts, UpdateIssue};
 use cliban_core::contexts::{claims, issues, milestones, relations};
@@ -749,43 +749,19 @@ pub fn parse_issue_key_pub(s: &str) -> Result<String, CliError> {
     parse_issue_key(s)
 }
 
-/// `resolveDescription`: returns `(content, was_set)`.
-///   * `--description` and `--description-file` are mutually exclusive.
-///   * `-` reads stdin.
+/// `resolveDescription`: returns `(content, was_set)` over the shared
+/// resolver, which owns the mutual exclusion and the `-` sentinel.
 fn resolve_description(
     description: Option<String>,
     description_file: Option<String>,
 ) -> CliResult<(String, bool)> {
-    if let Some(file) = description_file {
-        if description.is_some() {
-            return Err(CliError::validation(
-                "--description and --description-file are mutually exclusive",
-            ));
-        }
-        if file == "-" {
-            return Ok((read_stdin()?, true));
-        }
-        match std::fs::read_to_string(&file) {
-            Ok(s) => Ok((s, true)),
-            Err(e) => Err(CliError::validation(e.to_string())),
-        }
-    } else if let Some(desc) = description {
-        if desc == "-" {
-            Ok((read_stdin()?, true))
-        } else {
-            Ok((desc, true))
-        }
-    } else {
-        Ok((String::new(), false))
-    }
-}
-
-fn read_stdin() -> CliResult<String> {
-    let mut buf = String::new();
-    std::io::stdin()
-        .read_to_string(&mut buf)
-        .map_err(|e| CliError::other(e.to_string()))?;
-    Ok(buf)
+    let resolved = crate::stdin_input::resolve(
+        description,
+        description_file,
+        "--description",
+        "--description-file",
+    )?;
+    Ok(resolved.map_or_else(|| (String::new(), false), |s| (s, true)))
 }
 
 async fn add(db: &Option<String>, a: AddArgs) -> CliResult<()> {
@@ -1828,7 +1804,7 @@ async fn log(db: &Option<String>, a: LogArgs, teach: Option<Teach>) -> CliResult
             ));
         }
         let content = if file == "-" {
-            read_stdin()?
+            crate::stdin_input::read_stdin()?
         } else {
             std::fs::read_to_string(file).map_err(|e| CliError::validation(e.to_string()))?
         };
@@ -2397,7 +2373,7 @@ async fn import(db: &Option<String>, a: ImportArgs) -> CliResult<()> {
     let mode = crate::output::mode(a.json, a.table);
     let path = a.file_arg.clone();
     let content = match path.as_deref() {
-        None | Some("") | Some("-") => read_stdin()?,
+        None | Some("") | Some("-") => crate::stdin_input::read_stdin()?,
         Some(p) => std::fs::read_to_string(p).map_err(|e| CliError::other(e.to_string()))?,
     };
     let default_project = crate::scope::project(a.project.clone()).unwrap_or_default();
@@ -2994,7 +2970,7 @@ async fn append_section_cmd(db: &Option<String>, a: AppendSectionArgs) -> CliRes
             ))
         }
         (Some(t), None) => t,
-        (None, Some(f)) if f == "-" => read_stdin()?,
+        (None, Some(f)) if f == "-" => crate::stdin_input::read_stdin()?,
         (None, Some(f)) => {
             std::fs::read_to_string(&f).map_err(|e| CliError::other(format!("read {f}: {e}")))?
         }

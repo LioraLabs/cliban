@@ -1,7 +1,5 @@
 //! `cliban project` subcommands.
 
-use std::io::Read;
-
 use cliban_core::contexts::projects;
 use cliban_core::contexts::projects::{CreateProject, UpdateProject};
 use cliban_core::time::format_usec;
@@ -25,8 +23,10 @@ pub enum ProjectCmd {
         key: String,
         /// display name (default: the key)
         name: Option<String>,
+        /// project description (use '-' for stdin)
         #[arg(long, allow_hyphen_values = true)]
         description: Option<String>,
+        /// read the description from a file (use '-' for stdin)
         #[arg(long = "description-file")]
         description_file: Option<String>,
         #[arg(long)]
@@ -90,8 +90,10 @@ pub enum ProjectCmd {
         key: String,
         #[arg(long)]
         name: Option<String>,
+        /// new project description (use '-' for stdin)
         #[arg(long, allow_hyphen_values = true)]
         description: Option<String>,
+        /// read the description from a file (use '-' for stdin)
         #[arg(long = "description-file")]
         description_file: Option<String>,
         #[arg(long = "auto-archive-done-after")]
@@ -608,32 +610,12 @@ fn resolve_description(
     description: Option<String>,
     description_file: Option<String>,
 ) -> CliResult<Option<String>> {
-    if description.is_some() && description_file.is_some() {
-        return Err(CliError::validation(
-            "--description and --description-file are mutually exclusive",
-        ));
-    }
-    match (description, description_file) {
-        // A bare `-` is the stdin sentinel on the value flag too, not a
-        // one-character payload — same as `issue` and `milestone`. A
-        // hyphen-leading value like `- a bullet` is ordinary text.
-        (Some(value), None) if value == "-" => Ok(Some(read_stdin()?)),
-        (Some(value), None) => Ok(Some(value)),
-        (None, Some(path)) if path == "-" => Ok(Some(read_stdin()?)),
-        (None, Some(path)) => std::fs::read_to_string(path)
-            .map(Some)
-            .map_err(|error| CliError::validation(error.to_string())),
-        (None, None) => Ok(None),
-        (Some(_), Some(_)) => unreachable!(),
-    }
-}
-
-fn read_stdin() -> CliResult<String> {
-    let mut description = String::new();
-    std::io::stdin()
-        .read_to_string(&mut description)
-        .map_err(|error| CliError::validation(error.to_string()))?;
-    Ok(description)
+    crate::stdin_input::resolve(
+        description,
+        description_file,
+        "--description",
+        "--description-file",
+    )
 }
 
 /// Parses a simple `Nd` / `N` (days) string. `""`/`"0"` mean "disabled" (0).
@@ -761,7 +743,7 @@ async fn note_add(
     if title.is_empty() {
         return Err(CliError::validation("the note title can't be blank"));
     }
-    let body = match resolve_description(body, body_file)? {
+    let body = match crate::stdin_input::resolve(body, body_file, "--body", "--body-file")? {
         Some(explicit) => explicit,
         // No --body, no --body-file: piped/redirected stdin is the body. An
         // empty pipe (or a TTY) means "no body" — bare heading — because the

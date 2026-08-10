@@ -8,6 +8,10 @@
 //! is required (log, append-section) and today's bare-heading note where it
 //! is optional (note add); a real TTY with no argument keeps the fast error
 //! and never blocks waiting for input.
+//!
+//! The other way in is explicit: a bare `-` on a text flag or its `--*-file`
+//! sibling. That one is a sentinel rather than a payload, and every command
+//! reads it the same way — the last block here is what keeps them agreeing.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -291,7 +295,15 @@ fn dash_issue_description_reads_stdin() {
     let db = seeded("issue_desc_dash");
     let r = run_piped_stdin(
         &db,
-        &["issue", "add", "dashed", "--project", "SF", "--description", "-"],
+        &[
+            "issue",
+            "add",
+            "dashed",
+            "--project",
+            "SF",
+            "--description",
+            "-",
+        ],
         "ISSUE_DESC_FROM_STDIN\n",
     );
     assert_eq!(r.code, 0, "stderr: {}", r.stderr);
@@ -306,7 +318,15 @@ fn hyphen_leading_body_is_not_the_stdin_sentinel() {
     let db = seeded("bullet_body");
     let r = run_piped_stdin(
         &db,
-        &["project", "note", "add", "SF", "Bulleted", "--body", "- a bullet"],
+        &[
+            "project",
+            "note",
+            "add",
+            "SF",
+            "Bulleted",
+            "--body",
+            "- a bullet",
+        ],
         "FROM_THE_PIPE\n",
     );
     assert_eq!(r.code, 0, "stderr: {}", r.stderr);
@@ -321,7 +341,15 @@ fn dash_body_file_still_reads_stdin() {
     let db = seeded("body_file_dash");
     let r = run_piped_stdin(
         &db,
-        &["project", "note", "add", "SF", "via file", "--body-file", "-"],
+        &[
+            "project",
+            "note",
+            "add",
+            "SF",
+            "via file",
+            "--body-file",
+            "-",
+        ],
         "FILE_ARM_FROM_STDIN\n",
     );
     assert_eq!(r.code, 0, "stderr: {}", r.stderr);
