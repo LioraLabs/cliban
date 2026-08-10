@@ -17,9 +17,11 @@ assert_out_has "ticket status" "help lists the subcommands that exist"
 # CLI-80 — a subcommand that is advertised has to exist, and vice versa; usage
 # claiming `ticket start` before it was routed was caught exactly this way.
 assert_out_has "milestone start" "help lists milestone start"
+assert_out_has "milestone finish" "help lists milestone finish"
 assert_out_has "ticket start" "help lists ticket start"
 assert_out_has "ticket sync" "help lists ticket sync"
 assert_out_has "ticket ready" "help lists ticket ready"
+assert_out_has "ticket integrate" "help lists ticket integrate"
 
 run_flow --help
 assert_status 0 "--help is the same as help"
@@ -38,6 +40,9 @@ assert_out_has "nonsense" "the refusal names the unknown subcommand"
 run_flow ticket status
 assert_status 2 "ticket status with no key is refused"
 
+run_flow ticket integrate
+assert_status 2 "ticket integrate with no key is refused"
+
 # CLI-80 — the milestone group, and the option parsing only it has.
 #
 # Every case below must refuse before touching anything: the fixture's milestone
@@ -55,6 +60,9 @@ assert_out_has "nonsense" "the refusal names the unknown subcommand"
 
 run_flow milestone start
 assert_status 2 "milestone start with no name is refused"
+
+run_flow milestone finish
+assert_status 2 "milestone finish with no name is refused"
 
 run_flow milestone start "Test milestone" "Another milestone" -p FLOW
 assert_status 2 "milestone start with two names is refused"
