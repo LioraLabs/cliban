@@ -72,6 +72,10 @@ Never pre-plan a ticket for its agent. The agent runs plan and execute itself; t
 
 The orchestrator integrates, not the agent. **A "done" notification is a claim to verify, not a fact.** Confirm the issue is `in-review`, its plan is fully ticked, and the report includes the SHA returned by `ticket ready`, then:
 
+Stranded reviews are expected when direct agent delivery fails. Relay the full
+review to the ticket agent as part of integration; the ticket's concise verdict
+and findings summary remains the durable record.
+
 ```bash
 cliban-flow ticket integrate <KEY> --dry-run
 cliban-flow ticket integrate <KEY>

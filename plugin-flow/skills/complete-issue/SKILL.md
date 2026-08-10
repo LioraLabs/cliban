@@ -105,6 +105,10 @@ cliban linear push <KEY> || true      # only if the ticket came from Linear
 
 **Dispatched** — after the final commit, run `cliban-flow ticket sync <KEY>`. If it exits 1, resolve the conflicts in your ticket worktree, log why each resolution is correct, and commit the resolution. When a resolution changes behavior rather than mechanically combining both sides, run one focused fresh-context review over the resolution diff and fix any spec failure or serious finding before continuing.
 
+A full review may arrive via the orchestrator when direct delivery fails. Do not
+run `ticket ready` while any requested reviewer verdict is still in flight; the
+durable verdict summary on the ticket proves the gate completed.
+
 Run the focused and full verification again on the synced tree, then run `cliban-flow ticket ready <KEY>`. Only its exit 0 signals the orchestrator; a chat report alone does not. Report the immutable SHA printed by `ticket ready`, branch, test status, one-line summary, **any amendment you made to `## Spec`**, and merge-risk notes. Never commit after `ticket ready`; if anything changes, sync, verify, and ready again. The orchestrator integrates and moves the ticket to `done`.
 
 **Sweep one durable lesson**, both modes. What will still be true on the *next* ticket — a repo convention learned the hard way, non-obvious tool behavior, a hazard that will recur? Search first (`cliban project search`), then `project note add` or update the `###` that already covers it. It's an atomic append, so wave siblings sweeping concurrently is the intended shape, not a race. Most tickets teach nothing durable and sweep to zero; ticket-specific narration belongs in `issue log`.

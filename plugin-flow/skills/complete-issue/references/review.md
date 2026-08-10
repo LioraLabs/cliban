@@ -24,6 +24,12 @@ Either way the reviewer runs in **fresh context**. It must never inherit this
 session's history: it reviews the work product, not your reasoning about it. Pass
 it the task text and the diff, and let it read the code itself.
 
+Give the reviewer its spawner's **agentId** and tell it to address that exact ID;
+an agent type is never an address. Before sending the full review to that spawner,
+the reviewer appends only its verdict and findings summary to the ticket with
+`cliban issue log`. Full review text stays off the board. This durable summary is
+the gate record when direct delivery fails.
+
 ## The two verdicts, in one dispatch
 
 Spec compliance and code quality come back from a single reviewer pass. Two
