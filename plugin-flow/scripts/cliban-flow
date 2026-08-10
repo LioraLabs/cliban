@@ -1326,7 +1326,6 @@ cmd_ticket_integrate() {
         say "squash: $subject"
         say "milestone: $mbranch@$mtip"
         say "ticket: $ISSUE_BRANCH@$ttip"
-        board_record "$ISSUE_KEY" "dry-run (mergeable; $mbranch@$mtip; $ISSUE_BRANCH@$ttip; squash: $subject)"
         exit 0
     fi
 

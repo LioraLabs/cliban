@@ -17,6 +17,7 @@ fixture_milestone_worktree
 ready_ticket "Dry run ticket"
 mtip=$(gitf rev-parse milestone/test-milestone)
 ttip=$(gitf rev-parse "$branch")
+activity_before=$(cb issue cat "$key" --section activity 2>&1 || true)
 run_flow ticket integrate "$key" --dry-run
 assert_status 0 "dry-run accepts a ready, synced ticket"
 assert_stdout_is "mergeable: milestone/test-milestone@$mtip is an ancestor of $branch@$ttip
@@ -25,6 +26,7 @@ milestone: milestone/test-milestone@$mtip
 ticket: $branch@$ttip" "dry-run prints the complete merge readout"
 assert_eq "$(gitf rev-parse milestone/test-milestone)" "$mtip" "dry-run does not move the milestone"
 assert_eq "$(status_of "$key")" "in-review" "dry-run does not move the board"
+assert_eq "$(cb issue cat "$key" --section activity 2>&1 || true)" "$activity_before" "dry-run writes no activity"
 assert_eq "$(gitf worktree list --porcelain | grep -c "$(fixture_ticket_wt "$branch")")" "1" "dry-run keeps the worktree"
 
 fixture_new
