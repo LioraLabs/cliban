@@ -1356,7 +1356,7 @@ $subjects" -m "Ticket: $ISSUE_KEY" >&2 || refuse_ticket "$ISSUE_KEY" \
         "$mbranch now contains squash $squash_sha of the earlier tip. Do not mark" \
         "$ISSUE_KEY done; inspect the late commit and repair deliberately."
 
-    cliban issue mv "$ISSUE_KEY" done --note "squashed as $squash_sha" >/dev/null || refuse_ticket "$ISSUE_KEY" \
+    cliban issue mv "$ISSUE_KEY" "done" --note "squashed as $squash_sha" >/dev/null || refuse_ticket "$ISSUE_KEY" \
         "could not move $ISSUE_KEY to done after squash $squash_sha" \
         "The git commit exists; retry the board move before integrating anything else."
     cliban linear push "$ISSUE_KEY" >/dev/null 2>&1 || true

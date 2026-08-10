@@ -35,12 +35,22 @@ ready_ticket "Land this ticket"
 commit_file_at "$(fixture_ticket_wt "$branch")" second.txt "second change"
 old_mtip=$(gitf rev-parse milestone/test-milestone)
 ttip=$(gitf rev-parse "$branch")
+real_cliban=$(command -v cliban)
+# shellcheck disable=SC2016
+stub_bin cliban '#!/usr/bin/env bash
+if [ "${1:-}" = linear ] && [ "${2:-}" = push ]; then
+    printf "%s" "$3" >"'"$FIXTURE_ROOT"'/linear-pushed"
+    exit 9
+fi
+exec '"$real_cliban"' "$@"'
 run_flow ticket integrate "$key"
 assert_status 0 "a ready, synced ticket integrates"
+unset FLOW_PATH
 new_mtip=$(gitf rev-parse milestone/test-milestone)
 assert_stdout_is "$new_mtip" "integration prints the squash SHA alone"
 assert_eq "$(gitf rev-parse "$branch")" "$ttip" "the ticket branch is retained"
 assert_eq "$(status_of "$key")" "done" "integration moves the ticket to done"
+assert_eq "$(cat "$FIXTURE_ROOT/linear-pushed")" "$key" "integration attempts a nonfatal Linear push"
 assert_eq "$(gitf worktree list --porcelain | grep -c "$(fixture_ticket_wt "$branch")")" "0" "integration removes the worktree only"
 assert_eq "$(gitf log -1 --format=%s milestone/test-milestone)" "$key: Land this ticket" "the squash subject names the ticket"
 message=$(gitf log -1 --format=%B milestone/test-milestone)
