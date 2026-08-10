@@ -110,6 +110,33 @@ fixture_milestone_worktree() {
     gitf worktree add -q "$(fixture_milestone_wt)" milestone/test-milestone
 }
 
+# fixture_ticket_wt <branch> — where a ticket's worktree belongs: under the
+# milestone worktree, named for the branch. Spelled out here rather than asked
+# of the script, so an assertion against it is a specification.
+fixture_ticket_wt() { printf '%s/.worktrees/%s' "$(fixture_milestone_wt)" "$1"; }
+
+# fixture_ticket_worktree <branch> — that worktree, branched off the fixture
+# milestone's tip and built with plain git rather than by running `ticket
+# start`. A sync or ready case must fail because sync or ready is wrong, never
+# because start is. An existing branch is adopted rather than recreated, so a
+# case can lay down history first and ask for a worktree over it.
+fixture_ticket_worktree() {
+    mkdir -p "$(fixture_milestone_wt)/.worktrees"
+    if gitf rev-parse --verify --quiet "refs/heads/$1" >/dev/null; then
+        gitf worktree add -q "$(fixture_ticket_wt "$1")" "$1"
+    else
+        gitf worktree add -q -b "$1" "$(fixture_ticket_wt "$1")" \
+            refs/heads/milestone/test-milestone
+    fi
+}
+
+# gitt <branch> <args>... — git inside a ticket's worktree.
+gitt() {
+    local branch=$1
+    shift
+    git -C "$(fixture_ticket_wt "$branch")" "$@"
+}
+
 # new_issue <title> [milestone] — an issue on the fixture milestone unless one
 # is named; echoes its key. Aborts rather than echoing nothing, so a broken
 # fixture cannot make a guard case pass for the wrong reason.

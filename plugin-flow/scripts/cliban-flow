@@ -195,6 +195,12 @@ have_branch() { gitr rev-parse --verify --quiet "refs/heads/$1" >/dev/null; }
 
 short_sha() { gitr rev-parse --short "refs/heads/$1"; }
 
+# full_sha <branch> — the same commit, unabbreviated. Short shas are for reading
+# and appear in every message and board line; the full one is what goes on
+# stdout, where the reader is a script and an abbreviation is a hostage to how
+# many objects the repository grows.
+full_sha() { gitr rev-parse "refs/heads/$1"; }
+
 # is_ancestor <branch-a> <branch-b> — true when every commit of <a> is reachable
 # from <b>. Strict ancestry is the whole gate: never a trial merge, because a
 # trial merge answers "would this apply cleanly", and the question that matters
@@ -670,6 +676,10 @@ ticket_dispatch() {
             ACTION="ticket status"
             cmd_ticket_status "$@"
             ;;
+        sync)
+            ACTION="ticket sync"
+            cmd_ticket_sync "$@"
+            ;;
         '') usage_error "ticket needs a command" ;;
         *) usage_error "unknown ticket command: $command" ;;
     esac
@@ -1024,6 +1034,135 @@ cmd_ticket_status() {
         ""
     board_record "$ISSUE_KEY" \
         "sync-required ($mbranch@$msha is not an ancestor of $ISSUE_BRANCH@$tsha)"
+    exit 1
+}
+
+# ticket sync <KEY> — bring the ticket branch up to the milestone tip.
+#
+# A merge, never a rebase. Rebase rewrites the very commits the integration gate
+# reads, so a rebased branch has to be re-verified from nothing, and it replays
+# one collision once per commit rather than once.
+#
+# The merge runs in the ticket's own worktree, and a conflict is deliberately
+# left in progress there rather than aborted: the half-merged index is the state
+# the implementer resolves it in, and throwing it away would discard the only
+# part of this that needs a person.
+#
+# This is the one subcommand whose failure is routinely not a refusal. A
+# conflict is what a correct merge of two correct branches does — a real outcome
+# of a question properly asked — so it exits 1, with the unmerged paths on
+# stdout because that is the answer.
+cmd_ticket_sync() {
+    local key=${1:-}
+    [ -n "$key" ] || usage_error "ticket sync needs an issue key"
+    [ $# -le 1 ] || usage_error "ticket sync takes one issue key, got: $*"
+    require_repo
+    load_issue "$key"
+
+    load_ticket_milestone_branch "there is nothing to bring it up to date with" \
+        "Syncing is merging a milestone branch in, so there has to be one. Put" \
+        "the ticket on a milestone first:"
+    require_ticket_branch
+    load_ticket_worktree
+
+    local mbranch=$TICKET_MBRANCH
+    local msha tsha
+    msha=$(short_sha "$mbranch")
+    tsha=$(short_sha "$ISSUE_BRANCH")
+
+    # Already carrying the tip: the state a re-run finds, and the state a ticket
+    # started this wave is in. Merging anyway would manufacture an empty merge
+    # commit for the sake of having something to report.
+    if is_ancestor "$mbranch" "$ISSUE_BRANCH"; then
+        say "$(full_sha "$ISSUE_BRANCH")"
+        instruct \
+            "$ISSUE_BRANCH@$tsha already contains $mbranch@$msha; nothing to merge." \
+            "" \
+            "That is the state \`ticket ready\` requires, so if the build and the" \
+            "full suite are green on this tree:" \
+            "" \
+            "    $PROG ticket ready $ISSUE_KEY"
+        board_record "$ISSUE_KEY" \
+            "already up to date ($ISSUE_BRANCH@$tsha already contains $mbranch@$msha)"
+        exit 0
+    fi
+
+    announce "merging $mbranch@$msha into $ISSUE_BRANCH@$tsha in $TICKET_WT"
+    # refs/heads, like every other lookup here: a tag sharing the milestone
+    # branch's name would otherwise be what got merged, and the branch this
+    # reports having merged would not be the one it did.
+    #
+    # -m rather than git's default message, so the commit says which branch went
+    # into which and a conflicted merge's MERGE_MSG says it too — that is the
+    # message the implementer's own `git commit` will use.
+    if git -C "$TICKET_WT" merge --no-edit \
+        -m "Merge $mbranch into $ISSUE_BRANCH" "refs/heads/$mbranch" >&2; then
+
+        local after ff=""
+        after=$(full_sha "$ISSUE_BRANCH")
+        # A fast-forward lands exactly on the milestone tip; a merge commit
+        # cannot. Worth distinguishing on the board: one means the ticket had no
+        # commits of its own, which is a fact about the ticket.
+        [ "$after" != "$(full_sha "$mbranch")" ] || ff=", fast-forward"
+
+        say "$after"
+        instruct \
+            "$ISSUE_BRANCH is now at $(short_sha "$ISSUE_BRANCH") and contains $mbranch@$msha." \
+            "" \
+            "Nothing has built or tested that tree. This tool does not run builds:" \
+            "which commands they are varies per repository and reading their output" \
+            "is judgement. Integration then squashes this tree unbuilt and untested," \
+            "on the strength of your having done it here:" \
+            "" \
+            "    <this repository's build>" \
+            "    <this repository's full test suite>" \
+            "    $PROG ticket ready $ISSUE_KEY"
+        board_record "$ISSUE_KEY" \
+            "merged ($mbranch@$msha into $ISSUE_BRANCH@$tsha, clean$ff, now at $(short_sha "$ISSUE_BRANCH"))"
+        exit 0
+    fi
+
+    # git failed. A conflict leaves unmerged entries in the index; anything else
+    # — a merge it refused to start, a repository it could not read — leaves
+    # none, and is not this subcommand's expected outcome.
+    local unmerged
+    unmerged=$(git -C "$TICKET_WT" diff --name-only --diff-filter=U 2>/dev/null) || unmerged=""
+    [ -n "$unmerged" ] || refuse_ticket "$ISSUE_KEY" \
+        "git could not merge $mbranch into $ISSUE_BRANCH, and left no conflict to resolve" \
+        "git's own error is above. This is not the ordinary conflicting merge —" \
+        "that leaves unmerged paths in the index and this left none — so check" \
+        "what state the worktree is in before doing anything else:" \
+        "" \
+        "    git -C \"$TICKET_WT\" status"
+
+    say "$unmerged"
+    instruct \
+        "The paths on stdout could not be merged. The merge is in progress in" \
+        "$TICKET_WT." \
+        "" \
+        "The agent implementing $ISSUE_KEY resolves this." \
+        "" \
+        "The orchestrator will not do it: it has no knowledge of what either" \
+        "colliding ticket intended, and a resolution made there would produce a" \
+        "tree nobody has built or tested — exactly what integration is not" \
+        "allowed to squash." \
+        "" \
+        "    git -C \"$TICKET_WT\" status" \
+        "    # resolve each path, then" \
+        "    git -C \"$TICKET_WT\" add <path>..." \
+        "    git -C \"$TICKET_WT\" commit" \
+        "" \
+        "Then log what you resolved and why. The resolution is the part of this" \
+        "that outlives you, and it is what a review of the resolution diff reads:" \
+        "" \
+        "    cliban issue log $ISSUE_KEY \"resolved <paths> against $mbranch: <how>\"" \
+        "" \
+        "Then build, run the full suite, and:" \
+        "" \
+        "    $PROG ticket ready $ISSUE_KEY" \
+        ""
+    board_record "$ISSUE_KEY" \
+        "conflicted ($mbranch@$msha into $ISSUE_BRANCH@$tsha, unmerged: $(printf '%s' "$unmerged" | tr '\n' ' ' | sed 's/ $//'))"
     exit 1
 }
 
