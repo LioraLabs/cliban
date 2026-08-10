@@ -18,6 +18,8 @@ assert_out_has "ticket status" "help lists the subcommands that exist"
 # claiming `ticket start` before it was routed was caught exactly this way.
 assert_out_has "milestone start" "help lists milestone start"
 assert_out_has "ticket start" "help lists ticket start"
+assert_out_has "ticket sync" "help lists ticket sync"
+assert_out_has "ticket ready" "help lists ticket ready"
 
 run_flow --help
 assert_status 0 "--help is the same as help"

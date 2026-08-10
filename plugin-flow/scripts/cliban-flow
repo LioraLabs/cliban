@@ -10,10 +10,12 @@
 # EXIT CODES are a contract every subcommand keeps, because callers branch on
 # them rather than on message text:
 #
-#   0  the action succeeded, or a read-only verdict is affirmative
+#   0  the action succeeded, or a read-only verdict is affirmative. Stdout
+#      carries the resulting SHA or worktree path for actions, and the verdict
+#      for reads.
 #   1  the verdict is negative — a real, legitimate state that is not what was
-#      asked for. Stdout carries the verdict; stderr names the command that
-#      changes it.
+#      asked for. Stdout carries the verdict, except `ticket sync`, where it
+#      carries the unmerged paths one per line; stderr names the next command.
 #   2  refused. A guard failed or the invocation was malformed, so the question
 #      could not be answered at all. Every guard refuses before changing
 #      anything; the one exception is a git command that failed partway, and
@@ -128,6 +130,12 @@ usage: cliban-flow <group> <command> [args]
                         "mergeable" (exit 0) when the milestone branch tip is
                         an ancestor of the ticket branch, "sync-required"
                         (exit 1) when it is not.
+
+  ticket sync <KEY>     Merge the milestone tip into the ticket branch. Prints
+                        the resulting tip SHA, or conflicted paths at exit 1.
+
+  ticket ready <KEY>    Verify the synced branch and clean worktree, then move
+                        the ticket to in-review. Prints the ticket tip SHA.
 
 Both start subcommands are idempotent: a second run reports what is already
 there rather than recreating it.
