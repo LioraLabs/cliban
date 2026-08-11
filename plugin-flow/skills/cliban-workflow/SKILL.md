@@ -25,7 +25,7 @@ If the user is wiring up a new repo, point them at `setup-cliban`; don't improvi
 
 ## The Dispatcher
 
-The workflow's git-and-board transitions live in `plugin-flow/scripts/cliban-flow`. The workflow skills abbreviate that executable as `cliban-flow`; before using either workflow, resolve it at that location. If it is absent or not executable, stop and say so. There is no fallback: enforcing this protocol only when convenient is the failure the dispatcher removes.
+The workflow's git-and-board transitions live at `../../scripts/cliban-flow` relative to this `SKILL.md` (`${CLAUDE_PLUGIN_ROOT}/scripts/cliban-flow` under Claude). The workflow skills abbreviate that executable as `cliban-flow`; resolve that one path before using them. If it is absent or not executable, stop and say so. There is no fallback: enforcing this protocol only when convenient is the failure the dispatcher removes.
 
 Its surface is `milestone start`, `milestone status`, `milestone finish`, `milestone abandon`, `ticket start`, `ticket status`, `ticket sync`, `ticket ready`, `ticket integrate`, and `ticket abandon`. Invoke the subcommand instead of describing or recreating the git operation it owns. Exit 0 is success or an affirmative verdict, exit 1 is a legitimate negative verdict with its next step, and exit 2 is a refusal whose instruction must be followed before retrying.
 

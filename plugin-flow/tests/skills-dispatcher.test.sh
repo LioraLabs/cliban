@@ -18,7 +18,27 @@ lacks() { ! grep -Fq -- "$2" "$1" || { printf 'legacy %s in %s\n' "$2" "$1" >&2;
 has "$manifest" '"version": "0.3.0"'
 has "$manifest" 'recover interrupted milestones'
 
-has "$workflow" 'plugin-flow/scripts/cliban-flow'
+# CLI-96 — the installed skill resolves its sibling dispatcher outside cliban.
+has "$workflow" '../../scripts/cliban-flow'
+external=$(mktemp -d)
+mkdir -p "$external/marketplace/.claude-plugin" "$external/adopter"
+cp -R "$ROOT/plugin-flow" "$external/marketplace/plugin-flow"
+cat >"$external/marketplace/.claude-plugin/marketplace.json" <<'EOF'
+{
+  "name": "cli96",
+  "owner": {"name": "cliban tests"},
+  "plugins": [{"name": "cliban-flow", "source": "./plugin-flow"}]
+}
+EOF
+CLAUDE_CONFIG_DIR=$external/config claude plugin marketplace add "$external/marketplace" >/dev/null || failed=1
+CLAUDE_CONFIG_DIR=$external/config claude plugin install cliban-flow@cli96 >/dev/null || failed=1
+installed_workflow=$(find "$external/config/plugins/cache/cli96/cliban-flow" \
+    -path '*/skills/cliban-workflow/SKILL.md' -print -quit)
+[ -n "$installed_workflow" ] || failed=1
+dispatcher=$(cd -- "$(dirname -- "$installed_workflow")/../.." && pwd)/scripts/cliban-flow
+help=$(cd -- "$external/adopter" && "$dispatcher" help) || failed=1
+case $help in *'milestone start'*) ;; *) failed=1 ;; esac
+rm -rf -- "$external"
 for command in 'milestone start' 'milestone finish' 'milestone abandon' 'ticket start' 'ticket status' 'ticket sync' 'ticket ready' 'ticket integrate' 'ticket abandon'; do
     has "$workflow" "\`$command\`"
 done

@@ -7,7 +7,7 @@ requires_skills: [cliban-workflow]
 # Recover Milestone
 
 Recovery is diagnosis, not repair. Load `cliban-workflow` and `cliban`, resolve
-`plugin-flow/scripts/cliban-flow`, then survey the milestone without changing it:
+its dispatcher as the workflow contract specifies, then survey without changes:
 
 ```bash
 cliban-flow milestone status "<milestone name>" --project <KEY>
