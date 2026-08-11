@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-79 — the dispatcher's own surface: routing, usage, and the exit-code
+# CLI-79, CLI-100 — the dispatcher's own surface: routing, usage, and the exit-code
 # contract every subcommand keeps.
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib.sh

@@ -137,10 +137,6 @@ If the human chooses discard instead, run `cliban-flow milestone abandon "<miles
 
 Wave tickets are written against the *same* base in parallel, so they collide on whatever is shared. The orchestrator is the serialization point for every shared resource — and the conflicts that matter most are the ones git does **not** mark.
 
-**1. Clean integration requires strict ancestry.** Two tickets can take divergent designs on the same files and still combine incoherently. `ticket sync` moves that combination and its conflict resolution into the ticket worktree, where the implementer builds, tests, and readies the exact tree. `ticket integrate` may skip a post-integration build only because its strict ancestry guard proves the squash introduces no untested combination; relaxing that guard breaks this guarantee.
-
-**2. Agents commit after they report.** An agent, or a subagent it spawned, can land a commit after `ticket ready`. Squash creates no ticket-side parent to inspect later, so the ready SHA is the immutable handoff: compare it before integration, and make any changed branch repeat sync, verification, and ready.
-
 **3. Serialized shared sequences** (changelog IDs, shared enums, registries). Merge order decides their final order, so put any renumbering through a dispatched ticket and its normal verification gate. Tell agents not to bump a shared version file; the milestone is one unreleased version until finalize.
 
 Test-to-ticket citations are *not* such a sequence: each agent's key was allocated when its ticket was created, so siblings cite different keys by construction.
@@ -148,5 +144,3 @@ Test-to-ticket citations are *not* such a sequence: each agent's key was allocat
 **4. Path-based pre-commit hooks don't enforce completeness.** A hook firing on "any file under X changed" passes when an agent does *half* a paired change — the section but not the changelog entry, the keyword but not the grammar. Check the both-halves invariant at integration.
 
 **5. Shared mutable state contention.** Subagents racing on a shared DB or scratchpad can overwrite each other's ticket descriptions. Verify each ticket's description still matches its key before relying on it; keep per-ticket state in the worktree.
-
-**6. Finished agents resume after integration.** A late agent can change a branch the dispatcher already integrated. Treat the ready SHA as the end of that agent's authority and stop its session before integrating.

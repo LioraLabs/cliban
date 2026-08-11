@@ -104,13 +104,3 @@ report  → triage-bug      → diagnose-issue ──┘
 ```
 
 Working without them — plan mode, or plain conversation — is fully supported and changes nothing about the contract: create the issue with its `## Spec`, write the plan via `issue edit KEY --section plan --create-section --description-file -` (never a whole-description rewrite), `issue lint KEY` to confirm it parses, then `mv` → `tick` → `log` as the status table dictates.
-
-## Shared Conventions
-
-- **Labels:** prefer the canonical set `bug`, `feature`, `refactor`, `chore` (auto-created on first `--label` use; orphans are never garbage-collected).
-- **Priority:** `medium` by default, passed explicitly — the CLI's own default is `none`. `high`/`urgent` only when indicated.
-- **Scope discovery:** promote oversized steps (`issue promote`) or file a linked issue; never silently widen a ticket.
-- **Take work via the frontier:** `issue ls --ready` answers "what can I start"; `issue claim` before starting anything another session might also see (attribution is automatic per session).
-- **Racy edits:** any read-modify-write of a description carries `--if-updated-at` from the read — but prefer the atomic tools (`--section`, `append-section`, `log`, `tick`, `note add`), which need no round-trip at all.
-- **Custom sections:** the four contract H2s are reserved, but any other H2 is fair game and addressable by verbatim anchor (`--section "Decisions so far"`).
-- **Promotion mirror:** when a promoted child reaches `done`, the skill that moved it also ticks the referencing step in the parent — cliban core deliberately does not auto-mirror.

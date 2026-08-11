@@ -108,7 +108,7 @@ assert_board_has "$key" "milestone/test-milestone@$msha" \
     "the board line records what the branch was found to contain"
 assert_eq "$(gitf rev-parse "$branch")" "$tip" "the branch was not moved"
 assert_eq "$(gitt "$branch" status --porcelain)" "" "the worktree was left alone"
-assert_stderr_has "orchestrator" "the guidance says who picks it up from here"
+assert_eq "$FLOW_STDERR" "" "ready success adds no ceremony to stderr"
 
 # ------------------------------------------------------------ a stale branch
 #

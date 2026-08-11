@@ -14,5 +14,7 @@ ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 FLOW_OUT=$(cd "$FIXTURE_REPO" && "$ROOT/plugin/hooks/session-start.sh")
 assert_out_has "In review:" "session start names the reconciliation candidates"
 assert_out_has "$key Merged handoff" "the later session sees the in-review handoff"
+assert_out_lacks "binding:" "session start omits the binding parenthetical"
+assert_out_lacks "Track work on the board" "session start omits workflow doctrine"
 
 finish

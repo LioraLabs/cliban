@@ -90,19 +90,17 @@ Per behavior, one at a time:
 4. **Commit** — test and implementation together.
 5. **Tick** — `cliban issue tick <KEY> --task N --step M` as each step lands, not when the task ends.
 
-Batching every test for a task before any implementation is horizontal slicing: it pins the shape you guessed at before you learned anything. When implementation proves a spec claim wrong, amend `## Spec` and log why — never reshape the test to match what you built.
+When implementation proves a spec claim wrong, amend `## Spec` and log why — never reshape the test to match what you built.
 
 **Log the why**, not the what — `cliban issue log <KEY> "root cause was X"`, `"tried Y, fails because Z"`. cliban records what changed on its own; narration buries the signal.
 
 **At every `### Review Checkpoint`, run the gate** — [references/review.md](references/review.md) governs it. One fresh-context reviewer over the group's cumulative diff, both verdicts in one dispatch. Record `HEAD` at each gate; it seeds the next gate's `BASE_SHA`, and the branch base seeds the first. Any spec ❌ or Critical/Important finding: fix, then re-review the same checkpoint. Only Minor: accept and continue. Log the outcome either way — a gate that left no trace is indistinguishable from one that never ran.
 
-Review is batched to these markers deliberately; reviewing after every task is the tax that makes tickets crawl. A plan with no markers has one gate, at the end, which is a legitimate shape for a small ticket.
-
 **Discovered scope gets promoted, never absorbed** — `cliban issue promote <KEY> --task N --step M --as sub-issue`, or a new issue with `--blocked-by <KEY>`. When a promoted child reaches `done`, tick the referencing step here; cliban doesn't mirror that for you.
 
 ## 6. The final gate
 
-One cumulative review over the whole diff ([references/review.md](references/review.md), *The final gate*). It catches what a per-checkpoint view structurally cannot: two groups that each passed but disagree, drift from the spec, dead code, scope that grew a slice at a time.
+Run the cumulative review defined by [references/review.md](references/review.md), *The final gate*.
 
 Then build, typecheck, lint, and run the **full** suite. Per-task verification proves each task; only this proves the ticket. A failure here is unfinished work, not a finishing step.
 

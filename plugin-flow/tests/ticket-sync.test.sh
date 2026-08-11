@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-81 — `cliban-flow ticket sync <KEY>`: the milestone tip, merged into the
+# CLI-81, CLI-100 — `cliban-flow ticket sync <KEY>`: the milestone tip, merged into the
 # ticket branch, in the ticket's own worktree.
 #
 # Same rule as every suite here: throwaway repo under `mktemp -d`, CLIBAN_DB
@@ -41,12 +41,7 @@ assert_eq "$(cat "$(fixture_ticket_wt "$branch")/milestone-side.txt")" "another 
     "the milestone's work arrived in the ticket worktree"
 assert_eq "$(gitt "$branch" status --porcelain)" "" "the ticket worktree was left clean"
 assert_eq "$(gitf rev-parse --abbrev-ref HEAD)" "main" "the primary checkout is untouched"
-assert_stderr_has "cliban-flow: merging milestone/test-milestone@$msha" \
-    "the script announces the merge before it runs it"
-# The spec's second criterion: it reports the commit and reminds the caller to
-# build and test, and it does not do either itself.
-assert_stderr_has "cliban-flow ticket ready $key" "the guidance names what comes next"
-assert_stderr_has "test suite" "the guidance says to run the suite before declaring ready"
+assert_eq "$FLOW_STDERR" "" "successful sync adds no ceremony to stderr"
 assert_out_lacks "tests passed" "this tool does not run anything it could report on"
 assert_board_has "$key" "[cliban-flow] ticket sync $key: merged" \
     "the sync is recorded on the board"
@@ -92,7 +87,7 @@ run_flow ticket sync "$key"
 assert_status 0 "a branch already containing the milestone tip succeeds"
 assert_stdout_is "$before" "stdout is the tip it was already on"
 assert_eq "$(gitf rev-parse "$branch")" "$before" "the branch was not moved"
-assert_stderr_has "nothing to merge" "the guidance says why there was nothing to do"
+assert_eq "$FLOW_STDERR" "" "up-to-date success adds no ceremony to stderr"
 assert_board_has "$key" "[cliban-flow] ticket sync $key: already up to date" \
     "the no-op is distinguishable on the board from a merge"
 
@@ -147,6 +142,8 @@ assert_stderr_has "cliban issue log $key" \
     "the instruction says the resolution has to be logged to the ticket"
 assert_stderr_has "$(fixture_ticket_wt "$branch")" \
     "the instruction names the worktree the merge is in"
+[ "$(printf '%s\n' "$FLOW_STDERR" | wc -l)" -le 6 ] || \
+    fail "conflict guidance is at most six lines" "$FLOW_STDERR"
 assert_board_has "$key" "[cliban-flow] ticket sync $key: conflicted" \
     "the conflict is recorded on the board"
 assert_board_has "$key" "milestone/test-milestone@$msha into $branch" \

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-80 — `cliban-flow milestone start <NAME>`: the milestone's git layout.
+# CLI-80, CLI-100 — `cliban-flow milestone start <NAME>`: the milestone's git layout.
 #
 # The subcommand under test creates branches and worktrees, so every case runs
 # against a throwaway repo under `mktemp -d` with CLIBAN_DB inside it. Nothing
@@ -31,12 +31,7 @@ assert_eq "$(git -C "$(milestone_wt)" rev-parse --abbrev-ref HEAD)" \
 assert_eq "$(gitf rev-parse --abbrev-ref HEAD)" "main" \
     "the primary checkout is left on what it was on"
 assert_eq "$(gitf status --porcelain)" "" "the primary checkout is left clean"
-# Prefixed, so this cannot be satisfied by git's own "Preparing worktree (new
-# branch …)" — the claim is that the script announced the step, not that
-# something in the pipeline mentioned the branch.
-assert_stderr_has "cliban-flow: creating milestone/test-milestone" \
-    "the script announces the branch it is about to create"
-assert_stderr_has "$(milestone_wt)" "the narration names the worktree it is about to add"
+assert_eq "$FLOW_STDERR" "" "success adds no ceremony to stderr"
 assert_milestone_board_has "Test milestone" \
     "[cliban-flow] milestone start Test milestone: created" \
     "the milestone's own activity log records the line"
@@ -59,7 +54,7 @@ assert_eq "$(gitf rev-parse milestone/test-milestone)" "$sha_before" \
     "the second run did not move the milestone branch"
 assert_eq "$(gitf worktree list --porcelain | grep -c '^worktree ')" "$worktrees_before" \
     "the second run added no second worktree"
-assert_stderr_has "already checked out" "the second run says it found what was there"
+assert_eq "$FLOW_STDERR" "" "idempotent success adds no ceremony to stderr"
 assert_milestone_board_has "Test milestone" \
     "[cliban-flow] milestone start Test milestone: already started" \
     "the idempotent run is distinguishable on the board from the creating one"
@@ -79,7 +74,7 @@ assert_eq "$(gitf rev-parse milestone/test-milestone)" "$tip" \
     "the existing milestone branch was not moved back to main"
 assert_eq "$(git -C "$(milestone_wt)" rev-parse HEAD)" "$tip" \
     "the worktree carries the work the branch already had"
-assert_stderr_has "existing branch" "the narration says it is adopting, not creating"
+assert_eq "$FLOW_STDERR" "" "adoption success adds no ceremony to stderr"
 assert_eq "$(gitf rev-parse --abbrev-ref HEAD)" "main" \
     "adopting leaves the primary checkout on what it was on"
 assert_eq "$(gitf status --porcelain)" "" "adopting leaves the primary checkout clean"
@@ -100,6 +95,8 @@ assert_status 2 "a milestone branch checked out in the primary checkout is refus
 assert_stderr_has "primary checkout" "the refusal names what is wrong"
 assert_stderr_has "git -C \"$FIXTURE_REPO\" checkout main" \
     "the instruction is the command that fixes it, quoted so it survives a path with spaces"
+assert_eq "$(printf '%s\n' "$FLOW_STDERR" | wc -l)" "3" \
+    "a refusal is exactly what, why, and next-command"
 assert_stdout_is "" "a refusal puts nothing on stdout"
 assert_eq "$(ls -d "$(milestone_wt)" 2>/dev/null)" "" "no worktree was created"
 assert_milestone_board_has "Test milestone" \
@@ -224,6 +221,8 @@ gitf branch -D main >/dev/null
 run_flow milestone start "Test milestone" -p FLOW
 assert_status 2 "a repository with no main branch is refused"
 assert_stderr_has "no main branch" "the refusal says why it cannot proceed"
+assert_stderr_has 'next: cliban-flow milestone start Test\ milestone -p FLOW' \
+    "a refusal without a specialized repair prints the retry command"
 assert_eq "$(gitf rev-parse --verify --quiet refs/heads/milestone/test-milestone || true)" "" \
     "no milestone branch was created off something else"
 
