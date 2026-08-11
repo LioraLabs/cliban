@@ -49,7 +49,7 @@ ACTION=""
 # The repository every git call runs against; set by require_repo.
 REPO=""
 # The loaded ticket; set by load_issue.
-ISSUE_KEY="" ISSUE_BRANCH="" ISSUE_MILESTONE="" ISSUE_PROJECT="" ISSUE_STATUS="" ISSUE_TITLE=""
+ISSUE_KEY="" ISSUE_BRANCH="" ISSUE_MILESTONE="" ISSUE_PROJECT="" ISSUE_STATUS="" ISSUE_TITLE="" ISSUE_CLAIMED_BY=""
 # The loaded milestone; set by load_milestone.
 MILESTONE_NAME="" MILESTONE_BRANCH=""
 # The project key milestone reads and writes are scoped by; set by
@@ -406,11 +406,11 @@ load_issue() {
     json=$(cliban issue show "$1" --json 2>/dev/null) || refuse \
         "no issue named $1 on the board" \
         "Check the key. If this is a scratch board, check CLIBAN_DB points at it."
-    row=$(printf '%s' "$json" | json_fields key git_branch_name milestone status title) || refuse \
+    row=$(printf '%s' "$json" | json_fields key git_branch_name milestone status title claimed_by) || refuse \
         "could not read $1 from the board" \
         "\`cliban issue show $1 --json\` returned something this script could not" \
         "parse. cliban may be newer or older than this dispatcher expects."
-    IFS=$'\x1f' read -r ISSUE_KEY ISSUE_BRANCH ISSUE_MILESTONE ISSUE_STATUS ISSUE_TITLE <<<"$row"
+    IFS=$'\x1f' read -r ISSUE_KEY ISSUE_BRANCH ISSUE_MILESTONE ISSUE_STATUS ISSUE_TITLE ISSUE_CLAIMED_BY <<<"$row"
     # The board's own spelling of the key, so the audit trail stays greppable
     # when someone types `flow-1`.
     [ -n "$ISSUE_KEY" ] && [ -n "$ISSUE_BRANCH" ] || refuse \
@@ -1099,6 +1099,31 @@ cmd_milestone_finish() {
 # Under the milestone worktree rather than beside the primary checkout so that
 # the milestone's build state — every ticket's target directory, every
 # node_modules — stays out of the tree the user works and runs from.
+START_NEW_CLAIM=0 START_STATUS_CHANGED=0 START_ORIGINAL_STATUS=""
+start_ticket_on_board() {
+    START_NEW_CLAIM=0 START_STATUS_CHANGED=0 START_ORIGINAL_STATUS=$ISSUE_STATUS
+    cliban issue claim "$ISSUE_KEY" >/dev/null 2>&1 || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY is claimed by another actor" \
+        "Have its owner release it: cliban issue release $ISSUE_KEY"
+    [ -n "$ISSUE_CLAIMED_BY" ] || START_NEW_CLAIM=1
+    [ "$ISSUE_STATUS" = in-progress ] || START_STATUS_CHANGED=1
+    cliban issue mv "$ISSUE_KEY" in-progress >/dev/null 2>&1 || {
+        rollback_ticket_start
+        refuse_ticket "$ISSUE_KEY" \
+            "$ISSUE_KEY could not move to in-progress" \
+            "Inspect the board: cliban issue show $ISSUE_KEY --json"
+    }
+}
+
+rollback_ticket_start() {
+    [ "$START_STATUS_CHANGED" -eq 0 ] ||
+        cliban issue mv "$ISSUE_KEY" "$START_ORIGINAL_STATUS" >/dev/null 2>&1 ||
+        warn "could not restore $ISSUE_KEY to $START_ORIGINAL_STATUS"
+    [ "$START_NEW_CLAIM" -eq 0 ] ||
+        cliban issue release "$ISSUE_KEY" >/dev/null 2>&1 ||
+        warn "could not release $ISSUE_KEY after start failed"
+}
+
 cmd_ticket_start() {
     local key=${1:-}
     [ -n "$key" ] || usage_error "ticket start needs an issue key"
@@ -1214,6 +1239,7 @@ cmd_ticket_start() {
             "$ISSUE_BRANCH is registered to $existing, which no longer exists" \
             "${PRUNE_INSTRUCTIONS[@]}" \
             "    $PROG ticket start $ISSUE_KEY"
+        start_ticket_on_board
         say "$existing"
         instruct "$ISSUE_BRANCH is already checked out there; nothing to do."
         board_record "$ISSUE_KEY" "already started ($ISSUE_BRANCH at $existing)"
@@ -1228,19 +1254,24 @@ cmd_ticket_start() {
         "Inspect it, then move it aside or run \`git worktree prune\` if it is a" \
         "leftover, and re-run."
 
+    start_ticket_on_board
+
     local outcome
     if have_branch "$ISSUE_BRANCH"; then
         # The branch outlived its worktree and carries work. Recreating it off
         # the milestone tip would throw that away without saying so.
         announce "adding a worktree at $path for the existing branch $ISSUE_BRANCH@$(short_sha "$ISSUE_BRANCH")"
-        gitr worktree add "$path" "$ISSUE_BRANCH" >&2 || refuse_ticket "$ISSUE_KEY" \
-            "git could not add a worktree at $path for $ISSUE_BRANCH" \
-            "git's own error is above. The branch was not created by this step, so" \
-            "nothing about it has changed."
+        if ! gitr worktree add "$path" "$ISSUE_BRANCH" >&2; then
+            rollback_ticket_start
+            refuse_ticket "$ISSUE_KEY" \
+                "git could not add a worktree at $path for $ISSUE_BRANCH" \
+                "git's own error is above. The branch was not created by this step."
+        fi
         outcome="adopted"
     else
         announce "creating $ISSUE_BRANCH off $mbranch@$(short_sha "$mbranch") and checking it out at $path"
-        gitr worktree add -b "$ISSUE_BRANCH" "$path" "refs/heads/$mbranch" >&2 ||
+        if ! gitr worktree add -b "$ISSUE_BRANCH" "$path" "refs/heads/$mbranch" >&2; then
+            rollback_ticket_start
             refuse_ticket "$ISSUE_KEY" \
                 "git could not create $ISSUE_BRANCH at $path" \
                 "git's own error is above. git creates the branch before it checks" \
@@ -1248,6 +1279,7 @@ cmd_ticket_start() {
                 "not:" \
                 "" \
                 "    git -C \"$REPO\" branch --list $ISSUE_BRANCH"
+        fi
         outcome="created"
     fi
 
@@ -1452,6 +1484,10 @@ cmd_ticket_ready() {
     require_repo
     load_issue "$key"
 
+    [ "$ISSUE_STATUS" != "done" ] || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY is already done, so it cannot be handed over again" \
+        "Inspect it: cliban issue show $ISSUE_KEY --json"
+
     load_ticket_milestone_branch "there is no tip it could be checked against" \
         "Ready means the branch contains its milestone's tip, which needs a" \
         "milestone. Put the ticket on one first:"
@@ -1479,6 +1515,23 @@ cmd_ticket_ready() {
         "    <this repository's build>" \
         "    <this repository's full test suite>" \
         "    $PROG ticket ready $ISSUE_KEY"
+
+    local plan activity
+    plan=$(cliban issue cat "$ISSUE_KEY" --section plan 2>/dev/null) || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY has no plan on the board" \
+        "Create it: cliban issue edit $ISSUE_KEY --section plan --create-section --description-file -"
+    printf '%s\n' "$plan" | grep -Eq '^- \[[ xX]\] ' || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY's plan has no checklist items" \
+        "Add one: cliban issue edit $ISSUE_KEY --section plan --description-file -"
+
+    [ "$(gitr rev-list --count "refs/heads/$mbranch..refs/heads/$ISSUE_BRANCH")" -gt 0 ] || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_BRANCH has no commits past $mbranch" \
+        "Commit the ticket work: git -C \"$TICKET_WT\" commit"
+
+    activity=$(cliban issue cat "$ISSUE_KEY" --section activity 2>/dev/null) || activity=""
+    printf '%s\n' "$activity" | grep -Eqi 'review.*SPEC.*QUALITY' || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY has no recorded review verdict" \
+        "Record it after review: cliban issue log $ISSUE_KEY \"<SPEC and QUALITY verdict>\""
 
     local tip
     tip=$(full_sha "$ISSUE_BRANCH")

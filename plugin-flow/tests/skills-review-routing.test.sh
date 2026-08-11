@@ -4,7 +4,6 @@
 set -uo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-issue=$ROOT/plugin-flow/skills/complete-issue/SKILL.md
 review=$ROOT/plugin-flow/skills/complete-issue/references/review.md
 milestone=$ROOT/plugin-flow/skills/complete-milestone/SKILL.md
 failed=0
@@ -16,8 +15,6 @@ has "$review" 'agent type is never an address'
 has "$review" 'verdict and findings summary'
 has "$review" 'before sending the full review'
 has "$review" 'Full review text stays off the board'
-has "$issue" 'verdict is still in flight'
-has "$issue" 'via the orchestrator'
 has "$milestone" 'Stranded reviews are expected'
 has "$milestone" 'relay'
 # shellcheck disable=SC2016

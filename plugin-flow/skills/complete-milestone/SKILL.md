@@ -8,7 +8,7 @@ requires_skills: [cliban-workflow]
 
 The orchestrator is a conductor, not a coder: it computes the dependency order, dispatches one agent per ticket, gates each on its dependencies, and integrates finished work onto a milestone branch — never `main` — until the user finalizes.
 
-Inside each ticket runs **`complete-issue` in dispatched mode**, which owns claiming, planning, test-first execution, and committing. This skill schedules that and integrates the results; it does not restate the rhythm.
+Inside each ticket runs **`complete-issue` in dispatched mode**, which owns planning, test-first execution, and committing. This skill schedules that and integrates the results; it does not restate the rhythm.
 
 **Load first:** invoke `cliban-flow:cliban-workflow` for the contract (status mapping, where each artifact lands) and `cliban:cliban` for CLI mechanics. Neither loads on its own — reach for them with the Skill tool before the first board action.
 
@@ -87,7 +87,7 @@ stuck; a hard ticket can legitimately stay silent for a long stretch.
 
 ## 5. Integrate as each agent finishes
 
-The orchestrator integrates, not the agent. **A "done" notification is a claim to verify, not a fact.** Confirm the issue is `in-review`, its plan is fully ticked, and the report includes the SHA returned by `ticket ready`, then:
+The orchestrator integrates, not the agent. **A "done" notification is a claim to verify, not a fact.** Confirm the issue is `in-review` and the report includes the SHA returned by `ticket ready`, then:
 
 Stranded reviews are expected when direct agent delivery fails. Relay the full
 review to the ticket agent as part of integration; the ticket's concise verdict

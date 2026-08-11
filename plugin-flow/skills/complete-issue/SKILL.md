@@ -19,16 +19,20 @@ The session-start hook surfaces `in-review` candidates. In standalone mode, reco
 
 ## 1. Resolve and claim
 
-The key the user named → `cliban issue current --json` → `cliban issue ls --ready --json` and ask. `--ready` is backlog + unblocked + unclaimed; a ticket that isn't ready is a stop-and-ask, not something to force.
+The key the user named → `cliban issue current --json` → `cliban issue ls --ready --json` and ask. `--ready` is backlog + unblocked + unclaimed; a standalone ticket that isn't ready is a stop-and-ask, not something to force.
+
+Standalone:
 
 ```bash
 cliban issue claim <KEY>
 cliban issue mv <KEY> in-progress
 ```
 
+Dispatched tickets were claimed and moved by `ticket start`; verify that state instead of claiming again.
+
 **Resume exception:** an `in-progress`, claimed ticket may belong to a dead session. Read its `## Plan`, `## Activity Log`, and existing worktree, then ask the claimant. Take over only when it says it cannot continue or the orchestrator confirms its session ended; silence or age alone is not proof. Release a relinquished claim with `cliban issue release <KEY>`, or atomically take over with `cliban issue claim <KEY> --force`, then resume the existing artifacts.
 
-**Dispatched as a subagent:** export `CLIBAN_ACTOR=agent:<KEY>` in every shell first. Subagents inherit the parent's session id, so without it every sibling claims as the same actor and claims stop excluding each other.
+**Dispatched as a subagent:** export `CLIBAN_ACTOR=agent:<KEY>` in every shell first so later board writes are attributed to the ticket agent.
 
 ## 2. Read what the board knows
 
@@ -115,10 +119,6 @@ cliban linear push <KEY> || true      # only if the ticket came from Linear
 ```
 
 **Dispatched** — after the final commit, run `cliban-flow ticket sync <KEY>`. If it exits 1, resolve the conflicts in your ticket worktree, log why each resolution is correct, and commit the resolution. When a resolution changes behavior rather than mechanically combining both sides, run one focused fresh-context review over the resolution diff and fix any spec failure or serious finding before continuing.
-
-A full review may arrive via the orchestrator when direct delivery fails. Do not
-run `ticket ready` while any requested reviewer verdict is still in flight; the
-durable verdict summary on the ticket proves the gate completed.
 
 Run the focused and full verification again on the synced tree, then run `cliban-flow ticket ready <KEY>`. Only its exit 0 signals the orchestrator; a chat report alone does not. Report the immutable SHA printed by `ticket ready`, branch, test status, one-line summary, **any amendment you made to `## Spec`**, and merge-risk notes. Never commit after `ticket ready`; if anything changes, sync, verify, and ready again. The orchestrator integrates and moves the ticket to `done`.
 

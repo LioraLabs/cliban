@@ -34,6 +34,9 @@ assert_stderr_has "cliban-flow: creating $branch" \
     "the script announces the branch it is about to create"
 assert_board_has "$key" "[cliban-flow] ticket start $key: created" \
     "the ticket's activity log records the line"
+assert_eq "$(status_of "$key")" in-progress "starting moves the ticket in-progress"
+assert_eq "$(cb issue show "$key" --json | json_get claimed_by)" test:cliban-flow \
+    "starting claims the ticket for its actor"
 
 # A wave is several tickets on one milestone, started one after another. The
 # first ticket's worktree lands inside the milestone worktree, and nothing
@@ -115,6 +118,38 @@ assert_stderr_has "no longer exists" "the refusal says what is wrong with it"
 assert_stderr_has "worktree prune" "the instruction names the repair it will not do for you"
 
 # ------------------------------------------------------------------ guards
+
+# CLI-98 — start owns the claim and status transition, and must not take a
+# ticket another session already owns.
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "Claimed elsewhere")
+branch=$(branch_of "$key")
+cb issue claim "$key" --by agent:someone-else >/dev/null
+
+run_flow ticket start "$key"
+assert_status 2 "start refuses another actor's claim"
+assert_stderr_has "cliban issue release $key" "claim refusal names the repair"
+assert_eq "$(cb issue show "$key" --json | json_get claimed_by)" agent:someone-else \
+    "the other actor keeps its claim"
+assert_eq "$(status_of "$key")" backlog "claim refusal preserves status"
+assert_eq "$(gitf rev-parse --verify --quiet "refs/heads/$branch" || true)" "" \
+    "claim refusal creates no branch"
+
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "Git rejects start")
+branch=$(branch_of "$key")
+break_worktree_add
+
+run_flow ticket start "$key"
+assert_status 2 "a failed worktree add refuses the start"
+unset FLOW_PATH
+assert_eq "$(status_of "$key")" backlog "git failure restores backlog"
+assert_eq "$(cb issue show "$key" --json | json_get claimed_by)" "" \
+    "git failure releases the new claim"
+assert_eq "$(gitf rev-parse --verify --quiet "refs/heads/$branch" || true)" "" \
+    "stubbed git failure creates no branch"
 
 # Mergeability, and therefore a base to branch from, is a question about a
 # milestone branch.

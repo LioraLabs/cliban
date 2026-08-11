@@ -50,6 +50,11 @@ has "$issue" 'ticket ready <KEY>'
 has "$issue" 'resolve the conflicts'
 has "$issue" 'resolution diff'
 
+# CLI-98 — dispatcher guards replace these orchestration-time prose checks.
+lacks "$milestone" 'owns claiming, planning'
+lacks "$milestone" 'plan is fully ticked'
+lacks "$issue" 'requested reviewer verdict is still in flight'
+
 has "$milestone" 'milestone start "<milestone name>"'
 has "$milestone" 'ticket start <KEY>'
 has "$milestone" 'ticket integrate <KEY>'
