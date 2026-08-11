@@ -7,10 +7,15 @@ workflow=$ROOT/plugin-flow/skills/cliban-workflow/SKILL.md
 issue=$ROOT/plugin-flow/skills/complete-issue/SKILL.md
 milestone=$ROOT/plugin-flow/skills/complete-milestone/SKILL.md
 recovery=$ROOT/plugin-flow/skills/recover-milestone/SKILL.md
+manifest=$ROOT/plugin-flow/.claude-plugin/plugin.json
 failed=0
 
 has() { grep -Fq -- "$2" "$1" || { printf 'missing %s in %s\n' "$2" "$1" >&2; failed=1; }; }
 lacks() { ! grep -Fq -- "$2" "$1" || { printf 'legacy %s in %s\n' "$2" "$1" >&2; failed=1; }; }
+
+# CLI-86 — releases advertise the recovery protocol they install.
+has "$manifest" '"version": "0.3.0"'
+has "$manifest" 'recover interrupted milestones'
 
 has "$workflow" 'plugin-flow/scripts/cliban-flow'
 for command in 'milestone start' 'milestone finish' 'ticket start' 'ticket status' 'ticket sync' 'ticket ready' 'ticket integrate'; do
