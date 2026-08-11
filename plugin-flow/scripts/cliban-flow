@@ -1498,7 +1498,7 @@ cmd_ticket_ready() {
 
     activity=$(cliban issue cat "$ISSUE_KEY" --section activity 2>/dev/null) || activity=""
     if ! printf '%s\n' "$activity" | grep -Eqi 'review.*SPEC.*QUALITY' &&
-        ! printf '%s\n' "$activity" | grep -Eq '^- [^—]+ — review waived by orchestrator: .+$'; then
+        ! printf '%s\n' "$activity" | grep -Eq '^- [^—]+ — review waived by orchestrator: [[:space:]]*[^[:space:]].*$'; then
         refuse_ticket "$ISSUE_KEY" \
             "$ISSUE_KEY has neither a review verdict nor an orchestrator waiver" \
             "Record one: cliban issue log $ISSUE_KEY \"review waived by orchestrator: <reason>\""

@@ -7,6 +7,7 @@ ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 review=$ROOT/plugin-flow/skills/complete-issue/references/review.md
 issue=$ROOT/plugin-flow/skills/complete-issue/SKILL.md
 milestone=$ROOT/plugin-flow/skills/complete-milestone/SKILL.md
+workflow=$ROOT/plugin-flow/skills/cliban-workflow/SKILL.md
 failed=0
 
 has() { grep -Fiq -- "$2" "$1" || { printf 'missing %s in %s\n' "$2" "$1" >&2; failed=1; }; }
@@ -41,5 +42,7 @@ has "$review" 'When final review is chosen'
 lacks "$review" 'optional.'
 lacks "$review" 'marker has exactly one gate'
 has "$review" 'checkpoint-free plan gets one cumulative review'
+has "$workflow" 'When review is chosen'
+lacks "$workflow" 'plan with no markers has one gate at the end'
 
 exit "$failed"

@@ -79,7 +79,7 @@ The `cliban` skill defines what *parses* (`### Task N:` headings, column-zero ch
 
 Insert `### Review Checkpoint: <scope>` markers between task groups. Each is a **gate**: the executor stops, reviews every task since the previous marker in one pass, and does not advance with a spec failure or a serious quality issue open.
 
-Place them where a bug would otherwise **compound** — after a foundational slice later tasks stack on, or where the work crosses subsystems. Not after every task; batching is the point, since N tasks cost one review instead of N. A plan with no markers has one gate at the end, which is the right shape for a small ticket — a decision, not an omission.
+Place them where a bug would otherwise **compound** — after a foundational slice later tasks stack on, or where the work crosses subsystems. Not after every task; batching is the point, since N tasks cost one review instead of N. When review is chosen, a plan with no markers gets one cumulative review at the end.
 
 The first step is a loop, not two steps: every test then every implementation is horizontal slicing, pinning the shape you guessed at before the first line taught you anything.
 
