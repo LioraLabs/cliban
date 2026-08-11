@@ -24,6 +24,8 @@ cliban issue claim <KEY>
 cliban issue mv <KEY> in-progress
 ```
 
+**Resume exception:** an `in-progress`, claimed ticket may belong to a dead session. Read its `## Plan`, `## Activity Log`, and existing worktree, then ask the claimant. Take over only when it says it cannot continue or the orchestrator confirms its session ended; silence or age alone is not proof. Release a relinquished claim with `cliban issue release <KEY>`, or atomically take over with `cliban issue claim <KEY> --force`, then resume the existing artifacts.
+
 **Dispatched as a subagent:** export `CLIBAN_ACTOR=agent:<KEY>` in every shell first. Subagents inherit the parent's session id, so without it every sibling claims as the same actor and claims stop excluding each other.
 
 ## 2. Read what the board knows

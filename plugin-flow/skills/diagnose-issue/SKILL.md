@@ -103,4 +103,6 @@ Remove your instrumentation and delete throwaway harnesses — or, if a harness 
 
 Report the root cause, the loop command, and the minimised repro, then hand to `complete-issue` — it writes the failing test at the right seam, the fix, and the status move.
 
+Either continue directly into `complete-issue` in the same session, keeping the claim, or run `cliban issue release <KEY>` before reporting the handoff. Do not leave a claimed ticket waiting for a different session.
+
 **If there is no correct seam for a regression test, that is itself a finding.** A test that can't exercise the real bug pattern as it occurs at the call site gives false confidence. Log it and say so in the handoff; the architecture is preventing the bug from being locked down, and that is worth its own ticket.
