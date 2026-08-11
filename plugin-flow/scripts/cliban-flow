@@ -1704,7 +1704,7 @@ cmd_milestone_abandon() {
     require_project
     load_milestone "$name"
 
-    keys=$(cliban issue ls -p "$PROJECT" -m "$MILESTONE_NAME" --json | json_lines_field key) ||
+    keys=$(cliban issue ls -p "$PROJECT" -m "$MILESTONE_NAME" --all --json | json_lines_field key) ||
         refuse_milestone "$MILESTONE_NAME" "could not list milestone tickets" \
             "No teardown ran; retry when the board is readable."
     while IFS= read -r key; do
