@@ -12,6 +12,10 @@ has() { grep -Fiq -- "$2" "$1" || { printf 'missing %s in %s\n' "$2" "$1" >&2; f
 has "$issue" 'recoverability guarantee'
 has "$issue" 'before execution begins'
 has "$issue" 'commit new files early'
+# CLI-97
+# shellcheck disable=SC2016
+has "$issue" 'session-start hook surfaces `in-review` candidates'
+has "$issue" 'mv <KEY> done --note "merged as <sha>"'
 
 has "$milestone" 'liveness sweep'
 has "$milestone" 'running and dead agents'

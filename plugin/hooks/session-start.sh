@@ -26,6 +26,10 @@ IP=$(cliban issue ls --project "$KEY" --status in-progress --json 2>/dev/null \
   | jq -r '"  \(.key) \(.title)"' | head -5)
 [ -n "$IP" ] && printf 'In progress:\n%s\n' "$IP"
 
+IR=$(cliban issue ls --project "$KEY" --status in-review --json 2>/dev/null \
+  | jq -r '"  \(.key) \(.title)"' | head -5)
+[ -n "$IR" ] && printf 'In review:\n%s\n' "$IR"
+
 BL=$(cliban issue ls --blocked --project "$KEY" --json 2>/dev/null \
   | jq -r '"  \(.key) \(.title)"' | head -3)
 [ -n "$BL" ] && printf 'Blocked:\n%s\n' "$BL"

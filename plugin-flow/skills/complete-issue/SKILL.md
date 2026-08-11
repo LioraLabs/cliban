@@ -15,6 +15,8 @@ Two modes, differing only at the end:
 - **Standalone** — you own the branch through to `in-review` or `done` and hand it to the user.
 - **Dispatched by `complete-milestone`** — you are one agent in a wave. Commit on your ticket branch, sync it, and signal readiness through the dispatcher; the orchestrator integrates it. Never integrate, never touch `main` or the milestone branch, never move the issue to `done`. Your brief says when you're in this mode.
 
+The session-start hook surfaces `in-review` candidates. In standalone mode, reconcile your prior handoffs against the PR and git; when either proves a merge, run `cliban issue mv <KEY> done --note "merged as <sha>"`.
+
 ## 1. Resolve and claim
 
 The key the user named → `cliban issue current --json` → `cliban issue ls --ready --json` and ask. `--ready` is backlog + unblocked + unclaimed; a ticket that isn't ready is a stop-and-ask, not something to force.
