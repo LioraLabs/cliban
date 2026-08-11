@@ -59,6 +59,9 @@ cliban-flow ticket start <KEY>
 ```
 
 The command prints the ticket worktree path. Dispatch one agent per ticket there, parallel within a wave, as **`general-purpose`** — it has to spawn its own implementer and reviewer subagents, which tool-restricted types (`Explore`, `Plan`) cannot do.
+Give each dispatch the task name derived from its ticket key by lowercasing and
+replacing `-` with `_` (`CLI-95` becomes `cli_95`). Keep the returned agent ID;
+liveness checks address that ID, not an agent type.
 
 The brief:
 
@@ -84,6 +87,10 @@ ticked steps, or commits. The status output also exposes uncommitted work. Do no
 a working agent to perform the sweep. If all signals are empty or
 stale, ask the agent for its current phase and blocker before concluding it is
 stuck; a hard ticket can legitimately stay silent for a long stretch.
+
+Ask through the agent runtime's `send_message` operation using the agent ID saved at dispatch. If that address is unreachable, apply `complete-issue`'s **Resume exception** before declaring the claimant gone, then use `recover-milestone`'s ticket interpretations: respawn work-bearing tickets in their worktree; for an empty ticket run `cliban issue release <KEY>` and redispatch through `ticket start <KEY>`; for an external blocker run `cliban issue mv <KEY> blocked --note "<why>"` and surface it to the user.
+
+Independent siblings continue while dependents wait. After a second death on the same ticket, stop retrying and ask the user.
 
 ## 5. Integrate as each agent finishes
 

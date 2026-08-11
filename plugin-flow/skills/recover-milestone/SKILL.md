@@ -26,8 +26,12 @@ verification belongs to a respawned ticket agent.
   confirms discard, recommend `ticket abandon <KEY> --confirm "<why>"`; restart
   later through `ticket start <KEY>`.
 - **Silent agent:** `in-progress`, commits ahead, and no ticked plan steps is not
-  abandonment. Ask the claimant for its phase and blocker; if it is gone,
-  respawn onto the existing worktree so it can inspect and verify the work.
+  abandonment. Derive the dispatch task name from the ticket key by lowercasing
+  and replacing `-` with `_` (`CLI-95` becomes `cli_95`), find it with the agent
+  runtime's `list_agents` operation, then use `send_message` with its resolved
+  agent ID. If absent or unreachable, load and read `complete-issue`, then apply
+  its **Resume exception** before deciding the claimant is gone and respawning
+  onto the existing worktree to inspect and verify the work.
 - **Interrupted merge:** unmerged paths belong to the implementer's ticket
   worktree, not the orchestrator. Respawn there to resolve the conflicts,
   inspect the resolution diff, verify, commit, and continue with `ticket sync
