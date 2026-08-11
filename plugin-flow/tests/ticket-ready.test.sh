@@ -86,6 +86,21 @@ assert_stderr_has "review waived by orchestrator: <reason>" "waiver refusal prin
 
 fixture_new
 fixture_milestone_worktree
+key=$(new_issue "Embedded review waiver")
+branch=$(branch_of "$key")
+fixture_ticket_worktree "$branch"
+commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt work
+cb issue edit "$key" --section plan --create-section --description-file - >/dev/null <<'EOF'
+### Task 1: fixture
+
+- [x] **Step 1: exercised**
+EOF
+cb issue log "$key" "note — review waived by orchestrator: narrow change" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "ready refuses an embedded waiver phrase"
+
+fixture_new
+fixture_milestone_worktree
 key=$(new_issue "Already done")
 branch=$(branch_of "$key")
 fixture_ticket_worktree "$branch"

@@ -39,5 +39,7 @@ has "$milestone" 'Either side may request review'
 has "$milestone" 'fresh assembled milestone review remains mandatory'
 has "$review" 'When final review is chosen'
 lacks "$review" 'optional.'
+lacks "$review" 'marker has exactly one gate'
+has "$review" 'checkpoint-free plan gets one cumulative review'
 
 exit "$failed"
