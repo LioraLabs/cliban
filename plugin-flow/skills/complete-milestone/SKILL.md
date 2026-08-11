@@ -37,6 +37,10 @@ cliban milestone waves --project <KEY> "<milestone name>" --json
 
 `waves[0]` is dispatchable now; wave N is safe once 1..N-1 have merged. Re-run after each integration rather than tracking readiness yourself.
 
+Treat `chains` as advisory: prefer the same implementer sequentially, starting
+each ticket only at its wave time from the current milestone tip. You may split or extend
+a chain when useful; reuse context, never ticket worktrees or branches.
+
 - **A cycle exits 2** naming the issues — fix the board before orchestrating.
 - **Non-empty `external_blocked`** is a stop-and-ask: those issues are gated by work *outside* the milestone, and no amount of wave-finishing frees them.
 

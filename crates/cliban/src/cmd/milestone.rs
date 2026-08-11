@@ -766,6 +766,7 @@ async fn waves(
         println!(
             "{}",
             json!({
+                "chains": w.chains,
                 "done": w.done,
                 "external_blocked": w.external_blocked,
                 "waves": w.waves,
@@ -784,6 +785,16 @@ async fn waves(
     }
     if !w.done.is_empty() {
         println!("done: {}", w.done.join(", "));
+    }
+    if !w.chains.is_empty() {
+        println!(
+            "chains: {}",
+            w.chains
+                .iter()
+                .map(|c| format!("[{}]", c.join(", ")))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
     }
     Ok(())
 }

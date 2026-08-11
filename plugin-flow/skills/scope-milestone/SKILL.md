@@ -75,6 +75,9 @@ Cut **tracer bullets**: each a narrow but *complete* path through every layer it
 
 Present the breakdown numbered — title, blocked-by, what it delivers end to end. Ask whether the granularity is right, whether each edge is real or just a habit of ordering, and whether anything should merge or split. **Publish nothing before the user approves.**
 
+When small tickets have shared context but neither blocks the other, suggest a
+`related_to` chain for implementer affinity. Add it only after the user approves.
+
 ## 5. Publish
 
 **Ticket path** — nothing to create; fold the grill's answers into the spec it already has:

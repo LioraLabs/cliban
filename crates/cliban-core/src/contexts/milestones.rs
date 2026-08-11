@@ -307,6 +307,8 @@ pub struct Waves {
     /// this milestone. They cannot be scheduled by finishing the milestone's
     /// own waves.
     pub external_blocked: Vec<String>,
+    /// Advisory same-implementer groups from `related_to`; never scheduling edges.
+    pub chains: Vec<Vec<String>>,
 }
 
 /// Partition the milestone's open, non-archived issues into dependency waves
@@ -343,6 +345,47 @@ pub fn waves(conn: &Connection, project_key: &str, name: &str) -> Result<Waves> 
         .filter(|n| n.done)
         .map(|n| n.key.clone())
         .collect();
+
+    let mut related: HashMap<i64, Vec<i64>> = HashMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT from_issue_id, to_issue_id FROM issue_relation WHERE type = 'related_to'",
+        )?;
+        for edge in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))? {
+            let (a, b) = edge?;
+            if nodes.get(&a).is_some_and(|n| !n.done) && nodes.get(&b).is_some_and(|n| !n.done) {
+                related.entry(a).or_default().push(b);
+                related.entry(b).or_default().push(a);
+            }
+        }
+    }
+    let mut open: Vec<i64> = nodes
+        .iter()
+        .filter(|(_, n)| !n.done)
+        .map(|(id, _)| *id)
+        .collect();
+    open.sort_by(|a, b| nodes[a].key.cmp(&nodes[b].key));
+    let mut seen = HashSet::new();
+    let mut chains = Vec::new();
+    for id in open {
+        if !seen.insert(id) || !related.contains_key(&id) {
+            continue;
+        }
+        let mut stack = vec![id];
+        let mut chain = Vec::new();
+        while let Some(next) = stack.pop() {
+            chain.push(nodes[&next].key.clone());
+            for neighbor in related.get(&next).into_iter().flatten() {
+                if seen.insert(*neighbor) {
+                    stack.push(*neighbor);
+                }
+            }
+        }
+        chain.sort();
+        if chain.len() > 1 {
+            chains.push(chain);
+        }
+    }
 
     // Open blockers of every open node, split into edges inside the milestone
     // and gates from outside it.
@@ -455,5 +498,6 @@ pub fn waves(conn: &Connection, project_key: &str, name: &str) -> Result<Waves> 
         waves: waves_out,
         done: done_sorted,
         external_blocked: external_keys,
+        chains,
     })
 }
