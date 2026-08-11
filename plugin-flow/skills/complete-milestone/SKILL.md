@@ -102,9 +102,17 @@ The dispatcher accepts only strict ancestry: the tested ticket tree already cont
 
 The resulting squash has no ticket-side merge parent. Compare the agent's reported ready SHA with the SHA recorded by the dispatcher before integration; if they differ, a late commit exists and the ticket must be synced, verified, readied, and integrated again rather than copied in by hand.
 
-## 6. Sweep lessons, then finalize
+## 6. Accept the assembled milestone, sweep, then finalize
 
-When every issue is `done` and the milestone branch is green, sweep before the knowledge evaporates.
+When every issue is `done` and the milestone branch is green, fold any reported,
+milestone-relevant `## Spec` amendments into the milestone description. Then
+dispatch one fresh-context reviewer over the assembled milestone branch. Give it
+the milestone description (including out-of-scope decisions), the ticket specs,
+and the base and milestone-tip SHAs; ask it to verify the promised behavior in
+the code and tests and return `ACCEPT` or `REJECT` with terse findings. It must
+record that verdict first with `cliban milestone log`. Do not offer finalize until the reviewer passes.
+
+Then sweep before the knowledge evaporates.
 
 Each ticket already swept its own inside `complete-issue`, so what you add is what **no single ticket could see**: cross-ticket conflicts, hazards that fired during integration, invariants you enforced by hand. Skim project `## Notes` first and don't restate what's there.
 

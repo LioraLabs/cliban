@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # CLI-77 — review outcomes survive failed direct delivery.
+# CLI-92 — the assembled milestone gets its own durable acceptance gate.
 set -uo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -19,5 +20,10 @@ has "$issue" 'verdict is still in flight'
 has "$issue" 'via the orchestrator'
 has "$milestone" 'Stranded reviews are expected'
 has "$milestone" 'relay'
+has "$milestone" 'milestone-relevant `## Spec` amendments'
+has "$milestone" 'fresh-context reviewer'
+has "$milestone" 'assembled milestone branch'
+has "$milestone" 'cliban milestone log'
+has "$milestone" 'Do not offer finalize until the reviewer passes'
 
 exit "$failed"
