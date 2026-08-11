@@ -1497,9 +1497,12 @@ cmd_ticket_ready() {
         "Commit the ticket work: git -C \"$TICKET_WT\" commit"
 
     activity=$(cliban issue cat "$ISSUE_KEY" --section activity 2>/dev/null) || activity=""
-    printf '%s\n' "$activity" | grep -Eqi 'review.*SPEC.*QUALITY' || refuse_ticket "$ISSUE_KEY" \
-        "$ISSUE_KEY has no recorded review verdict" \
-        "Record it after review: cliban issue log $ISSUE_KEY \"<SPEC and QUALITY verdict>\""
+    if ! printf '%s\n' "$activity" | grep -Eqi 'review.*SPEC.*QUALITY' &&
+        ! printf '%s\n' "$activity" | grep -Eq ' — review waived by orchestrator: .+$'; then
+        refuse_ticket "$ISSUE_KEY" \
+            "$ISSUE_KEY has neither a review verdict nor an orchestrator waiver" \
+            "Record one: cliban issue log $ISSUE_KEY \"review waived by orchestrator: <reason>\""
+    fi
 
     local tip
     tip=$(full_sha "$ISSUE_BRANCH")

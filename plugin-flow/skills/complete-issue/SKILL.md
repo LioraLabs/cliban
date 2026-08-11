@@ -94,13 +94,17 @@ When implementation proves a spec claim wrong, amend `## Spec` and log why — n
 
 **Log the why**, not the what — `cliban issue log <KEY> "root cause was X"`, `"tried Y, fails because Z"`. cliban records what changed on its own; narration buries the signal.
 
-**At every `### Review Checkpoint`, run the gate** — [references/review.md](references/review.md) governs it. One fresh-context reviewer over the group's cumulative diff, both verdicts in one dispatch. Record `HEAD` at each gate; it seeds the next gate's `BASE_SHA`, and the branch base seeds the first. Any spec ❌ or Critical/Important finding: fix, then re-review the same checkpoint. Only Minor: accept and continue. Log the outcome either way — a gate that left no trace is indistinguishable from one that never ran.
+At each `### Review Checkpoint`, decide whether the cumulative diff needs the
+gate in [references/review.md](references/review.md). When review runs, its
+verdict, response, and durable log requirements are unchanged.
 
 **Discovered scope gets promoted, never absorbed** — `cliban issue promote <KEY> --task N --step M --as sub-issue`, or a new issue with `--blocked-by <KEY>`. When a promoted child reaches `done`, tick the referencing step here; cliban doesn't mirror that for you.
 
 ## 6. The final gate
 
-Run the cumulative review defined by [references/review.md](references/review.md), *The final gate*.
+Decide whether to run the cumulative review defined by
+[references/review.md](references/review.md), *The final gate*. In dispatched
+mode the orchestrator makes that decision; either side may request review.
 
 Then build, typecheck, lint, and run the **full** suite. Per-task verification proves each task; only this proves the ticket. A failure here is unfinished work, not a finishing step.
 
@@ -110,13 +114,15 @@ Commit everything first, then:
 
 **Standalone** — move the ticket to where the work actually is, then hand the branch over; merge/PR/discard is the user's call.
 
+The standalone handoff may use the dispatched vocabulary below without an orchestrator waiver.
+
 ```bash
 cliban issue mv <KEY> in-review --note "PR <url>"
 cliban issue mv <KEY> done --note "merged as <sha>"
 cliban linear push <KEY> || true      # only if the ticket came from Linear
 ```
 
-**Dispatched** — after the final commit, run `cliban-flow ticket sync <KEY>`. If it exits 1, resolve the conflicts in your ticket worktree, log why each resolution is correct, and commit the resolution. When a resolution changes behavior rather than mechanically combining both sides, run one focused fresh-context review over the resolution diff and fix any spec failure or serious finding before continuing.
+**Dispatched** — after the final commit, send the orchestrator `confidence: high | medium | low`, `review: skip | run`, one-line evidence, and merge risk; use no numeric score. Wait for its review decision and durable verdict or waiver, then run `cliban-flow ticket sync <KEY>`. If it exits 1, resolve the conflicts in your ticket worktree, log why each resolution is correct, and commit the resolution. When a resolution changes behavior rather than mechanically combining both sides, request one focused fresh-context review over the resolution diff and fix any spec failure or serious finding before continuing.
 
 Run the focused and full verification again on the synced tree, then run `cliban-flow ticket ready <KEY>`. Only its exit 0 signals the orchestrator; a chat report alone does not. Report the immutable SHA printed by `ticket ready`, branch, test status, one-line summary, **any amendment you made to `## Spec`**, and merge-risk notes. Never commit after `ticket ready`; if anything changes, sync, verify, and ready again. The orchestrator integrates and moves the ticket to `done`.
 

@@ -117,5 +117,5 @@ what a per-checkpoint view structurally cannot see:
 - Dead code, orphaned helpers, abandoned intermediate states
 - Scope that grew past what the ticket asked for, accumulated a slice at a time
 
-On a plan with no checkpoint markers, this **is** the only gate, and it is not
-optional.
+When final review is chosen, it covers the whole ticket even if the plan has no
+checkpoint markers.

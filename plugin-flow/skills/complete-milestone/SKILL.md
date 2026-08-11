@@ -75,6 +75,12 @@ The brief:
 
 Never pre-plan a ticket for its agent. The agent runs plan and execute itself; that's where the per-ticket review checkpoints live.
 
+Before ready, the implementer sends confidence, a skip/run recommendation,
+one-line evidence, and merge risk. Either side may request review; the
+orchestrator makes the final decision at every confidence level. If it skips,
+record `review waived by orchestrator: <reason>` on the ticket so ready can
+proceed. Confidence informs but never binds this decision.
+
 ## 4. Sweep running work
 
 Periodically run a cheap, read-only liveness sweep over running and dead agents:
@@ -114,6 +120,9 @@ The dispatcher accepts only strict ancestry: the tested ticket tree already cont
 The resulting squash has no ticket-side merge parent. Compare the agent's reported ready SHA with the SHA recorded by the dispatcher before integration; if they differ, a late commit exists and the ticket must be synced, verified, readied, and integrated again rather than copied in by hand.
 
 ## 6. Accept the assembled milestone, sweep, then finalize
+
+The fresh assembled milestone review remains mandatory regardless of per-ticket
+waivers.
 
 When every issue is `done` and the milestone branch is green, fold any reported,
 milestone-relevant `## Spec` amendments into the milestone description. Then

@@ -70,6 +70,22 @@ assert_stderr_has "cliban issue log $key" "review refusal names the repair"
 
 fixture_new
 fixture_milestone_worktree
+key=$(new_issue "Malformed review waiver")
+branch=$(branch_of "$key")
+fixture_ticket_worktree "$branch"
+commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt work
+cb issue edit "$key" --section plan --create-section --description-file - >/dev/null <<'EOF'
+### Task 1: fixture
+
+- [x] **Step 1: exercised**
+EOF
+cb issue log "$key" "review waived by orchestrator:" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "ready refuses a waiver without a reason"
+assert_stderr_has "review waived by orchestrator: <reason>" "waiver refusal prints the exact next record"
+
+fixture_new
+fixture_milestone_worktree
 key=$(new_issue "Already done")
 branch=$(branch_of "$key")
 fixture_ticket_worktree "$branch"
@@ -89,13 +105,18 @@ branch=$(branch_of "$key")
 fixture_ticket_worktree "$branch"
 commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt "the ticket's work"
 cb issue mv "$key" in-progress >/dev/null
-ready_evidence "$key"
+cb issue edit "$key" --section plan --create-section --description-file - >/dev/null <<'EOF'
+### Task 1: fixture
+
+- [x] **Step 1: exercised**
+EOF
+cb issue log "$key" "review waived by orchestrator: narrow, well-covered change" >/dev/null
 tip=$(gitf rev-parse "$branch")
 tsha=$(gitf rev-parse --short "$branch")
 msha=$(gitf rev-parse --short milestone/test-milestone)
 
 run_flow ticket ready "$key"
-assert_status 0 "a synced branch in a clean tree is ready"
+assert_status 0 "an exact orchestrator waiver makes a synced branch ready"
 assert_stdout_is "$tip" "the tip, alone, is on stdout"
 assert_eq "$(status_of "$key")" "in-review" "the ticket moved to in-review"
 assert_timeline_has "$key" "in-progress → in-review" "the move is on the timeline"
