@@ -132,7 +132,7 @@ Wave tickets are written against the *same* base in parallel, so they collide on
 
 **2. Agents commit after they report.** An agent, or a subagent it spawned, can land a commit after `ticket ready`. Squash creates no ticket-side parent to inspect later, so the ready SHA is the immutable handoff: compare it before integration, and make any changed branch repeat sync, verification, and ready.
 
-**3. Serialized shared sequences** (changelog IDs, version files, shared enums, registries). Every agent mints against the *stale* base, so they collide on merge. Pre-assigning reserved IDs helps but merge order still wins — the orchestrator owns the sequence and renumbers at integration, in order, gapless. Tell agents not to bump a shared version file at all; the milestone is one unreleased version until finalize.
+**3. Serialized shared sequences** (changelog IDs, shared enums, registries). Merge order decides their final order, so put any renumbering through a dispatched ticket and its normal verification gate. Tell agents not to bump a shared version file; the milestone is one unreleased version until finalize.
 
 Test-to-ticket citations are *not* such a sequence: each agent's key was allocated when its ticket was created, so siblings cite different keys by construction.
 

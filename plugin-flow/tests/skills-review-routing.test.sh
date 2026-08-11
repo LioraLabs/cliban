@@ -20,6 +20,7 @@ has "$issue" 'verdict is still in flight'
 has "$issue" 'via the orchestrator'
 has "$milestone" 'Stranded reviews are expected'
 has "$milestone" 'relay'
+# shellcheck disable=SC2016
 has "$milestone" 'milestone-relevant `## Spec` amendments'
 has "$milestone" 'fresh-context reviewer'
 has "$milestone" 'assembled milestone branch'

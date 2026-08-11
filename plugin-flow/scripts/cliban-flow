@@ -505,6 +505,23 @@ load_milestone() {
     done <<<"$names"
 }
 
+unsettled_milestone_issues() {
+    local rows candidates key title activity unsettled=""
+    rows=$(cliban issue ls -p "$PROJECT" -m "$MILESTONE_NAME" --full --archived --json 2>/dev/null) || return 1
+    candidates=$(printf '%s' "$rows" | python3 -c 'import json, sys
+for line in sys.stdin:
+    issue = json.loads(line)
+    if issue["status"] != "done" and not issue["archived"]:
+        print(f"{issue['"'"'key'"'"']}\x1f{issue['"'"'title'"'"']}")') || return 1
+    while IFS=$'\x1f' read -r key title; do
+        [ -n "$key" ] || continue
+        activity=$(cliban issue cat "$key" --section activity 2>/dev/null) || activity=""
+        printf '%s' "$activity" | grep -qF 'work discarded:' && continue
+        unsettled="${unsettled:+$unsettled, }$key: $title"
+    done <<<"$candidates"
+    printf '%s' "$unsettled"
+}
+
 # parse_project_option — strips --project/-p out of a subcommand's arguments and
 # leaves the rest in ARGS_REST. Only milestone-scoped subcommands call it.
 ARGS_REST=()
@@ -1010,6 +1027,14 @@ cmd_milestone_finish() {
     require_project
     load_milestone "$name"
 
+    local unsettled
+    unsettled=$(unsettled_milestone_issues) || refuse_milestone "$MILESTONE_NAME" \
+        "could not list the issues in milestone \"$MILESTONE_NAME\"" \
+        "The board must be readable before main can move. Retry the command."
+    [ -z "$unsettled" ] || refuse_milestone "$MILESTONE_NAME" \
+        "milestone \"$MILESTONE_NAME\" still has unsettled issues: $unsettled" \
+        "Finish or explicitly discard them, then retry."
+
     have_branch main || refuse_milestone "$MILESTONE_NAME" \
         "the local main branch does not exist" \
         "This command only fast-forwards main; restore or create the intended main first."
@@ -1021,7 +1046,16 @@ cmd_milestone_finish() {
         "Merge main into $MILESTONE_BRANCH via a dispatched agent in the milestone" \
         "worktree, resolve and verify there, then retry. The orchestrator must not resolve it."
 
-    local primary head tip
+    local tip verified_tip
+    tip=$(full_sha "$MILESTONE_BRANCH")
+    if [ "$tip" != "$(full_sha main)" ]; then
+        verified_tip=$(gitr log -1 --format=%H --grep='^Ticket: ' "refs/heads/$MILESTONE_BRANCH")
+        [ "$tip" = "$verified_tip" ] || refuse_milestone "$MILESTONE_NAME" \
+            "$MILESTONE_BRANCH@$tip differs from the last verified ticket integration ${verified_tip:-none}" \
+            "Put the shared change through a dispatched ticket, then sync, verify, ready, and integrate it."
+    fi
+
+    local primary head
     primary=$(primary_worktree) || refuse \
         "could not read this repository's worktree list" "git's own error is above."
     head=$(worktree_head "$primary") || refuse \
@@ -1033,7 +1067,6 @@ cmd_milestone_finish() {
         "the primary checkout $primary has uncommitted changes" \
         "Commit or stash them before fast-forwarding main."
 
-    tip=$(full_sha "$MILESTONE_BRANCH")
     announce "fast-forwarding main to $MILESTONE_BRANCH@$tip"
     git -C "$primary" merge --ff-only "refs/heads/$MILESTONE_BRANCH" >&2 || refuse_milestone "$MILESTONE_NAME" \
         "git could not fast-forward main to $MILESTONE_BRANCH" \
