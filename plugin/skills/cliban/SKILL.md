@@ -122,6 +122,8 @@ The bodies are the payload: `ls` to find keys, `show` to read one entity,
 ## The non-obvious reads
 
 ```bash
+cliban issue ls                            # per-milestone open-status counts
+cliban issue ls --all                      # every issue row, including done/archived
 cliban issue ls --ready                    # takeable: backlog, unblocked, unclaimed — composes with every filter
 cliban issue ls --blocked                  # at least one open blocker
 cliban issue ls --search "ordering"        # fuzzy across title/key/labels/description; adds score

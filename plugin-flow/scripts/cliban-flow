@@ -809,7 +809,7 @@ for line in git("worktree", "list", "--porcelain").stdout.splitlines():
         path = None
 
 issues = [json.loads(line) for line in cliban(
-    "issue", "ls", "-p", project, "-m", name, "--full", "--json"
+    "issue", "ls", "-p", project, "-m", name, "--all", "--full", "--json"
 ).splitlines() if line]
 waves = json.loads(cliban("milestone", "waves", name, "-p", project, "--json"))
 

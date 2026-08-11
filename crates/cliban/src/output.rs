@@ -379,6 +379,14 @@ pub struct IssueRow {
     pub parent: String,
 }
 
+pub struct IssueSummaryRow {
+    pub milestone: Option<String>,
+    pub backlog: usize,
+    pub in_progress: usize,
+    pub blocked: usize,
+    pub in_review: usize,
+}
+
 pub struct SearchRow {
     pub score: i64,
     pub key: String,
@@ -458,6 +466,26 @@ pub fn write_issue_table(rows: &[IssueRow]) -> String {
             dash(&r.parent),
         ]);
     }
+    render_tabwriter(&grid)
+}
+
+pub fn write_issue_summary_table(rows: &[IssueSummaryRow]) -> String {
+    let mut grid = vec![vec![
+        "MILESTONE".into(),
+        "BACKLOG".into(),
+        "IN-PROGRESS".into(),
+        "BLOCKED".into(),
+        "IN-REVIEW".into(),
+    ]];
+    grid.extend(rows.iter().map(|r| {
+        vec![
+            r.milestone.clone().unwrap_or_else(|| "-".into()),
+            r.backlog.to_string(),
+            r.in_progress.to_string(),
+            r.blocked.to_string(),
+            r.in_review.to_string(),
+        ]
+    }));
     render_tabwriter(&grid)
 }
 

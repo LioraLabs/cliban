@@ -24,7 +24,7 @@ cliban issue cat <KEY> --section spec
 
 Given neither a name nor a key, ask. If the user wants to scope from a conversation with nothing on the board yet, that's `explore-feature` — offer it rather than improvising a container.
 
-Then read the surroundings: `issue ls --json` for collisions, `project search <KEY> "<terms>" --json` for lessons that constrain the design.
+Then read the surroundings: `issue ls --all --json` for collisions, `project search <KEY> "<terms>" --json` for lessons that constrain the design.
 
 ## 2. Grill toward the slice boundaries
 

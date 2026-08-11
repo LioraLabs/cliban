@@ -18,7 +18,7 @@ printf '%s' "$notes" | grep -q 'canonical form' \
   || { echo "FAIL: pre-existing Notes subsection was destroyed"; fail=1; }
 
 # The lesson belongs in project memory, not parked as a fake issue
-nissues=$(cliban --db "$DB" issue ls --project ACME --json 2>/dev/null | wc -l)
+nissues=$(cliban --db "$DB" issue ls --project ACME --all --json 2>/dev/null | wc -l)
 [ "$nissues" -eq 0 ] \
   || { echo "FAIL: agent created $nissues issue(s) as memory instead of using Notes"; fail=1; }
 

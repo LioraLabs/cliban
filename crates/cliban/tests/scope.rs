@@ -77,16 +77,24 @@ fn env_scope_is_the_default_project_and_is_upcased() {
     let echo = ok_scoped(&db, Some("aa"), &["issue", "add", "scoped", "--json"]);
     assert!(echo.contains(r#""key":"AA-2""#), "got {echo}");
     // Reads are scoped the same way.
-    let rows = ok_scoped(&db, Some("AA"), &["issue", "ls", "--json"]);
+    let rows = ok_scoped(&db, Some("AA"), &["issue", "ls", "--all", "--json"]);
     assert!(rows.lines().all(|l| l.contains(r#""key":"AA-"#)), "{rows}");
 }
 
 #[test]
 fn explicit_flag_beats_the_env_and_star_widens() {
     let db = seeded("beats");
-    let rows = ok_scoped(&db, Some("AA"), &["issue", "ls", "-p", "BB", "--json"]);
+    let rows = ok_scoped(
+        &db,
+        Some("AA"),
+        &["issue", "ls", "-p", "BB", "--all", "--json"],
+    );
     assert!(rows.lines().all(|l| l.contains(r#""key":"BB-"#)), "{rows}");
-    let all = ok_scoped(&db, Some("AA"), &["issue", "ls", "-p", "*", "--json"]);
+    let all = ok_scoped(
+        &db,
+        Some("AA"),
+        &["issue", "ls", "-p", "*", "--all", "--json"],
+    );
     assert!(
         all.contains(r#""key":"AA-1""#) && all.contains(r#""key":"BB-1""#),
         "-p '*' must span every project: {all}"
@@ -127,7 +135,11 @@ fn scope_fills_project_identity_on_reads_but_not_structural_writes() {
     // Reads and memory appends: the ambient scope stands in for the KEY.
     let cat = ok_scoped(&db, Some("AA"), &["project", "cat"]);
     assert!(cat.contains("a lesson"), "{cat}");
-    let noted = ok_scoped(&db, Some("AA"), &["project", "note", "add", "scoped lesson"]);
+    let noted = ok_scoped(
+        &db,
+        Some("AA"),
+        &["project", "note", "add", "scoped lesson"],
+    );
     let _ = noted;
     let found = ok_scoped(&db, Some("AA"), &["project", "search", "scoped"]);
     assert!(found.contains("scoped lesson"), "{found}");

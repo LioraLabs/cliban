@@ -16,7 +16,8 @@ use crate::descmd;
 use crate::descmd::find_section;
 use crate::errors::{CliError, CliResult};
 use crate::output::{
-    build_issue_json, write_issue_table, Detail, IssueJsonInputs, IssueRow, Mode, RelationOut,
+    build_issue_json, write_issue_summary_table, write_issue_table, Detail, IssueJsonInputs,
+    IssueRow, IssueSummaryRow, Mode, RelationOut,
 };
 use crate::store_open;
 
@@ -197,6 +198,9 @@ pub struct LsArgs {
     /// include archived issues
     #[arg(long)]
     archived: bool,
+    /// include every issue, including done and archived
+    #[arg(long)]
+    all: bool,
     /// only issues updated since: 4h, 3d, 2w, today, yesterday, 2026-07-25, or RFC3339
     #[arg(long = "updated-since")]
     updated_since: Option<String>,
@@ -1148,6 +1152,21 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
 
     let store = store_open::open(db).await?;
 
+    let summary = a.status.is_none()
+        && !a.full
+        && a.priority.is_none()
+        && a.milestone.is_none()
+        && a.parent.is_none()
+        && a.sort.is_none()
+        && a.label.is_empty()
+        && !a.no_subs
+        && !a.archived
+        && !a.all
+        && a.updated_since.is_none()
+        && !a.ready
+        && !a.blocked
+        && a.limit == 0;
+
     // Core list handles project/status/milestone, but its `archived` flag is an
     // exact match (archived = this). `--archived` means *include* archived:
     // unset → only non-archived; set → both. So when set we fetch both and
@@ -1155,7 +1174,7 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
     let list_project = project.clone();
     let list_status = status.clone();
     let list_milestone = a.milestone.clone().filter(|m| !m.is_empty());
-    let include_archived = a.archived;
+    let include_archived = a.archived || a.all;
     let mut issues = store
         .call(move |conn| {
             let mut out = issues::list(
@@ -1182,6 +1201,13 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
             Ok(out)
         })
         .await?;
+
+    if status.is_none() && !a.all {
+        issues.retain(|i| i.status != "done");
+    }
+    if summary {
+        return write_issue_summary(&store, &issues, crate::output::mode(a.json, a.table)).await;
+    }
 
     // These filters apply after the fetch; the result set is the same as
     // filtering in the query.
@@ -1273,6 +1299,56 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
     Ok(())
 }
 
+async fn write_issue_summary(store: &Store, issues: &[Issue], mode: Mode) -> CliResult<()> {
+    let mut rows: std::collections::BTreeMap<(bool, String), IssueSummaryRow> =
+        std::collections::BTreeMap::new();
+    for issue in issues {
+        let (name, _) = resolve_refs(store, issue).await?;
+        let key = (name.is_empty(), name.clone());
+        let row = rows.entry(key).or_insert_with(|| IssueSummaryRow {
+            milestone: (!name.is_empty()).then_some(name),
+            backlog: 0,
+            in_progress: 0,
+            blocked: 0,
+            in_review: 0,
+        });
+        match issue.status.as_str() {
+            "backlog" => row.backlog += 1,
+            "in-progress" => row.in_progress += 1,
+            "blocked" => row.blocked += 1,
+            "in-review" => row.in_review += 1,
+            _ => {}
+        }
+    }
+    let rows: Vec<_> = rows.into_values().collect();
+    if mode.is_json() {
+        for row in rows {
+            let mut value = serde_json::Map::new();
+            if row.backlog > 0 {
+                value.insert("backlog".into(), serde_json::json!(row.backlog));
+            }
+            if row.blocked > 0 {
+                value.insert("blocked".into(), serde_json::json!(row.blocked));
+            }
+            if row.in_progress > 0 {
+                value.insert("in_progress".into(), serde_json::json!(row.in_progress));
+            }
+            if row.in_review > 0 {
+                value.insert("in_review".into(), serde_json::json!(row.in_review));
+            }
+            value.insert(
+                "milestone".into(),
+                row.milestone
+                    .map_or(serde_json::Value::Null, serde_json::Value::String),
+            );
+            println!("{}", serde_json::Value::Object(value));
+        }
+    } else {
+        print!("{}", write_issue_summary_table(&rows));
+    }
+    Ok(())
+}
+
 /// `issue ls --search` branch: default limit 50
 /// (the `--limit` flag overrides; 0 → 50), NDJSON rows carry a `score` field,
 /// human output uses the search table with a leading SCORE column.
@@ -1287,11 +1363,14 @@ async fn run_search(db: &Option<String>, a: &LsArgs, query: String) -> CliResult
         status: a.status.clone(),
         priority: a.priority.map(|p| p.as_str().to_string()),
         parent: a.parent.clone(),
-        include_archived: a.archived,
+        include_archived: a.archived || a.all,
         exclude_subs: a.no_subs,
         limit: effective_limit,
     };
-    let matches = crate::search::search(&store, opts).await?;
+    let mut matches = crate::search::search(&store, opts).await?;
+    if a.status.is_none() && !a.all {
+        matches.retain(|m| m.issue.status != "done");
+    }
 
     if crate::output::mode(a.json, a.table).is_json() {
         for m in &matches {

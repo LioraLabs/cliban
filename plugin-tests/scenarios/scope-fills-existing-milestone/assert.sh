@@ -8,7 +8,7 @@ ms=$(cliban --db "$DB" milestone ls --project ACME --json | wc -l)
 n=$(cliban --db "$DB" issue ls --project ACME --milestone "widget caching" --json | wc -l)
 [ "$n" -ge 2 ] || { echo "FAIL: expected >=2 tickets on the milestone, got $n"; fail=1; }
 
-orphans=$(cliban --db "$DB" issue ls --project ACME --json | jq -r 'select(.milestone == null) | .key' | wc -l)
+orphans=$(cliban --db "$DB" issue ls --project ACME --all --json | jq -r 'select(.milestone == null) | .key' | wc -l)
 [ "$orphans" -eq 0 ] || { echo "FAIL: $orphans ticket(s) published outside the milestone"; fail=1; }
 
 # Edges must be real relations, not prose.

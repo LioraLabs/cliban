@@ -2,7 +2,7 @@
 set -u
 DB="$1"; fail=0
 
-key=$(cliban --db "$DB" issue ls --project ACME --json | jq -r '.key' | head -1)
+key=$(cliban --db "$DB" issue ls --project ACME --all --json | jq -r '.key' | head -1)
 [ -n "$key" ] || { echo "FAIL: no issue on the board"; exit 1; }
 
 desc=$(cliban --db "$DB" issue show "$key" --json | jq -r '.description // ""')
