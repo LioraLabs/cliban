@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # CLI-83 — the workflow skills use the dispatcher as their only git protocol.
+# CLI-93 — sanctioned teardown stays on that same surface.
 set -uo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -18,7 +19,7 @@ has "$manifest" '"version": "0.3.0"'
 has "$manifest" 'recover interrupted milestones'
 
 has "$workflow" 'plugin-flow/scripts/cliban-flow'
-for command in 'milestone start' 'milestone finish' 'ticket start' 'ticket status' 'ticket sync' 'ticket ready' 'ticket integrate'; do
+for command in 'milestone start' 'milestone finish' 'milestone abandon' 'ticket start' 'ticket status' 'ticket sync' 'ticket ready' 'ticket integrate' 'ticket abandon'; do
     has "$workflow" "\`$command\`"
 done
 has "$workflow" 'Dispatched ticket ready for integration'
@@ -33,6 +34,7 @@ has "$milestone" 'milestone start "<milestone name>"'
 has "$milestone" 'ticket start <KEY>'
 has "$milestone" 'ticket integrate <KEY>'
 has "$milestone" 'milestone finish "<milestone name>"'
+has "$milestone" 'milestone abandon "<milestone name>"'
 has "$milestone" 'own worktree'
 has "$milestone" 'strict ancestry'
 has "$milestone" 'squash'
@@ -53,5 +55,6 @@ has "$recovery" 'one worktree at a time'
 has "$workflow" 'recover-milestone'
 has "$recovery" 'Do not execute repairs'
 has "$recovery" 'Never run builds or tests during recovery'
+has "$recovery" 'ticket abandon <KEY>'
 
 exit "$failed"

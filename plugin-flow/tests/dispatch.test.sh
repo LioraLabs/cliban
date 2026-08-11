@@ -20,10 +20,12 @@ assert_out_has "milestone start" "help lists milestone start"
 assert_out_has "milestone finish" "help lists milestone finish"
 # CLI-84 — the recovery survey is part of the advertised dispatcher surface.
 assert_out_has "milestone status" "help lists milestone status"
+assert_out_has "milestone abandon" "help lists milestone abandon"
 assert_out_has "ticket start" "help lists ticket start"
 assert_out_has "ticket sync" "help lists ticket sync"
 assert_out_has "ticket ready" "help lists ticket ready"
 assert_out_has "ticket integrate" "help lists ticket integrate"
+assert_out_has "ticket abandon" "help lists ticket abandon"
 
 run_flow --help
 assert_status 0 "--help is the same as help"
@@ -44,6 +46,9 @@ assert_status 2 "ticket status with no key is refused"
 
 run_flow ticket integrate
 assert_status 2 "ticket integrate with no key is refused"
+
+run_flow ticket abandon
+assert_status 2 "ticket abandon with no key is refused"
 
 # CLI-80 — the milestone group, and the option parsing only it has.
 #
@@ -68,6 +73,9 @@ assert_status 2 "milestone finish with no name is refused"
 
 run_flow milestone status
 assert_status 2 "milestone status with no name is refused"
+
+run_flow milestone abandon
+assert_status 2 "milestone abandon with no name is refused"
 
 run_flow milestone start "Test milestone" "Another milestone" -p FLOW
 assert_status 2 "milestone start with two names is refused"

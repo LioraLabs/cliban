@@ -130,6 +130,9 @@ usage: cliban-flow <group> <command> [args]
                         Read-only recovery survey of the board, milestone,
                         ticket branches and their registered worktrees.
 
+  milestone abandon <NAME> [-p KEY] --confirm <REASON>
+                        Release its tickets and discard clean milestone work.
+
   ticket start <KEY>    Create <KEY>'s branch off the current milestone tip and
                         check it out in a worktree under the milestone
                         worktree. Prints the worktree path.
@@ -148,6 +151,9 @@ usage: cliban-flow <group> <command> [args]
   ticket integrate <KEY> [--dry-run]
                         Squash a ready ticket onto its milestone branch, mark it
                         done, and remove its worktree. Dry-run only reports.
+
+  ticket abandon <KEY> --confirm <REASON>
+                        Release the claim and discard clean ticket work.
 
 Both start subcommands are idempotent: a second run reports what is already
 there rather than recreating it.
@@ -704,6 +710,10 @@ milestone_dispatch() {
             ACTION="milestone status"
             cmd_milestone_status "$@"
             ;;
+        abandon)
+            ACTION="milestone abandon"
+            cmd_milestone_abandon "$@"
+            ;;
         '') usage_error "milestone needs a command" ;;
         *) usage_error "unknown milestone command: $command" ;;
     esac
@@ -732,6 +742,10 @@ ticket_dispatch() {
         integrate)
             ACTION="ticket integrate"
             cmd_ticket_integrate "$@"
+            ;;
+        abandon)
+            ACTION="ticket abandon"
+            cmd_ticket_abandon "$@"
             ;;
         '') usage_error "ticket needs a command" ;;
         *) usage_error "unknown ticket command: $command" ;;
@@ -1597,6 +1611,123 @@ $subjects" -m "Ticket: $ISSUE_KEY" >&2 || refuse_ticket "$ISSUE_KEY" \
         "The squash and board move succeeded. Remove only that worktree manually."
     board_record "$ISSUE_KEY" "integrated ($ISSUE_BRANCH@$ttip as $squash_sha on $mbranch; branch retained)"
     say "$squash_sha"
+}
+
+# abandon_ticket <reason> — discard only clean git state; always release the
+# board claim and record why. load_issue must have populated ISSUE_* first.
+abandon_ticket() {
+    local reason=$1 wt primary expected retained=""
+    primary=$(primary_worktree) || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    wt=$(worktree_for_branch "$ISSUE_BRANCH") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+
+    if [ -n "$wt" ]; then
+        if [ "$wt" = "$primary" ]; then
+            retained="branch and primary worktree retained"
+        elif worktree_missing "$wt"; then
+            retained="missing worktree registration and branch retained"
+        elif [ -z "$ISSUE_MILESTONE" ]; then
+            retained="unscoped worktree and branch retained"
+        elif expected="$primary-${ISSUE_MILESTONE:+$(slugify "$ISSUE_MILESTONE")}/.worktrees/$ISSUE_BRANCH" && [ "$wt" != "$expected" ]; then
+            retained="foreign worktree and branch retained"
+        elif worktree_dirty "$wt"; then
+            retained="dirty worktree and branch retained"
+        else
+            announce "removing abandoned ticket worktree $wt"
+            gitr worktree remove "$wt" >&2 || retained="worktree and branch retained after git refused removal"
+        fi
+    fi
+
+    wt=$(worktree_for_branch "$ISSUE_BRANCH") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    if [ -z "$wt" ] && have_branch "$ISSUE_BRANCH"; then
+        announce "deleting abandoned ticket branch $ISSUE_BRANCH"
+        gitr branch -D "$ISSUE_BRANCH" >&2 || retained="branch retained after git refused deletion"
+    fi
+
+    cliban issue log "$ISSUE_KEY" "work discarded: $reason${retained:+; $retained}" >/dev/null || refuse_ticket "$ISSUE_KEY" \
+        "could not record why $ISSUE_KEY was abandoned" \
+        "The git cleanup may already be complete; retry to release the claim."
+    cliban issue release "$ISSUE_KEY" >/dev/null || refuse_ticket "$ISSUE_KEY" \
+        "could not release $ISSUE_KEY's claim" \
+        "The discard is recorded; retry the command to release the claim."
+    board_record "$ISSUE_KEY" "abandoned ($reason${retained:+; $retained})"
+}
+
+cmd_ticket_abandon() {
+    local key=${1:-} reason=""
+    [ -n "$key" ] || usage_error "ticket abandon needs an issue key"
+    shift
+    [ "${1:-}" = --confirm ] || usage_error "ticket abandon needs --confirm <reason>"
+    reason=${2:-}
+    [ -n "$reason" ] || usage_error "ticket abandon needs --confirm <reason>"
+    [ $# -eq 2 ] || usage_error "ticket abandon takes one issue key and --confirm <reason>"
+    require_repo
+    load_issue "$key"
+    abandon_ticket "$reason"
+    say "${retained:-abandoned}"
+}
+
+cmd_milestone_abandon() {
+    local name="" reason="" arg keys key mwt primary expected retained=""
+    while [ $# -gt 0 ]; do
+        arg=$1
+        case $arg in
+            -p | --project)
+                [ $# -ge 2 ] || usage_error "$arg needs a project key"
+                FLOW_PROJECT=$2; shift 2 ;;
+            --project=*) FLOW_PROJECT=${arg#--project=}; shift ;;
+            --confirm)
+                [ $# -ge 2 ] || usage_error "milestone abandon needs --confirm <reason>"
+                reason=$2; shift 2 ;;
+            -*) usage_error "unknown option: $arg" ;;
+            *)
+                [ -z "$name" ] || usage_error "milestone abandon takes one milestone name"
+                name=$arg; shift ;;
+        esac
+    done
+    [ -n "$name" ] || usage_error "milestone abandon needs a milestone name"
+    [ -n "$reason" ] || usage_error "milestone abandon needs --confirm <reason>"
+    require_repo
+    require_project
+    load_milestone "$name"
+
+    keys=$(cliban issue ls -p "$PROJECT" -m "$MILESTONE_NAME" --json | json_lines_field key) ||
+        refuse_milestone "$MILESTONE_NAME" "could not list milestone tickets" \
+            "No teardown ran; retry when the board is readable."
+    while IFS= read -r key; do
+        [ -n "$key" ] || continue
+        load_issue "$key"
+        abandon_ticket "$reason"
+    done <<<"$keys"
+
+    primary=$(primary_worktree) || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    mwt=$(worktree_for_branch "$MILESTONE_BRANCH") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    if [ -n "$mwt" ]; then
+        if [ "$mwt" = "$primary" ]; then
+            retained="milestone branch and primary worktree retained"
+        elif worktree_missing "$mwt"; then
+            retained="missing milestone worktree registration and branch retained"
+        elif expected="$primary-${MILESTONE_BRANCH#milestone/}" && [ "$mwt" != "$expected" ]; then
+            retained="foreign milestone worktree and branch retained"
+        elif worktree_dirty "$mwt"; then
+            retained="dirty milestone worktree and branch retained"
+        else
+            announce "removing abandoned milestone worktree $mwt"
+            gitr worktree remove "$mwt" >&2 || retained="milestone worktree and branch retained after git refused removal"
+        fi
+    fi
+    mwt=$(worktree_for_branch "$MILESTONE_BRANCH") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    if [ -z "$mwt" ] && have_branch "$MILESTONE_BRANCH"; then
+        announce "deleting abandoned milestone branch $MILESTONE_BRANCH"
+        gitr branch -D "$MILESTONE_BRANCH" >&2 || retained="milestone branch retained after git refused deletion"
+    fi
+    board_record_milestone "$MILESTONE_NAME" "abandoned ($reason${retained:+; $retained})"
+    say "${retained:-abandoned}"
 }
 
 main "$@"

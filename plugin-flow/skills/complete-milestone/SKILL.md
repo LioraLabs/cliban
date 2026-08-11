@@ -124,6 +124,8 @@ Then **stop** and hand off, presenting finish/PR/discard against `main`. Landing
 cliban-flow milestone finish "<milestone name>" --project <KEY>
 ```
 
+If the human chooses discard instead, run `cliban-flow milestone abandon "<milestone name>" --project <KEY> --confirm "<why>"`.
+
 ## Parallel-integration hazards
 
 Wave tickets are written against the *same* base in parallel, so they collide on whatever is shared. The orchestrator is the serialization point for every shared resource — and the conflicts that matter most are the ones git does **not** mark.

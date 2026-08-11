@@ -27,7 +27,7 @@ If the user is wiring up a new repo, point them at `setup-cliban`; don't improvi
 
 The workflow's git-and-board transitions live in `plugin-flow/scripts/cliban-flow`. The workflow skills abbreviate that executable as `cliban-flow`; before using either workflow, resolve it at that location. If it is absent or not executable, stop and say so. There is no fallback: enforcing this protocol only when convenient is the failure the dispatcher removes.
 
-Its surface is `milestone start`, `milestone status`, `milestone finish`, `ticket start`, `ticket status`, `ticket sync`, `ticket ready`, and `ticket integrate`. Invoke the subcommand instead of describing or recreating the git operation it owns. Exit 0 is success or an affirmative verdict, exit 1 is a legitimate negative verdict with its next step, and exit 2 is a refusal whose instruction must be followed before retrying.
+Its surface is `milestone start`, `milestone status`, `milestone finish`, `milestone abandon`, `ticket start`, `ticket status`, `ticket sync`, `ticket ready`, `ticket integrate`, and `ticket abandon`. Invoke the subcommand instead of describing or recreating the git operation it owns. Exit 0 is success or an affirmative verdict, exit 1 is a legitimate negative verdict with its next step, and exit 2 is a refusal whose instruction must be followed before retrying.
 
 ## Status Mapping
 
@@ -39,7 +39,8 @@ Its surface is `milestone start`, `milestone status`, `milestone finish`, `ticke
 | PR opened | `mv KEY in-review --note "PR <url>"` |
 | Dispatched ticket ready for integration | `ticket ready KEY` moves it to `in-review` |
 | PR merged / local merge | `mv KEY done --note "merged as <sha>"` |
-| Discarded / abandoned | keep status, `issue log KEY "work discarded: <why>"` |
+| Ticket abandoned with human confirmation | `ticket abandon KEY --confirm "<why>"`; keep status, log why, release claim |
+| Milestone abandoned with human confirmation | `milestone abandon NAME -p PROJECT --confirm "<why>"`; apply the ticket rule to every issue |
 
 Move the ticket when the work moves, in the same breath — a board that lags reality is worse than no board. Linear-linked issues additionally get `cliban linear push KEY` after the `in-review` and `done` moves (linkage detection and field ownership: `cliban` skill, Linear bridge section).
 

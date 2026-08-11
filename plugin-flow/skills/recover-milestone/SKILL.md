@@ -22,9 +22,9 @@ verification belongs to a respawned ticket agent.
 - **Nearly finished:** commits ahead, a clean worktree, no merge, and completed
   plan steps. Respawn the agent in the existing worktree; it verifies and uses
   `ticket status <KEY>`, `ticket sync <KEY>`, then `ticket ready <KEY>`.
-- **Abandoned:** no ticket commits and no dirty or merge state. Only after
-  confirming the last `[cliban-flow]` action and the claimant is gone, recommend
-  releasing the board claim and restarting through `ticket start <KEY>`.
+- **Abandoned:** no ticket commits and no dirty or merge state. After a human
+  confirms discard, recommend `ticket abandon <KEY> --confirm "<why>"`; restart
+  later through `ticket start <KEY>`.
 - **Silent agent:** `in-progress`, commits ahead, and no ticked plan steps is not
   abandonment. Ask the claimant for its phase and blocker; if it is gone,
   respawn onto the existing worktree so it can inspect and verify the work.
