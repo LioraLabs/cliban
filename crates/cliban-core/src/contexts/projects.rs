@@ -98,7 +98,7 @@ pub fn get_by_id(conn: &Connection, id: i64) -> Result<Option<Project>> {
 
 /// `fetch_by_key/1` — returns ProjectNotFound instead of None.
 pub fn fetch_by_key(conn: &Connection, key: &str) -> Result<Project> {
-    get_by_key(conn, key)?.ok_or(Error::ProjectNotFound)
+    get_by_key(conn, key)?.ok_or_else(|| Error::ProjectNotFound(key.to_uppercase()))
 }
 
 /// Attributes for [`update`]. Mirrors `Project.update_changeset` cast list.

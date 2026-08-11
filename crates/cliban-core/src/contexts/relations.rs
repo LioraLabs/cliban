@@ -23,7 +23,7 @@ fn issue_id_by_key(conn: &Connection, key: &str) -> Result<i64> {
         r.get(0)
     })
     .map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => Error::NotFound,
+        rusqlite::Error::QueryReturnedNoRows => Error::NamedNotFound(key.to_uppercase()),
         other => Error::Sqlite(other),
     })
 }

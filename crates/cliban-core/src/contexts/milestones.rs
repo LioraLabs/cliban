@@ -316,7 +316,8 @@ pub struct Waves {
 pub fn waves(conn: &Connection, project_key: &str, name: &str) -> Result<Waves> {
     use std::collections::{HashMap, HashSet};
 
-    let milestone = get(conn, project_key, name)?.ok_or(Error::NotFound)?;
+    let milestone = get(conn, project_key, name)?
+        .ok_or_else(|| Error::NamedNotFound(name.to_string()))?;
 
     struct Node {
         key: String,

@@ -181,9 +181,14 @@ fn piped_output_defaults_to_the_exact_json_shapes() {
         serde_json::from_str::<serde_json::Value>(line).expect("valid NDJSON");
     }
 
-    // Single-entity read: pretty JSON, same bytes as --json.
+    // CLI-99 — an inferred machine reader gets the lean shape; an explicit
+    // --json request retains the complete single-entity schema.
     let piped = ok(&db, &["issue", "show", "CLI-1"]);
-    assert_eq!(piped, ok(&db, &["issue", "show", "CLI-1", "--json"]));
+    let piped: serde_json::Value = serde_json::from_str(&piped).unwrap();
+    let explicit: serde_json::Value =
+        serde_json::from_str(&ok(&db, &["issue", "show", "CLI-1", "--json"])).unwrap();
+    assert!(piped.get("description").is_none(), "{piped}");
+    assert!(explicit.get("description").is_some(), "{explicit}");
 
     // The other groups follow the same default.
     assert_eq!(
@@ -202,6 +207,91 @@ fn piped_output_defaults_to_the_exact_json_shapes() {
         ok(&db, &["activity", "--since", "1d"]),
         ok(&db, &["activity", "--since", "1d", "--json"])
     );
+}
+
+#[test]
+fn piped_single_entity_reads_are_lean_but_explicit_json_is_full() {
+    // CLI-99
+    let db = seeded("lean-show");
+    for (plain, explicit) in [
+        (
+            vec!["project", "show", "CLI"],
+            vec!["project", "show", "CLI", "--json"],
+        ),
+        (
+            vec!["milestone", "show", "v1", "--project", "CLI"],
+            vec!["milestone", "show", "v1", "--project", "CLI", "--json"],
+        ),
+    ] {
+        let lean: serde_json::Value = serde_json::from_str(&ok(&db, &plain)).unwrap();
+        let full: serde_json::Value = serde_json::from_str(&ok(&db, &explicit)).unwrap();
+        assert!(lean.get("description").is_none(), "{lean}");
+        assert!(full.get("description").is_some(), "{full}");
+    }
+
+    let pinned: serde_json::Value = serde_json::from_str(&ok_env(
+        &db,
+        &["issue", "show", "CLI-1"],
+        JSON,
+    ))
+    .unwrap();
+    assert!(pinned.get("description").is_some(), "{pinned}");
+}
+
+#[test]
+fn log_echo_omits_the_entry_and_not_found_names_the_identity() {
+    // CLI-99
+    let db = seeded("diet-errors");
+    let echo: serde_json::Value = serde_json::from_str(&ok(
+        &db,
+        &["issue", "log", "CLI-1", "a deliberately long note"],
+    ))
+    .unwrap();
+    assert_eq!(echo["key"], "CLI-1");
+    assert!(echo.get("timestamp").is_some(), "{echo}");
+    assert!(echo.get("entry").is_none(), "{echo}");
+
+    for (args, identity) in [
+        (vec!["issue", "show", "CLI-404"], "CLI-404"),
+        (vec!["issue", "log", "CLI-404", "note"], "CLI-404"),
+        (vec!["issue", "mv", "CLI-404", "done"], "CLI-404"),
+        (vec!["issue", "edit", "CLI-404", "--title", "nope"], "CLI-404"),
+        (vec!["issue", "cat", "CLI-404"], "CLI-404"),
+        (vec!["issue", "archive", "CLI-404"], "CLI-404"),
+        (
+            vec!["issue", "claim", "CLI-404", "--by", "tester"],
+            "CLI-404",
+        ),
+        (vec!["issue", "release", "CLI-404"], "CLI-404"),
+        (vec!["issue", "lint", "CLI-404"], "CLI-404"),
+        (
+            vec!["issue", "add", "work", "--project", "MISS"],
+            "MISS",
+        ),
+        (
+            vec!["issue", "cp", "CLI-1", "--project", "MISS"],
+            "MISS",
+        ),
+        (vec!["project", "show", "MISS"], "MISS"),
+        (
+            vec!["project", "edit", "MISS", "--name", "Missing"],
+            "MISS",
+        ),
+        (
+            vec!["milestone", "show", "missing", "--project", "CLI"],
+            "missing",
+        ),
+        (
+            vec![
+                "milestone", "edit", "missing", "--project", "CLI", "--status", "completed",
+            ],
+            "missing",
+        ),
+    ] {
+        let r = run(&db, &args);
+        assert_eq!(r.code, 1, "{}", r.stderr);
+        assert!(r.stderr.contains(identity), "{args:?}: {}", r.stderr);
+    }
 }
 
 #[test]
@@ -517,9 +607,9 @@ fn list_rows_are_lean_and_full_detail_is_complete() {
     for present in ["description", "git_branch_name", "position", "created_at"] {
         assert!(full.get(present).is_some(), "--full missing {present}");
     }
-    // show stays the complete shape with null-not-absent optionals.
+    // Explicit --json stays the complete shape with null-not-absent optionals.
     let shown: serde_json::Value =
-        serde_json::from_str(&ok(&db, &["issue", "show", "CLI-1"])).unwrap();
+        serde_json::from_str(&ok(&db, &["issue", "show", "CLI-1", "--json"])).unwrap();
     assert!(shown.get("milestone").is_some_and(|v| v.is_null()));
 }
 

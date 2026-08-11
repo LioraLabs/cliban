@@ -335,7 +335,8 @@ pub fn delete(conn: &Connection, issue: &Issue) -> Result<()> {
 
 /// `set_labels/2`: replace the issue's labels with `names` (created on demand).
 pub fn set_labels(conn: &Connection, issue: &Issue, names: &[String]) -> Result<Issue> {
-    let project = projects::get_by_id(conn, issue.project_id)?.ok_or(Error::ProjectNotFound)?;
+    let project = projects::get_by_id(conn, issue.project_id)?
+        .ok_or_else(|| Error::ProjectNotFound(issue.project_id.to_string()))?;
     let tx = conn.unchecked_transaction()?;
     let label_rows = labels::upsert_many(&tx, &project, names)?;
 

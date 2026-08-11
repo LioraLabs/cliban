@@ -22,8 +22,12 @@ pub enum Error {
     Validation(Vec<FieldError>),
 
     /// `{:error, :project_not_found}` / `Repo.rollback(:project_not_found)`.
-    #[error("project not found")]
-    ProjectNotFound,
+    #[error("not found: {0}")]
+    ProjectNotFound(String),
+
+    /// A lookup that can name the missing identity.
+    #[error("not found: {0}")]
+    NamedNotFound(String),
 
     /// `{:error, :not_found}`.
     #[error("not found")]

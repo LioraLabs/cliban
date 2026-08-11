@@ -91,6 +91,7 @@ fn description(db: &str) -> String {
             "Deterministic integration",
             "-p",
             "CLI",
+            "--json",
         ],
     );
     let v: serde_json::Value = serde_json::from_str(&out).expect("milestone show --json");
@@ -229,6 +230,7 @@ fn the_section_survives_show_and_a_later_edit_of_another_field() {
             "Deterministic integration",
             "-p",
             "CLI",
+            "--json",
         ],
     );
     let v: serde_json::Value = serde_json::from_str(&json).expect("show --json parses");
@@ -365,12 +367,13 @@ fn the_entry_line_is_the_line_issue_log_writes() {
             "second",
         ],
     ));
-    assert_eq!(issue_keys, ["entry", "key", "timestamp"]);
+    assert_eq!(issue_keys, ["key", "timestamp"]);
     assert_eq!(
         milestone_keys,
         ["entry", "milestone", "project", "timestamp"]
     );
-    assert_eq!(issue_entry, milestone_entry);
+    assert!(issue_entry.is_null());
+    assert_eq!(milestone_entry, "second");
 }
 
 #[test]
