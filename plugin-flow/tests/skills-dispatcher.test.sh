@@ -15,8 +15,10 @@ has() { grep -Fq -- "$2" "$1" || { printf 'missing %s in %s\n' "$2" "$1" >&2; fa
 lacks() { ! grep -Fq -- "$2" "$1" || { printf 'legacy %s in %s\n' "$2" "$1" >&2; failed=1; }; }
 
 # releases advertise the recovery protocol they install.
-has "$manifest" '"version": "0.5.0"'
+has "$manifest" '"version": "0.6.0"'
 has "$manifest" 'recover interrupted milestones'
+has "$ROOT/plugin-flow/CHANGELOG.md" '## 0.6.0'
+has "$ROOT/plugin-flow/CHANGELOG.md" 'lean lifecycle'
 
 # the installed skill resolves its sibling dispatcher outside cliban.
 has "$workflow" '../../scripts/cliban-flow'

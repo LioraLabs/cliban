@@ -7,8 +7,8 @@ behind — never on transcript prose. Two cliban properties make this work:
 
 - `--db` / `$CLIBAN_DB` gives per-scenario fixture isolation
 - `cliban activity --json` is a complete event log of what the agent actually
-  did, so assertions can check *how* (e.g. "ticked, didn't rewrite"), not just
-  *what*
+  did, so assertions can check lifecycle invariants without mirroring the
+  agent's implementation cadence
 
 ## Layout
 
