@@ -179,7 +179,7 @@ fn project_notes_support_targeted_reads_and_progressive_search() {
     assert!(replacement.status.success());
     assert!(String::from_utf8_lossy(&replacement.stdout).contains("Replacement"));
 
-    // CLI-76: a bare `-` on --description is the stdin sentinel here too, as
+    // a bare `-` on --description is the stdin sentinel here too, as
     // it already was on issue and milestone. This used to store the dash
     // itself, which read as a successful write of a one-character
     // description.

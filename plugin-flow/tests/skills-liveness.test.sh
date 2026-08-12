@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-78 — dispatched work stays inspectable and recoverable while it runs.
+# dispatched work stays inspectable and recoverable while it runs.
 set -uo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -12,8 +12,7 @@ has() { grep -Fiq -- "$2" "$1" || { printf 'missing %s in %s\n' "$2" "$1" >&2; f
 
 has "$issue" 'recoverability guarantee'
 has "$issue" 'before execution begins'
-# CLI-110 — commit cadence is implementation judgment, not board ceremony.
-# CLI-97
+# commit cadence is implementation judgment, not board ceremony.
 # shellcheck disable=SC2016
 has "$issue" 'session-start hook surfaces `in-review` candidates'
 has "$issue" 'mv <KEY> done --note "merged as <sha>"'
@@ -27,7 +26,6 @@ has "$milestone" 'git -C <ticket-worktree> status -s'
 has "$milestone" 'do not interrupt'
 has "$milestone" 'phase and blocker'
 
-# CLI-95
 for skill in "$milestone" "$recovery"; do
     has "$skill" 'agent ID'
     has "$skill" 'complete-issue'

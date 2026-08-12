@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# CLI-85
 set -u
 DB="$1"; fail=0
 KEY=ACME-1

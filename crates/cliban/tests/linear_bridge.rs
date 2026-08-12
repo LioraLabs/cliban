@@ -1172,7 +1172,7 @@ fn sync_linear_honors_per_link_origin() {
                                       "2026-07-29T12:00:00.000Z")}}})
             .to_string(),
         ),
-        // The living-comment push path (CLI-43) requires the created comment's
+        // The living-comment push path requires the created comment's
         // id in the reply so it can be edited in place on later pushes.
         (
             "CommentCreate".to_string(),

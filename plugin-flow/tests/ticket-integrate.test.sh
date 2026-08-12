@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-82 — `cliban-flow ticket integrate <KEY>`: one guarded squash commit.
+# `cliban-flow ticket integrate <KEY>`: one guarded squash commit.
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib.sh
 . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib.sh"

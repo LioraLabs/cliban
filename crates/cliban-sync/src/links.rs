@@ -125,7 +125,7 @@ pub fn ensure_table(conn: &Connection) -> Result<()> {
             "ALTER TABLE remote_links ADD COLUMN origin TEXT NOT NULL DEFAULT 'imported'",
         )?;
     }
-    // Same story one ticket later: the living progress comment's id (CLI-43)
+    // Same story for the living progress comment's id:
     // is additive too. NULL means "no comment created yet", which is exactly
     // right for every pre-column row.
     if !has_column(conn, "remote_links", "progress_comment_id")? {
@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn ensure_table_adds_progress_comment_id_to_a_pre_column_table() {
         let c = Connection::open_in_memory().unwrap();
-        // The table as CLI-41 left it: origin present, no comment id yet.
+        // The table has an origin present but no comment id yet.
         c.execute_batch(
             r#"CREATE TABLE "remote_links" (
                 "id" INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -1,4 +1,4 @@
-//! CLI-87 — `cliban milestone log`: the milestone-scoped sibling of
+//! `cliban milestone log`: the milestone-scoped sibling of
 //! `issue log`.
 //!
 //! Black-box over the real binary, because the two things this command has to

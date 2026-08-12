@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-93 — explicit teardown for a whole milestone.
+# explicit teardown for a whole milestone.
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib.sh
 . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib.sh"

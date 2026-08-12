@@ -245,7 +245,6 @@ fn empty_pipe_note_add_keeps_the_bare_heading_note() {
 // silently stored the dash itself, so a scripted `--body -` threw its body
 // away and still exited 0.
 
-// CLI-76
 #[test]
 fn dash_body_reads_stdin() {
     let db = seeded("body_dash");
@@ -261,7 +260,6 @@ fn dash_body_reads_stdin() {
     assert_eq!(notes.trim(), "### via body\n\nBODY_FROM_STDIN", "{notes}");
 }
 
-// CLI-76
 #[test]
 fn dash_project_description_reads_stdin_on_add() {
     let db = tmp_db("proj_add_dash");
@@ -275,7 +273,6 @@ fn dash_project_description_reads_stdin_on_add() {
     assert!(shown.contains("DESC_FROM_STDIN"), "shown: {shown}");
 }
 
-// CLI-76
 #[test]
 fn dash_project_description_reads_stdin_on_edit() {
     let db = seeded("proj_edit_dash");
@@ -289,7 +286,7 @@ fn dash_project_description_reads_stdin_on_edit() {
     assert!(shown.contains("EDITED_FROM_STDIN"), "shown: {shown}");
 }
 
-// CLI-76 — the sibling the spec asked to be checked for the same defect.
+// the sibling the spec asked to be checked for the same defect.
 #[test]
 fn dash_issue_description_reads_stdin() {
     let db = seeded("issue_desc_dash");
@@ -311,7 +308,7 @@ fn dash_issue_description_reads_stdin() {
     assert!(shown.contains("ISSUE_DESC_FROM_STDIN"), "shown: {shown}");
 }
 
-// CLI-76 — only a *bare* dash is the stdin sentinel; a markdown bullet that
+// only a *bare* dash is the stdin sentinel; a markdown bullet that
 // merely starts with one stays literal.
 #[test]
 fn hyphen_leading_body_is_not_the_stdin_sentinel() {
@@ -335,7 +332,7 @@ fn hyphen_leading_body_is_not_the_stdin_sentinel() {
     assert!(!notes.contains("FROM_THE_PIPE"), "notes: {notes}");
 }
 
-// CLI-76 — the shared resolver names the flags the command actually has;
+// the shared resolver names the flags the command actually has;
 // `note add` used to report the mutual exclusion as `--description`.
 #[test]
 fn mutually_exclusive_error_names_the_commands_own_flags() {
@@ -363,7 +360,7 @@ fn mutually_exclusive_error_names_the_commands_own_flags() {
     );
 }
 
-// CLI-76 — the arm that always worked keeps working.
+// the arm that always worked keeps working.
 #[test]
 fn dash_body_file_still_reads_stdin() {
     let db = seeded("body_file_dash");

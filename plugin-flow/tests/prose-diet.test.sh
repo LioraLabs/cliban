@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-100 — workflow rules have one owner and a bounded reading cost.
+# workflow rules have one owner and a bounded reading cost.
 set -uo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)

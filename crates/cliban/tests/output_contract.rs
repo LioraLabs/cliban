@@ -101,7 +101,6 @@ fn seeded(tag: &str) -> String {
 
 #[test]
 fn issue_ls_defaults_to_milestone_summary() {
-    // CLI-101
     let db = seeded("issue-summary");
     ok(&db, &["issue", "edit", "CLI-1", "--milestone", "v1"]);
 
@@ -181,7 +180,7 @@ fn piped_output_defaults_to_the_exact_json_shapes() {
         serde_json::from_str::<serde_json::Value>(line).expect("valid NDJSON");
     }
 
-    // CLI-99 — an inferred machine reader gets the lean shape; an explicit
+    // an inferred machine reader gets the lean shape; an explicit
     // --json request retains the complete single-entity schema.
     let piped = ok(&db, &["issue", "show", "CLI-1"]);
     let piped: serde_json::Value = serde_json::from_str(&piped).unwrap();
@@ -211,7 +210,6 @@ fn piped_output_defaults_to_the_exact_json_shapes() {
 
 #[test]
 fn piped_single_entity_reads_are_lean_but_explicit_json_is_full() {
-    // CLI-99
     let db = seeded("lean-show");
     for (plain, explicit) in [
         (
@@ -240,7 +238,6 @@ fn piped_single_entity_reads_are_lean_but_explicit_json_is_full() {
 
 #[test]
 fn log_echo_omits_the_entry_and_not_found_names_the_identity() {
-    // CLI-99
     let db = seeded("diet-errors");
     let echo: serde_json::Value = serde_json::from_str(&ok(
         &db,

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-81 — `cliban-flow ticket ready <KEY>`: the handoff, as a board state.
+# `cliban-flow ticket ready <KEY>`: the handoff, as a board state.
 #
 # Ready is not a message. `in-review` means "this branch is integrable and its
 # tree has been built and tested", and the orchestrator never looks at a branch
@@ -12,10 +12,10 @@
 # shellcheck source=lib.sh
 . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-# CLI-81: every state shared with `ticket sync` must reach the same guard.
+# every state shared with `ticket sync` must reach the same guard.
 assert_ticket_mutation_guards ready
 
-# CLI-98 — readiness requires recoverable plan, ticket work, review, and an
+# readiness requires recoverable plan, ticket work, review, and an
 # unfinished board ticket before the handoff can become in-review.
 
 fixture_new
@@ -97,6 +97,67 @@ EOF
 run_flow ticket ready "$key"
 assert_status 2 "ready refuses a missing review verdict"
 assert_stderr_has "cliban issue log $key" "review refusal names the repair"
+
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "Rejected review")
+branch=$(branch_of "$key")
+fixture_ticket_worktree "$branch"
+commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt work
+cb issue edit "$key" --section plan --create-section --description-file - >/dev/null <<'EOF'
+small plan
+EOF
+cb issue log "$key" "review: SPEC REJECT; QUALITY no serious findings" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "ready refuses a rejected review"
+
+cb issue log "$key" "review: SPEC ACCEPT; QUALITY no Critical findings; Important: broken guard remains" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "ready refuses a review with Important findings"
+
+cb issue log "$key" "review: SPEC ACCEPT; QUALITY pass Important: broken guard remains" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "ready refuses contradictory pass text with Important findings"
+
+cb issue log "$key" "review: SPEC ACCEPT; QUALITY pass" >/dev/null
+cb issue log "$key" "review: SPEC REJECT; QUALITY Important: regression remains" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "a newer rejection supersedes an older accepted review"
+
+cb issue log "$key" "review: SPEC ACCEPTED; QUALITY pass" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "ready requires an exact accepted Spec verdict"
+
+cb issue log "$key" "review: SPEC ACCEPT; QUALITY passage" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "ready requires an exact passing Quality verdict"
+
+for malformed in \
+    'review: UNSPEC ACCEPT; QUALITY pass' \
+    'review: SPEC ACCEPT; INEQUALITY pass' \
+    'review: NOSPEC ACCEPT; QUALITY pass' \
+    'review: SPEC ACCEPT; NONQUALITY pass'; do
+    cb issue log "$key" "$malformed" >/dev/null
+    run_flow ticket ready "$key"
+    assert_status 2 "ready requires exact review field names"
+done
+
+fixture_new
+key=$(new_issue_no_milestone "Standalone waiver")
+branch=$(branch_of "$key")
+run_flow ticket start "$key"
+commit_file_at "$(fixture_standalone_wt "$branch")" ticket-side.txt work
+cb issue edit "$key" --section plan --create-section --description-file - >/dev/null <<'EOF'
+small plan
+EOF
+cb issue log "$key" "review waived by orchestrator: no orchestrator exists" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "standalone ready refuses an orchestrator waiver"
+assert_stderr_has "review: SPEC ACCEPT; QUALITY pass" "standalone refusal names a valid repair"
+case $FLOW_STDERR in
+    *'review waived by orchestrator'*) fail "standalone refusal does not prescribe an impossible waiver" "$FLOW_STDERR" ;;
+    *) pass "standalone refusal does not prescribe an impossible waiver" ;;
+esac
 
 fixture_new
 fixture_milestone_worktree
@@ -191,7 +252,7 @@ assert_eq "$(gitf rev-parse "$branch")" "$tip" "the branch was not moved"
 assert_eq "$(gitt "$branch" status --porcelain)" "" "the worktree was left alone"
 assert_eq "$FLOW_STDERR" "" "ready success adds no ceremony to stderr"
 
-# CLI-109 — standalone work uses the same ready handoff without a milestone.
+# standalone work uses the same ready handoff without a milestone.
 fixture_new
 key=$(new_issue_no_milestone "Standalone and green")
 branch=$(branch_of "$key")
@@ -217,7 +278,7 @@ commit_file_at "$(fixture_standalone_wt "$branch")" later.txt late
 later=$(gitf rev-parse "$branch")
 run_flow ticket ready "$key"
 assert_status 2 "a later commit invalidates standalone readiness"
-assert_stderr_has "new review verdict" "the refusal names the missing renewed evidence"
+assert_stderr_has "new accepted review evidence" "the refusal names the missing renewed evidence"
 
 cb issue log "$key" "Final review: SPEC ✅; QUALITY pass after $later" >/dev/null
 run_flow ticket ready "$key"

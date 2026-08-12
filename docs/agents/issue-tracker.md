@@ -6,8 +6,8 @@ the workflow contract that governs where each artifact lands is the
 `cliban-workflow` skill, which ships in the separate `cliban-flow` plugin.
 
 - **Project key:** CLI
-- **Key policy:** everywhere (keys never appear in source code, prose comments, or docs as decoration; the one exception is a test citing the ticket it discharges)
-- **Branch convention:** worktree-per-issue at `.worktrees/`
+- **Key policy:** everywhere (dispatcher branches and commits carry keys; source code, comments, tests, and docs do not)
+- **Workspace convention:** dispatcher-managed worktree at `.worktrees/<git_branch_name>`
 - **Reviewer:** none — a general-purpose agent with `complete-issue`'s inline brief
 
 ## Where artifacts live
@@ -15,7 +15,7 @@ the workflow contract that governs where each artifact lands is the
 | Artifact | Home |
 |---|---|
 | Spec / PRD | issue `## Spec` |
-| Implementation plan | issue `## Plan` — parseable; mutate only via `tick`/`log`/`promote` |
+| Implementation plan | issue `## Plan` — proportional and optionally structured for `lint`/`tick`/`promote` |
 | Progress, findings, dead ends | issue `## Activity Log` via `cliban issue log` |
 | Durable reusable lessons | project `## Notes` — search first: `cliban project search CLI "<terms>" --json` |
 | ADRs, CONTEXT.md, domain docs | this repo, plaintext, git-tracked — never cliban |
@@ -58,8 +58,8 @@ The `cliban-flow` plugin carries the workflow:
   priority, after searching the board for duplicates.
 - `diagnose-issue` — find and prove a root cause, logging the hypothesis ledger
   to the ticket's `## Activity Log` as it goes.
-- `complete-issue` — take one ticket: `## Plan`, then test-first execution with
-  `cliban issue tick` / `cliban issue log`.
+- `complete-issue` — take one ticket through a proportional `## Plan`,
+  implementation, executable verification, and dispatcher-owned start/ready.
 - `complete-milestone` — orchestrate a whole milestone in dependency waves.
 
 None of it is required. Plan mode or plain conversation works the same way, as

@@ -12,6 +12,7 @@ it owns the git and board transitions in both modes.
 
 The session-start hook surfaces `in-review` candidates. When git or the PR proves
 a prior standalone handoff merged, run `mv <KEY> done --note "merged as <sha>"`.
+Linear bridge synchronization is a separate explicit action after lifecycle moves.
 
 ## Start
 

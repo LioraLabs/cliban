@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# CLI-83 — the workflow skills use the dispatcher as their only git protocol.
-# CLI-93 — sanctioned teardown stays on that same surface.
+# the workflow skills use the dispatcher as their only git protocol.
+# sanctioned teardown stays on that same surface.
 set -uo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -14,11 +14,11 @@ failed=0
 has() { grep -Fq -- "$2" "$1" || { printf 'missing %s in %s\n' "$2" "$1" >&2; failed=1; }; }
 lacks() { ! grep -Fq -- "$2" "$1" || { printf 'legacy %s in %s\n' "$2" "$1" >&2; failed=1; }; }
 
-# CLI-86 — releases advertise the recovery protocol they install.
+# releases advertise the recovery protocol they install.
 has "$manifest" '"version": "0.5.0"'
 has "$manifest" 'recover interrupted milestones'
 
-# CLI-96 — the installed skill resolves its sibling dispatcher outside cliban.
+# the installed skill resolves its sibling dispatcher outside cliban.
 has "$workflow" '../../scripts/cliban-flow'
 external=$(mktemp -d)
 mkdir -p "$external/marketplace/.claude-plugin" "$external/adopter"
@@ -42,7 +42,7 @@ rm -rf -- "$external"
 for command in 'milestone start' 'milestone finish' 'milestone abandon' 'ticket start' 'ticket status' 'ticket sync' 'ticket ready' 'ticket integrate' 'ticket abandon'; do
     has "$workflow" "\`$command\`"
 done
-has "$workflow" 'Dispatched ticket ready for integration'
+has "$workflow" 'Ticket ready (standalone or dispatched)'
 has "$workflow" 'stop and say so'
 
 has "$issue" 'ticket sync <KEY>'
@@ -50,7 +50,7 @@ has "$issue" 'ticket ready <KEY>'
 has "$issue" 'resolve the conflicts'
 has "$issue" 'resolution diff'
 
-# CLI-98 — dispatcher guards replace these orchestration-time prose checks.
+# dispatcher guards replace these orchestration-time prose checks.
 lacks "$milestone" 'owns claiming, planning'
 lacks "$milestone" 'plan is fully ticked'
 lacks "$issue" 'requested reviewer verdict is still in flight'
@@ -68,7 +68,7 @@ lacks "$milestone" 'git merge --no-ff'
 lacks "$milestone" 'HEAD^2'
 lacks "$milestone" '<build the project>'
 
-# CLI-84 — recovery interprets the read-only survey without repairing or verifying.
+# recovery interprets the read-only survey without repairing or verifying.
 has "$recovery" 'milestone status "<milestone name>"'
 for state in 'Nearly finished' Abandoned 'Silent agent' 'Interrupted merge'; do
     has "$recovery" "$state"

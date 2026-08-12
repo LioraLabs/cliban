@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-80, CLI-100 — `cliban-flow ticket start <KEY>`: a ticket worktree under the
+# `cliban-flow ticket start <KEY>`: a ticket worktree under the
 # milestone worktree.
 #
 # Same rule as every suite here: throwaway repo under `mktemp -d`, CLIBAN_DB
@@ -37,7 +37,7 @@ assert_eq "$(status_of "$key")" in-progress "starting moves the ticket in-progre
 assert_eq "$(cb issue show "$key" --json | json_get claimed_by)" test:cliban-flow \
     "starting claims the ticket for its actor"
 
-# CLI-109 — the same lifecycle primitive starts a ticket with no milestone.
+# the same lifecycle primitive starts a ticket with no milestone.
 fixture_new
 key=$(new_issue_no_milestone "A standalone ticket to start")
 branch=$(branch_of "$key")
@@ -138,7 +138,7 @@ assert_stderr_has "worktree prune" "the instruction names the repair it will not
 
 # ------------------------------------------------------------------ guards
 
-# CLI-98 — start owns the claim and status transition, and must not take a
+# start owns the claim and status transition, and must not take a
 # ticket another session already owns.
 fixture_new
 fixture_milestone_worktree

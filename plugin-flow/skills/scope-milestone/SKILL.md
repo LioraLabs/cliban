@@ -47,7 +47,7 @@ Then wait. Each round's answers reshape the tree; recompute and ask the next. A 
 
 **Grill toward the slice boundaries.** Prioritise questions whose answers change *where one ticket ends and the next begins* — what can land independently, what must exist before what. A question that cannot change the breakdown or its edges is a question for the executor: note it and move on.
 
-("Slice boundary" partitions work. A **seam**, in `complete-issue`'s TDD reference, partitions observability — the boundary a test observes across. Different words on purpose.)
+("Slice boundary" partitions work. A **seam**, in `complete-issue`'s verification reference, partitions observability — the boundary a check observes across. Different words on purpose.)
 
 Done when the frontier is empty.
 

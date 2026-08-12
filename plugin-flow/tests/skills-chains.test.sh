@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-104 — related tickets are advisory same-implementer chains.
+# related tickets are advisory same-implementer chains.
 set -uo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)

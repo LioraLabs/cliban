@@ -173,7 +173,7 @@ fn top_level_mutations_print_the_exact_canonical_confirmations() {
     let r = run(&db, &["mv", "UX-1", "in-progress", "--table"]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert_eq!(r.stdout, "moved UX-1: backlog → in-progress\n");
-    // retry-safe noop comes through the same handler (CLI-49)
+    // retry-safe noop comes through the same handler
     let r = run(&db, &["mv", "UX-1", "in-progress", "--table"]);
     assert_eq!(r.stdout, "UX-1 already in-progress (nothing to do)\n");
     // tick
@@ -251,7 +251,7 @@ fn cat_dumps_the_raw_description_verbatim() {
 
 #[test]
 fn cat_stays_raw_when_piped() {
-    // Piped stdout is the JSON default everywhere else (CLI-48); cat is the
+    // Piped stdout is the JSON default everywhere else; cat is the
     // deliberate exception — its whole point is unformatted bytes.
     let db = seeded("cat_pipe");
     let out = ok(&db, &["issue", "cat", "UX-1"]);
@@ -271,7 +271,7 @@ fn close_moves_to_done_and_teaches_mv() {
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert_eq!(r.stdout, "closed UX-1 (mv done): backlog → done\n");
     assert_eq!(show_json(&db, "UX-1")["status"], serde_json::json!("done"));
-    // Retry is the CLI-49 noop, still teaching.
+    // Retry is the same noop, still teaching.
     let r = run(&db, &["issue", "close", "UX-1", "--table"]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert_eq!(
@@ -310,7 +310,7 @@ fn close_json_echo_keeps_the_mv_shape_and_adds_canonical() {
         assert!(v.get(field).is_some(), "echo lost the {field} field: {v}");
     }
     assert!(v.get("description").is_none(), "echoes carry no body: {v}");
-    // Noop retry keeps the CLI-49 marker alongside the teach marker.
+    // Noop retry keeps the marker alongside the teach marker.
     let v: serde_json::Value =
         serde_json::from_str(&ok(&db, &["issue", "close", "UX-1", "--json"])).expect("json echo");
     assert_eq!(v["noop"], serde_json::json!(true));
@@ -367,7 +367,7 @@ fn comment_is_log_with_a_teaching_line() {
 
 #[test]
 fn comment_inherits_the_stdin_fallback() {
-    // CLI-50's pipe-is-the-message contract comes through the same handler.
+    // The pipe-is-the-message contract comes through the same handler.
     let db = seeded("comment_pipe");
     let r = run_piped_stdin(&db, &["issue", "comment", "UX-1"], "from the pipe\n");
     assert_eq!(r.code, 0, "{}", r.stderr);
@@ -416,7 +416,7 @@ fn delete_archives_and_teaches_that_nothing_was_deleted() {
     assert_eq!(v["title"], serde_json::json!("alpha"));
     ok(&db, &["issue", "unarchive", "UX-1", "--table"]);
     assert_eq!(show_json(&db, "UX-1")["archived"], serde_json::json!(false));
-    // Desired state = success: deleting again is the same success (CLI-49).
+    // Desired state = success: deleting again is the same success.
     ok(&db, &["issue", "delete", "UX-1"]);
     let r = run(&db, &["issue", "delete", "UX-1"]);
     assert_eq!(r.code, 0, "retry must stay success: {}", r.stderr);

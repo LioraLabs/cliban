@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-82 — `cliban-flow milestone finish <NAME>`: fast-forward onto main.
+# `cliban-flow milestone finish <NAME>`: fast-forward onto main.
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib.sh
 . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -21,7 +21,6 @@ assert_eq "$(gitf symbolic-ref --short HEAD)" "main" "the primary checkout stays
 assert_eq "$(cat "$FIXTURE_REPO/landed.txt")" "landed" "the primary tree is updated with the fast-forward"
 assert_milestone_board_has "Test milestone" "[cliban-flow] milestone finish Test milestone: finished" "finish is recorded"
 
-# CLI-90
 fixture_new
 fixture_milestone_worktree
 open_key=$(new_issue "Still in flight")
@@ -31,7 +30,6 @@ assert_stderr_has "$open_key: Still in flight" "the refusal names the open issue
 assert_eq "$(gitf rev-parse main)" "$(gitf rev-parse milestone/test-milestone)" \
     "the open-issue refusal leaves main unchanged"
 
-# CLI-90
 fixture_new
 fixture_milestone_worktree
 spoofed=$(new_issue "Mentions discard protocol")
@@ -42,7 +40,6 @@ assert_status 2 "discard wording outside Activity Log does not settle an issue"
 assert_stderr_has "$spoofed: Mentions discard protocol" \
     "the spoofed discard issue remains named as open"
 
-# CLI-90
 fixture_new
 fixture_milestone_worktree
 key=$(new_issue "Integrated ticket")
@@ -59,7 +56,6 @@ assert_stderr_has "differs from the last verified ticket integration" \
 assert_stderr_has "dispatched ticket" "the divergence refusal names the next step"
 assert_eq "$(gitf rev-parse main)" "$main_tip" "the divergence refusal leaves main unchanged"
 
-# CLI-90
 fixture_new
 fixture_milestone_worktree
 discarded=$(new_issue "Discarded ticket")

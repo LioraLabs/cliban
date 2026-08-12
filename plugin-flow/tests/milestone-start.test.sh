@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-80, CLI-100 — `cliban-flow milestone start <NAME>`: the milestone's git layout.
+# `cliban-flow milestone start <NAME>`: the milestone's git layout.
 #
 # The subcommand under test creates branches and worktrees, so every case runs
 # against a throwaway repo under `mktemp -d` with CLIBAN_DB inside it. Nothing

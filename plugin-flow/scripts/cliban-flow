@@ -77,6 +77,14 @@ quiet() {
     return "$status"
 }
 
+accepted_review() {
+    local review
+    review=$(grep -Ei 'review.*(^|[^[:alnum:]_])SPEC([^[:alnum:]_]|$).*([^[:alnum:]_]|^)QUALITY([^[:alnum:]_]|$)' | tail -n 1) || return 1
+    printf '%s\n' "$review" |
+        grep -Eqi '(^|[^[:alnum:]_])SPEC[ :]*(ACCEPT([[:space:];,]|$)|✅).*([^[:alnum:]_]|^)QUALITY[ :]*(pass([[:space:];,]|$)|ACCEPT([[:space:];,]|$)|✅)' &&
+        ! printf '%s\n' "$review" | grep -Eqi '(Critical|Important)[ :]'
+}
+
 # instruct <line>... — the "what to do next" that follows a verdict or refusal.
 # Indented on stderr so it reads as guidance rather than as more output.
 instruct() {
@@ -1529,11 +1537,17 @@ cmd_ticket_ready() {
         "Commit the ticket work: git -C \"$TICKET_WT\" commit"
 
     activity=$(cliban issue cat "$ISSUE_KEY" --section activity 2>/dev/null) || activity=""
-    if ! printf '%s\n' "$activity" | grep -Eqi 'review.*SPEC.*QUALITY' &&
-        ! printf '%s\n' "$activity" | grep -Eq '^- [^—]+ — review waived by orchestrator: [[:space:]]*[^[:space:]].*$'; then
-        refuse_ticket "$ISSUE_KEY" \
-            "$ISSUE_KEY has neither a review verdict nor an orchestrator waiver" \
-            "Record one: cliban issue log $ISSUE_KEY \"review waived by orchestrator: <reason>\""
+    if ! printf '%s\n' "$activity" | accepted_review &&
+        { [ -z "$ISSUE_MILESTONE" ] || ! printf '%s\n' "$activity" | grep -Eq '^- [^—]+ — review waived by orchestrator: [[:space:]]*[^[:space:]].*$'; }; then
+        if [ -z "$ISSUE_MILESTONE" ]; then
+            refuse_ticket "$ISSUE_KEY" \
+                "$ISSUE_KEY has no accepted review verdict" \
+                "Obtain a positive review, then record it: cliban issue log $ISSUE_KEY \"review: SPEC ACCEPT; QUALITY pass\""
+        else
+            refuse_ticket "$ISSUE_KEY" \
+                "$ISSUE_KEY has neither an accepted review verdict nor an orchestrator waiver" \
+                "Record one: cliban issue log $ISSUE_KEY \"review waived by orchestrator: <reason>\""
+        fi
     fi
 
     local tip
@@ -1561,12 +1575,12 @@ cmd_ticket_ready() {
             ')
         local for_tip
         for_tip=$(printf '%s\n' "$after_ready" | grep -F "$tip" || true)
-        if ! printf '%s\n' "$for_tip" | grep -Eqi 'review.*SPEC.*✅.*QUALITY.*(pass|✅)' &&
-            ! printf '%s\n' "$for_tip" | grep -Eq '^- [^—]+ — review waived by orchestrator: [[:space:]]*[^[:space:]].*$'; then
+        if ! printf '%s\n' "$for_tip" | accepted_review &&
+            { [ -z "$ISSUE_MILESTONE" ] || ! printf '%s\n' "$for_tip" | grep -Eq '^- [^—]+ — review waived by orchestrator: [[:space:]]*[^[:space:]].*$'; }; then
             refuse_ticket "$ISSUE_KEY" \
                 "$ISSUE_BRANCH moved from its recorded ready SHA" \
                 "The old review evidence applies to the old tree. Verify this HEAD and record" \
-                "a new review verdict or orchestrator waiver naming $tip, then run ready again."
+                "new accepted review evidence naming $tip, then run ready again."
         fi
     fi
 

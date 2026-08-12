@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-97 — later sessions can discover standalone handoffs awaiting reconciliation.
+# later sessions can discover standalone handoffs awaiting reconciliation.
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib.sh
 . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib.sh"

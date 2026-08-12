@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# CLI-77 — review outcomes survive failed direct delivery.
-# CLI-92 — the assembled milestone gets its own durable acceptance gate.
+# review outcomes survive failed direct delivery.
+# the assembled milestone gets its own durable acceptance gate.
 set -uo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -27,7 +27,6 @@ has "$milestone" 'assembled milestone branch'
 has "$milestone" 'cliban milestone log'
 has "$milestone" 'Do not offer finalize until the reviewer passes'
 
-# CLI-105
 has "$issue" 'confidence: high | medium | low'
 has "$issue" 'review: skip | run'
 has "$issue" 'one-line evidence'
@@ -38,11 +37,11 @@ has "$milestone" 'final decision at every confidence level'
 has "$milestone" 'review waived by orchestrator: <reason>'
 has "$milestone" 'Either side may request review'
 has "$milestone" 'fresh assembled milestone review remains mandatory'
-has "$review" 'When final review is chosen'
+has "$review" 'once by default'
 lacks "$review" 'optional.'
 lacks "$review" 'marker has exactly one gate'
 has "$review" 'checkpoint-free plan gets one cumulative review'
-has "$workflow" 'When review is chosen'
+has "$workflow" 'once by default'
 lacks "$workflow" 'plan with no markers has one gate at the end'
 
 exit "$failed"

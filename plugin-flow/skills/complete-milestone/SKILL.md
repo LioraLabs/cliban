@@ -8,7 +8,9 @@ requires_skills: [cliban-workflow]
 
 The orchestrator is a conductor, not a coder: it computes the dependency order, dispatches one agent per ticket, gates each on its dependencies, and integrates finished work onto a milestone branch — never `main` — until the user finalizes.
 
-Inside each ticket runs **`complete-issue` in dispatched mode**, which owns planning, test-first execution, and committing. This skill schedules that and integrates the results; it does not restate the rhythm.
+Inside each ticket runs **`complete-issue` in dispatched mode**, which owns its
+proportional plan, implementation, executable verification, and committing. This
+skill schedules that and integrates the results; it does not restate the rhythm.
 
 **Load first:** invoke `cliban-flow:cliban-workflow` for the contract (status mapping, where each artifact lands) and `cliban:cliban` for CLI mechanics. Neither loads on its own — reach for them with the Skill tool before the first board action.
 
@@ -73,7 +75,8 @@ The brief:
 2. Commit on `<ticket-branch>`, follow dispatched completion through `ticket sync` and `ticket ready`, then report. Do not integrate, move the issue to `done`, or touch `main` or the milestone branch.
 3. Report only after `ticket ready` succeeds. Include its immutable SHA, branch, test status, one-line summary, any `## Spec` amendment, and merge-risk notes. Never commit after ready; a changed branch must repeat sync, verification, and ready.
 
-Never pre-plan a ticket for its agent. The agent runs plan and execute itself; that's where the per-ticket review checkpoints live.
+Never pre-plan a ticket for its agent. The agent plans and executes it, adding a
+checkpoint only where a mistaken foundation would compound expensively.
 
 Before ready, the implementer sends confidence, a skip/run recommendation,
 one-line evidence, and merge risk. Either side may request review; the
@@ -92,8 +95,8 @@ git log <base>..<ticket-branch>
 git -C <ticket-worktree> status -s
 ```
 
-A healthy branch has a plan on the board and, over time, advancing activity,
-ticked steps, or commits. The status output also exposes uncommitted work. Do not interrupt
+A healthy branch has a plan on the board and, over time, advancing activity or
+commits. Structured plans may also have ticked steps. The status output exposes uncommitted work. Do not interrupt
 a working agent to perform the sweep. If all signals are empty or
 stale, ask the agent for its current phase and blocker before concluding it is
 stuck; a hard ticket can legitimately stay silent for a long stretch.
@@ -151,8 +154,6 @@ If the human chooses discard instead, run `cliban-flow milestone abandon "<miles
 Wave tickets are written against the *same* base in parallel, so they collide on whatever is shared. The orchestrator is the serialization point for every shared resource — and the conflicts that matter most are the ones git does **not** mark.
 
 **3. Serialized shared sequences** (changelog IDs, shared enums, registries). Merge order decides their final order, so put any renumbering through a dispatched ticket and its normal verification gate. Tell agents not to bump a shared version file; the milestone is one unreleased version until finalize.
-
-Test-to-ticket citations are *not* such a sequence: each agent's key was allocated when its ticket was created, so siblings cite different keys by construction.
 
 **4. Path-based pre-commit hooks don't enforce completeness.** A hook firing on "any file under X changed" passes when an agent does *half* a paired change — the section but not the changelog entry, the keyword but not the grammar. Check the both-halves invariant at integration.
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# CLI-84 — `cliban-flow milestone status <NAME>`: reconstruct recovery state.
+# `cliban-flow milestone status <NAME>`: reconstruct recovery state.
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib.sh
 . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-# CLI-84 — board state, audit trail, integration, main drift, and a clean
+# board state, audit trail, integration, main drift, and a clean
 # descendant worktree are visible without changing either authority.
 fixture_new
 fixture_milestone_worktree
@@ -35,7 +35,7 @@ assert_out_has "relation: descendant" "the branch relation is printed"
 assert_eq "$(cb issue show "$key" --json)" "$before_board" "the board is byte-for-byte unchanged"
 assert_eq "$(gitf show-ref)" "$before_refs" "no ref moved"
 
-# CLI-84 — a dirty, divergent worktree left in a conflicting merge reports all
+# a dirty, divergent worktree left in a conflicting merge reports all
 # recovery evidence, including its unmerged paths.
 fixture_new
 fixture_milestone_worktree
@@ -68,7 +68,7 @@ assert_eq "$(gitt "$branch" diff --cached)" "$before_index" "the interrupted sur
 assert_eq "$(gitt "$branch" status --porcelain=v2)" "$before_state" "the interrupted survey leaves worktree state unchanged"
 assert_eq "$(gitt "$branch" rev-parse MERGE_HEAD)" "$before_merge" "the interrupted survey leaves MERGE_HEAD unchanged"
 
-# CLI-84 — integration, main drift, a missing worktree, and the seven-hour
+# integration, main drift, a missing worktree, and the seven-hour
 # silent-agent shape are all called out rather than inferred away.
 fixture_new
 key=$(new_issue "Silent agent")
@@ -92,7 +92,7 @@ assert_out_has "integrated: yes" "the retained branch is recognized as integrate
 assert_out_has "worktree: none" "the missing worktree is explicit"
 assert_out_has "silent-agent: yes" "commits plus an unticked plan is called out"
 
-# CLI-84 — a registered worktree whose directory vanished is missing, not clean.
+# a registered worktree whose directory vanished is missing, not clean.
 fixture_new
 fixture_milestone_worktree
 key=$(new_issue "Vanished worktree")
@@ -108,7 +108,7 @@ assert_out_lacks "dirty: no" "a vanished worktree is not reported as clean"
 assert_out_has "relation: level" "a level branch is explicit"
 assert_out_has "last-action: none" "absence of a dispatcher action is explicit"
 
-# CLI-84 — missing refs remain diagnosable rather than becoming git errors.
+# missing refs remain diagnosable rather than becoming git errors.
 fixture_new
 key=$(new_issue "Missing refs")
 gitf branch -D milestone/test-milestone >/dev/null
@@ -120,7 +120,7 @@ assert_out_has "main-drift: unknown" "drift without a milestone branch is unknow
 assert_out_has "worktree: none" "an absent ticket worktree is explicit"
 assert_out_has "relation: missing" "a missing ticket branch has a missing relation"
 
-# CLI-84 — an older ticket branch and a ticked plan suppress the silent warning.
+# an older ticket branch and a ticked plan suppress the silent warning.
 fixture_new
 fixture_milestone_worktree
 key=$(new_issue "Known progress")
@@ -137,7 +137,7 @@ assert_status 0 "an ancestor ticket with board progress is surveyable"
 assert_out_has "relation: ancestor" "an ancestor ticket branch is explicit"
 assert_out_has "silent-agent: no" "a ticked plan suppresses the silent-agent warning"
 
-# CLI-84 — integration trailers match a complete key, not a key prefix.
+# integration trailers match a complete key, not a key prefix.
 fixture_new
 fixture_milestone_worktree
 key=$(new_issue "Prefix ticket")

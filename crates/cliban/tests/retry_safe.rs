@@ -182,7 +182,7 @@ fn tick_of_wrong_targets_stays_exit_2() {
     for args in [
         ["issue", "tick", "CLI-1", "--task", "1", "--step", "9"],
         ["issue", "tick", "CLI-1", "--task", "9", "--step", "1"],
-        // CLI-2 has no ## Plan at all.
+        // The second fixture issue has no ## Plan at all.
         ["issue", "tick", "CLI-2", "--task", "1", "--step", "1"],
     ] {
         let r = run(&db, &args);

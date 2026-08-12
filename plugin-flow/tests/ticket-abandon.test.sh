@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-93 — explicit, recoverable teardown for one ticket.
+# explicit, recoverable teardown for one ticket.
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib.sh
 . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib.sh"

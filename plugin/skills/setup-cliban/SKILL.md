@@ -1,6 +1,6 @@
 ---
 name: setup-cliban
-description: "Bind a repo to its cliban board — project key, key-referencing policy, and branch/worktree convention. Run once per repo; re-run to change the binding."
+description: "Bind a repo to its cliban board — project key, fixed key placement and dispatcher workspace, and reviewer. Run once per repo; re-run to change the binding."
 disable-model-invocation: true
 requires_skills: [cliban]
 ---
@@ -9,7 +9,7 @@ requires_skills: [cliban]
 
 Scaffold the per-repo binding that every cliban skill reads:
 
-- **The adapter** — `docs/agents/issue-tracker.md`, declaring cliban as this repo's issue tracker and recording the four bindings (project key, key policy, branch convention, reviewer)
+- **The adapter** — `docs/agents/issue-tracker.md`, declaring cliban as this repo's issue tracker and recording the project key, dispatcher workspace, reviewer, and key-placement invariant
 - **The pointer** — an `## Agent skills` block in `CLAUDE.md` / `AGENTS.md` so agents find the adapter
 - **The board** — the cliban project itself, created if missing
 
@@ -57,23 +57,16 @@ EOF
 
 Monorepo with genuinely independent packages: offer one project per package only if the user tracks them separately today; default remains one project per repo.
 
-**Section B — Key policy.** Where may cliban issue keys (`PROJ-42`) appear in git-tracked artifacts?
+**Section B — Key placement.** Explain rather than ask: the dispatcher puts issue
+keys in branch names and integration commits so work remains attributable. Keys
+stay out of source code, comments, tests, and docs. This invariant is not
+configurable per repo.
 
-- **everywhere** (recommended default) — branch names and commit messages, like any tracker; greppable history
-- **branches-only** — keys in branch names (so `issue current` works) but never in commit messages; for repos whose history is public while the board is private
-- **never** — keys stay entirely on the board
+**Section C — Dispatcher workspace.** Explain rather than ask: `ticket start`
+creates an isolated `.worktrees/<git_branch_name>` worktree for standalone and
+milestone work. The dispatcher owns this invariant; it is not configurable per repo.
 
-All three forbid keys as decoration in source code, prose comments, and docs — only the commit/branch surface varies. The single exception, allowed under all three: a test **citing** the ticket it discharges (see the adapter section below). That works because a key is stable for the life of the board and stays resolvable after archive.
-
-**Section C — Branch convention.** What happens when work starts on an issue?
-
-- **branch-per-issue** (recommended default) — create/switch to the issue's `git_branch_name`
-- **worktree-per-issue** — `git worktree add <worktrees-dir>/<git_branch_name>` so parallel issues never share a checkout; ask where worktrees live (`.worktrees/` is the common answer)
-- **none** — the user manages branches by hand
-
-(This binds the *solo* flow. `complete-milestone` always uses wave-time worktrees off the milestone branch — orchestration is not configurable per repo.)
-
-**Section D — Reviewer.** Who runs the review gate at a plan's checkpoints?
+**Section D — Reviewer.** Who runs the ticket review?
 
 Exploration tells you what's available: a review skill in the installed suites, a `code-reviewer`-style agent type, or neither.
 
@@ -81,7 +74,10 @@ Exploration tells you what's available: a review skill in the installed suites, 
 - **a skill** — name it (`<plugin>:<skill>`); the gate invokes it with the two verdicts as its brief
 - **none** (recommended default) — the gate dispatches a general-purpose agent with the inline brief `complete-issue` carries
 
-Say plainly that this only chooses *who* reviews. *When* to review is the plan's call — checkpoints are placed while planning, and a ticket small enough for one gate at the end is a normal outcome, not a skipped review. Skip this section if `cliban-flow` isn't installed; nothing else reads it.
+Say plainly that this only chooses *who* reviews. Non-trivial or risky work gets
+one fresh-context review once by default before ready; a plan adds an earlier
+checkpoint only where a mistake would compound expensively. Skip this section
+if `cliban-flow` isn't installed; nothing else reads it.
 
 ### 3. Confirm and write
 
@@ -110,8 +106,8 @@ the workflow contract that governs where each artifact lands is the
 `cliban-workflow` skill, which ships in the separate `cliban-flow` plugin.
 
 - **Project key:** <KEY>
-- **Key policy:** <everywhere | branches-only | never> (a test may always cite the ticket it discharges; see below)
-- **Branch convention:** <branch-per-issue | worktree-per-issue at `<dir>` | none>
+- **Key policy:** everywhere (dispatcher branches and commits carry keys; source code, comments, tests, and docs do not)
+- **Workspace convention:** dispatcher-managed worktree at `.worktrees/<git_branch_name>`
 - **Reviewer:** <agent type `<name>` | skill `<plugin>:<skill>` | none — general-purpose agent with the inline brief>
 
 ## Where artifacts live
@@ -119,26 +115,12 @@ the workflow contract that governs where each artifact lands is the
 | Artifact | Home |
 |---|---|
 | Spec / PRD | issue `## Spec` |
-| Implementation plan | issue `## Plan` — parseable; mutate only via `tick`/`log`/`promote` |
+| Implementation plan | issue `## Plan` — proportional and optionally structured for `lint`/`tick`/`promote` |
 | Progress, findings, dead ends | issue `## Activity Log` via `cliban issue log` |
 | Durable reusable lessons | project `## Notes` — search first: `cliban project search <KEY> "<terms>" --json` |
 | ADRs, CONTEXT.md, domain docs | this repo, plaintext, git-tracked — never cliban |
 
 Implementation plans are deliberately not git-tracked. ADRs deliberately are.
-
-## Citing a ticket from a test
-
-A test **may** name the issue whose `## Spec` it discharges, in a comment beside
-the test, under every key policy:
-
-```
-// <KEY>
-```
-
-This is the one place a key belongs in source. It is a citation — the test is
-that ticket's spec in enforceable form — not decoration, and keys stay out of
-production code, prose comments, and docs. Issue keys are stable for the life of
-the board, including after archive.
 
 ## When a skill says "publish to the issue tracker"
 
@@ -167,6 +149,11 @@ board — never as `Blocked by:` text lines in repo files.
 
 ### 4. Done
 
-Tell the user what now reads the binding: every cliban skill resolves the project key, key policy, branch convention, and reviewer from it, and the plugin's SessionStart hook starts injecting live board state (current-branch issue, in-progress, blocked) into every session opened in this repo — the adapter's existence is what switches it on. Editing `docs/agents/issue-tracker.md` directly later is fine; re-running this skill is only for changing a binding or starting over.
+Tell the user what now reads the adapter: every cliban skill resolves the project
+key and reviewer from it, while the dispatcher owns key placement and workspace; the plugin's
+SessionStart hook starts injecting live board state (current-branch issue,
+in-progress, blocked) into every session opened in this repo — the adapter's
+existence is what switches it on. Editing `docs/agents/issue-tracker.md` directly
+later is fine; re-running this skill is only for changing a binding or starting over.
 
 If `cliban-flow` is not installed, mention it once: it adds the feature workflow on top of the board — `explore-feature` → `scope-milestone` → `complete-issue` / `complete-milestone` — via `/plugin install cliban-flow@lioralabs`. Nothing here depends on it, so leave it at that.

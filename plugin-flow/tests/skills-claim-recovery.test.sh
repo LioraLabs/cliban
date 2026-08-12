@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-94 — a dead claimant cannot strand a single ticket.
+# a dead claimant cannot strand a single ticket.
 set -uo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)

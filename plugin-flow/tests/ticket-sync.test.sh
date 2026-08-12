@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-81, CLI-100 — `cliban-flow ticket sync <KEY>`: the milestone tip, merged into the
+# `cliban-flow ticket sync <KEY>`: the milestone tip, merged into the
 # ticket branch, in the ticket's own worktree.
 #
 # Same rule as every suite here: throwaway repo under `mktemp -d`, CLIBAN_DB
@@ -9,7 +9,7 @@
 # shellcheck source=lib.sh
 . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-# CLI-81: every state shared with `ticket ready` must reach the same guard.
+# every state shared with `ticket ready` must reach the same guard.
 assert_ticket_mutation_guards sync
 
 # ------------------------------------------------------------- a clean merge

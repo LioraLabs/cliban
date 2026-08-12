@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-79, CLI-100 — the dispatcher's own surface: routing, usage, and the exit-code
+# the dispatcher's own surface: routing, usage, and the exit-code
 # contract every subcommand keeps.
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib.sh
@@ -14,11 +14,11 @@ assert_out_has "usage: cliban-flow" "a bare invocation prints the usage"
 run_flow help
 assert_status 0 "help succeeds"
 assert_out_has "ticket status" "help lists the subcommands that exist"
-# CLI-80 — a subcommand that is advertised has to exist, and vice versa; usage
+# a subcommand that is advertised has to exist, and vice versa; usage
 # claiming `ticket start` before it was routed was caught exactly this way.
 assert_out_has "milestone start" "help lists milestone start"
 assert_out_has "milestone finish" "help lists milestone finish"
-# CLI-84 — the recovery survey is part of the advertised dispatcher surface.
+# the recovery survey is part of the advertised dispatcher surface.
 assert_out_has "milestone status" "help lists milestone status"
 assert_out_has "milestone abandon" "help lists milestone abandon"
 assert_out_has "ticket start" "help lists ticket start"
@@ -50,7 +50,7 @@ assert_status 2 "ticket integrate with no key is refused"
 run_flow ticket abandon
 assert_status 2 "ticket abandon with no key is refused"
 
-# CLI-80 — the milestone group, and the option parsing only it has.
+# the milestone group, and the option parsing only it has.
 #
 # Every case below must refuse before touching anything: the fixture's milestone
 # branch is asserted untouched at the end, so a malformed invocation that got as

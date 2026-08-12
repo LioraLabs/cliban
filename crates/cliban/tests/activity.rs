@@ -136,7 +136,6 @@ fn feed_reports_created_completed_and_logged_events_newest_first() {
 
 #[test]
 fn bare_activity_is_capped_at_fifteen_but_explicit_limits_win() {
-    // CLI-99
     let db = tmp_db("default-limit");
     ok(&db, &["project", "add", "CLI", "Cliban"]);
     ok(&db, &["issue", "add", "work", "--project", "CLI"]);

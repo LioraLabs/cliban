@@ -12,14 +12,14 @@ Policy, not mechanics. Every command, flag, JSON shape, and the description gram
 
 ## Per-Repo Binding (the adapter)
 
-A repo that has run `setup-cliban` carries `docs/agents/issue-tracker.md` — the adapter. It binds four things and is authoritative over the defaults below. Read it once per session before the first cliban action.
+A repo that has run `setup-cliban` carries `docs/agents/issue-tracker.md` — the adapter. It records the project, dispatcher workspace, reviewer, and key-placement invariant. Read it once per session before the first cliban action.
 
 | Binding | Meaning | Default when no adapter |
 |---|---|---|
 | Project key | which board | basename of `git rev-parse --show-toplevel`, matched case-insensitively against `project ls` keys and names; ask on miss |
-| Key policy | where issue keys may appear in git artifacts | branches and commit messages yes; source code, comments, docs never — except a test citing its ticket |
-| Branch convention | what starting an issue does | switch to the issue's `git_branch_name` |
-| Reviewer | who runs the gate at a plan's review checkpoints | a general-purpose agent with `complete-issue`'s inline brief |
+| Key placement | where issue keys appear in git artifacts | dispatcher branches and commits carry them; source code, comments, tests, and docs never do |
+| Workspace convention | where dispatcher-started work lives | isolated `.worktrees/<git_branch_name>` worktree |
+| Reviewer | who runs the ticket's once-by-default review and exceptional checkpoints | a general-purpose agent with `complete-issue`'s inline brief |
 
 If the user is wiring up a new repo, point them at `setup-cliban`; don't improvise a binding. If `cliban` itself is missing from `$PATH`, skip all board actions silently for the session.
 
@@ -33,16 +33,14 @@ Its surface is `milestone start`, `milestone status`, `milestone finish`, `miles
 
 | Workflow event | Board action |
 |---|---|
-| Spec/plan written | issue stays `backlog` |
-| First step picked up | `mv KEY in-progress` |
+| Ticket work starts (standalone or dispatched) | `ticket start KEY` claims it, creates its workspace, and moves it to `in-progress` |
 | Stuck on a dependency | `mv KEY blocked --note "<why>"` |
-| PR opened | `mv KEY in-review --note "PR <url>"` |
-| Dispatched ticket ready for integration | `ticket ready KEY` moves it to `in-review` |
+| Ticket ready (standalone or dispatched) | `ticket ready KEY` records its immutable HEAD and moves it to `in-review` |
 | PR merged / local merge | `mv KEY done --note "merged as <sha>"` |
 | Ticket abandoned with human confirmation | `ticket abandon KEY --confirm "<why>"`; keep status, log why, release claim |
 | Milestone abandoned with human confirmation | `milestone abandon NAME -p PROJECT --confirm "<why>"`; apply the ticket rule to every issue |
 
-Move the ticket when the work moves, in the same breath — a board that lags reality is worse than no board. Linear-linked issues additionally get `cliban linear push KEY` after the `in-review` and `done` moves (linkage detection and field ownership: `cliban` skill, Linear bridge section).
+Move the ticket when the work moves, in the same breath — a board that lags reality is worse than no board. Linear bridge synchronization remains a separate explicit action after lifecycle transitions (linkage detection and field ownership: `cliban` skill, Linear bridge section).
 
 ## Where Artifacts Live
 
@@ -51,37 +49,28 @@ Work-lifecycle artifacts go on the board; knowledge that outlives the work goes 
 | Artifact | Home |
 |---|---|
 | Spec / PRD | issue `## Spec` via `issue edit KEY --section spec` |
-| Implementation plan | issue `## Plan` via `issue edit KEY --section plan`, then `issue lint KEY` |
+| Implementation plan | issue `## Plan` via `issue edit KEY --section plan`; freeform is valid, while `lint`/`tick`/`promote` are available for structured plans |
 | Progress, findings, dead ends | issue `## Activity Log` via `issue log` |
 | Durable reusable lessons | project `## Notes` via `project note add`, search-first |
 | Blocking relationships | relations via `--blocks`/`--blocked-by` — never `Blocked by:` text lines in repo files |
 | ADRs, `CONTEXT.md`, domain docs | **the repo**, plaintext, git-tracked — never the board |
 
-Issue keys follow the adapter's key policy, which keeps them out of source code, comments, and docs as decoration. **One exception under every policy:** a test may cite the ticket whose `## Spec` it discharges, in a comment beside it. That is a citation, not decoration — the test *is* that spec in enforceable form, the key is the only stable name the spec has, and keys stay resolvable after archive. Shape and obligations: `complete-issue`'s `references/tdd.md`.
+The key-placement invariant keeps issue keys in dispatcher branches and commits,
+and out of source code, comments, tests, and docs. Provenance lives in git and on
+the board.
 
 ## What a Good Plan Contains
 
-The `cliban` skill defines what *parses* (`### Task N:` headings, column-zero checkboxes). The contract for what a plan *says*, per task:
+A plan is proportional to the work. A sentence or short approach is enough for
+small work; larger work may use ordered `### Task N:` headings and column-zero
+checkboxes. When that structure is present, `issue lint`, `issue tick`, and
+`issue promote` can validate and mutate it. They are tools, not lifecycle gates.
 
-```markdown
-### Task 1: short name
-
-**Files:** exact paths
-
-**Behaviors:** observable outcomes and edge cases
-
-**Test intent:** the seams the tests observe from, and which claims of the ticket's `## Spec` each test discharges
-
-- [ ] For each behavior in turn: failing test citing the ticket, verified failure, then the implementation.
-- [ ] Run focused and broader verification.
-- [ ] Commit the coherent change.
-```
-
-Insert `### Review Checkpoint: <scope>` markers between task groups. Each is a **gate**: the executor stops, reviews every task since the previous marker in one pass, and does not advance with a spec failure or a serious quality issue open.
-
-Place them where a bug would otherwise **compound** — after a foundational slice later tasks stack on, or where the work crosses subsystems. Not after every task; batching is the point, since N tasks cost one review instead of N. When review is chosen, a plan with no markers gets one cumulative review at the end.
-
-The first step is a loop, not two steps: every test then every implementation is horizontal slicing, pinning the shape you guessed at before the first line taught you anything.
+Name observable outcomes, important edge cases, and the executable evidence
+that will prove meaningful claims. Add a mid-ticket review checkpoint only where
+a mistaken foundation would compound expensively. Non-trivial or risky work gets
+one fresh-context review over the complete ticket diff once by default before
+ready; exceptional checkpoints supplement rather than replace it.
 
 ## The Stages
 
@@ -93,7 +82,7 @@ Two ways onto the board — building something, or something being broken — co
 | Slice | `scope-milestone` | tracer-bullet issues with `--blocked-by` edges |
 | Report → ticket | `triage-bug` | a `bug` issue whose `## Spec` holds a reproduction |
 | Root cause | `diagnose-issue` | the hypothesis ledger and proven cause in `## Activity Log` |
-| Execute one | `complete-issue` | `## Plan`, then code, `tick`, `log`, and a status move |
+| Execute one | `complete-issue` | proportional `## Plan`, implementation, executable verification, and dispatcher-owned start/ready |
 | Execute many | `complete-milestone` | wave-ordered tickets merged onto a milestone branch |
 | Recover | `recover-milestone` | read-only diagnosis from the board and git |
 
@@ -103,4 +92,8 @@ idea    → explore-feature → scope-milestone ─┐
 report  → triage-bug      → diagnose-issue ──┘
 ```
 
-Working without them — plan mode, or plain conversation — is fully supported and changes nothing about the contract: create the issue with its `## Spec`, write the plan via `issue edit KEY --section plan --create-section --description-file -` (never a whole-description rewrite), `issue lint KEY` to confirm it parses, then `mv` → `tick` → `log` as the status table dictates.
+Working without them — plan mode, or plain conversation — is fully supported and
+changes nothing about the contract: create the issue with its `## Spec`, start it
+through the dispatcher, write and confirm a proportional plan without replacing
+the whole description, prove the result with executable evidence, then hand its
+committed HEAD back through dispatcher ready.
