@@ -272,6 +272,17 @@ branch_of() {
     printf '%s' "$branch"
 }
 
+# ready_evidence <KEY> — the board facts `ticket ready` requires around a
+# branch whose git state a test sets up itself.
+ready_evidence() {
+    cb issue edit "$1" --section plan --create-section --description-file - >/dev/null <<'EOF'
+### Task 1: fixture
+
+- [x] **Step 1: exercised**
+EOF
+    cb issue log "$1" "Final review: SPEC ✅; QUALITY pass" >/dev/null
+}
+
 # cliban_slug_of <text> — the slug cliban itself derives, read back off an
 # issue's git_branch_name with the key prefix stripped. Independent of the
 # script under test, so comparing against it is a real differential rather than
@@ -350,6 +361,20 @@ break_board_moves() {
     stub_bin cliban '#!/usr/bin/env bash
 if [ "${1:-}" = issue ] && [ "${2:-}" = mv ]; then
     echo "stub: the board is unreachable" >&2
+    exit 1
+fi
+exec '"$real"' "$@"'
+}
+
+# break_worktree_add — git fails only the dispatcher mutation; fixture setup
+# and assertions keep using the real git outside run_flow's substituted PATH.
+break_worktree_add() {
+    local real
+    real=$(command -v git) || abort "git is not on PATH"
+    # shellcheck disable=SC2016
+    stub_bin git '#!/usr/bin/env bash
+if [ "${1:-}" = -C ] && [ "${3:-}" = worktree ] && [ "${4:-}" = add ]; then
+    echo "stub: worktree add failed" >&2
     exit 1
 fi
 exec '"$real"' "$@"'

@@ -99,6 +99,73 @@ fn seeded(tag: &str) -> String {
     db
 }
 
+#[test]
+fn issue_ls_defaults_to_milestone_summary() {
+    // CLI-101
+    let db = seeded("issue-summary");
+    ok(&db, &["issue", "edit", "CLI-1", "--milestone", "v1"]);
+
+    let rows: Vec<serde_json::Value> = ok(&db, &["issue", "ls", "--project", "CLI", "--json"])
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            serde_json::json!({"backlog": 1, "milestone": "v1"}),
+            serde_json::json!({"backlog": 1, "milestone": null}),
+        ]
+    );
+
+    let table = ok(&db, &["issue", "ls", "--project", "CLI", "--table"]);
+    assert!(table.starts_with("MILESTONE  BACKLOG"), "{table}");
+    assert!(table.contains("v1         1"), "{table}");
+    assert!(table.contains("-          1"), "{table}");
+
+    ok(&db, &["issue", "mv", "CLI-1", "done"]);
+    ok(
+        &db,
+        &[
+            "issue",
+            "add",
+            "gamma",
+            "--project",
+            "CLI",
+            "--milestone",
+            "v1",
+        ],
+    );
+    let scoped: Vec<serde_json::Value> = ok(
+        &db,
+        &[
+            "issue",
+            "ls",
+            "--project",
+            "CLI",
+            "--milestone",
+            "v1",
+            "--json",
+        ],
+    )
+    .lines()
+    .map(|line| serde_json::from_str(line).unwrap())
+    .collect();
+    assert_eq!(scoped.len(), 1);
+    assert_eq!(scoped[0]["key"], "CLI-3");
+
+    ok(&db, &["issue", "archive", "CLI-2"]);
+    let all = ok(&db, &["issue", "ls", "--project", "CLI", "--all", "--json"]);
+    assert_eq!(all.lines().count(), 3);
+    assert!(
+        all.lines().any(|line| line.contains(r#""status":"done""#)),
+        "{all}"
+    );
+    assert!(
+        all.lines().any(|line| line.contains(r#""archived":true"#)),
+        "{all}"
+    );
+}
+
 // --- the resolver's precedence ----------------------------------------------
 
 #[test]
@@ -109,14 +176,19 @@ fn piped_output_defaults_to_the_exact_json_shapes() {
     let piped = ok(&db, &["issue", "ls"]);
     let explicit = ok(&db, &["issue", "ls", "--json"]);
     assert_eq!(piped, explicit, "piped `issue ls` must BE the --json form");
-    assert!(piped.lines().count() >= 2);
+    assert!(!piped.is_empty());
     for line in piped.lines() {
         serde_json::from_str::<serde_json::Value>(line).expect("valid NDJSON");
     }
 
-    // Single-entity read: pretty JSON, same bytes as --json.
+    // CLI-99 — an inferred machine reader gets the lean shape; an explicit
+    // --json request retains the complete single-entity schema.
     let piped = ok(&db, &["issue", "show", "CLI-1"]);
-    assert_eq!(piped, ok(&db, &["issue", "show", "CLI-1", "--json"]));
+    let piped: serde_json::Value = serde_json::from_str(&piped).unwrap();
+    let explicit: serde_json::Value =
+        serde_json::from_str(&ok(&db, &["issue", "show", "CLI-1", "--json"])).unwrap();
+    assert!(piped.get("description").is_none(), "{piped}");
+    assert!(explicit.get("description").is_some(), "{explicit}");
 
     // The other groups follow the same default.
     assert_eq!(
@@ -138,11 +210,96 @@ fn piped_output_defaults_to_the_exact_json_shapes() {
 }
 
 #[test]
+fn piped_single_entity_reads_are_lean_but_explicit_json_is_full() {
+    // CLI-99
+    let db = seeded("lean-show");
+    for (plain, explicit) in [
+        (
+            vec!["project", "show", "CLI"],
+            vec!["project", "show", "CLI", "--json"],
+        ),
+        (
+            vec!["milestone", "show", "v1", "--project", "CLI"],
+            vec!["milestone", "show", "v1", "--project", "CLI", "--json"],
+        ),
+    ] {
+        let lean: serde_json::Value = serde_json::from_str(&ok(&db, &plain)).unwrap();
+        let full: serde_json::Value = serde_json::from_str(&ok(&db, &explicit)).unwrap();
+        assert!(lean.get("description").is_none(), "{lean}");
+        assert!(full.get("description").is_some(), "{full}");
+    }
+
+    let pinned: serde_json::Value = serde_json::from_str(&ok_env(
+        &db,
+        &["issue", "show", "CLI-1"],
+        JSON,
+    ))
+    .unwrap();
+    assert!(pinned.get("description").is_some(), "{pinned}");
+}
+
+#[test]
+fn log_echo_omits_the_entry_and_not_found_names_the_identity() {
+    // CLI-99
+    let db = seeded("diet-errors");
+    let echo: serde_json::Value = serde_json::from_str(&ok(
+        &db,
+        &["issue", "log", "CLI-1", "a deliberately long note"],
+    ))
+    .unwrap();
+    assert_eq!(echo["key"], "CLI-1");
+    assert!(echo.get("timestamp").is_some(), "{echo}");
+    assert!(echo.get("entry").is_none(), "{echo}");
+
+    for (args, identity) in [
+        (vec!["issue", "show", "CLI-404"], "CLI-404"),
+        (vec!["issue", "log", "CLI-404", "note"], "CLI-404"),
+        (vec!["issue", "mv", "CLI-404", "done"], "CLI-404"),
+        (vec!["issue", "edit", "CLI-404", "--title", "nope"], "CLI-404"),
+        (vec!["issue", "cat", "CLI-404"], "CLI-404"),
+        (vec!["issue", "archive", "CLI-404"], "CLI-404"),
+        (
+            vec!["issue", "claim", "CLI-404", "--by", "tester"],
+            "CLI-404",
+        ),
+        (vec!["issue", "release", "CLI-404"], "CLI-404"),
+        (vec!["issue", "lint", "CLI-404"], "CLI-404"),
+        (
+            vec!["issue", "add", "work", "--project", "MISS"],
+            "MISS",
+        ),
+        (
+            vec!["issue", "cp", "CLI-1", "--project", "MISS"],
+            "MISS",
+        ),
+        (vec!["project", "show", "MISS"], "MISS"),
+        (
+            vec!["project", "edit", "MISS", "--name", "Missing"],
+            "MISS",
+        ),
+        (
+            vec!["milestone", "show", "missing", "--project", "CLI"],
+            "missing",
+        ),
+        (
+            vec![
+                "milestone", "edit", "missing", "--project", "CLI", "--status", "completed",
+            ],
+            "missing",
+        ),
+    ] {
+        let r = run(&db, &args);
+        assert_eq!(r.code, 1, "{}", r.stderr);
+        assert!(r.stderr.contains(identity), "{args:?}: {}", r.stderr);
+    }
+}
+
+#[test]
 fn table_flag_beats_the_env_pin_and_the_pipe() {
     let db = seeded("tableflag");
     let table = ok_env(&db, &["issue", "ls", "--table"], JSON);
     assert!(
-        table.starts_with("KEY"),
+        table.starts_with("MILESTONE"),
         "--table must win over CLIBAN_OUTPUT=json: {table}"
     );
     let json = ok_env(&db, &["issue", "ls", "--json"], TABLE);
@@ -155,7 +312,7 @@ fn the_env_var_pins_the_default() {
     let db = seeded("envpin");
     let table = ok_env(&db, &["issue", "ls"], TABLE);
     assert!(
-        table.starts_with("KEY"),
+        table.starts_with("MILESTONE"),
         "CLIBAN_OUTPUT=table must override pipe detection: {table}"
     );
     let json = ok_env(&db, &["issue", "ls"], JSON);
@@ -224,7 +381,11 @@ fn show_section_stays_raw_markdown_in_every_mode() {
 fn mv_echoes_json_when_piped_and_confirms_in_table_mode() {
     let db = seeded("mv");
     let echo = ok(&db, &["issue", "mv", "CLI-1", "in-progress"]);
-    assert_eq!(echo.lines().count(), 1, "echoes are one compact line: {echo}");
+    assert_eq!(
+        echo.lines().count(),
+        1,
+        "echoes are one compact line: {echo}"
+    );
     let v: serde_json::Value = serde_json::from_str(&echo).expect("mv echoes the issue as JSON");
     assert_eq!(v["key"], "CLI-1");
     assert_eq!(v["status"], "in-progress");
@@ -233,7 +394,10 @@ fn mv_echoes_json_when_piped_and_confirms_in_table_mode() {
     assert!(v.get("description").is_none(), "{v}");
     let shown: serde_json::Value =
         serde_json::from_str(&ok(&db, &["issue", "show", "CLI-1", "--json"])).unwrap();
-    assert_eq!(v["updated_at"], shown["updated_at"], "echo must be a CAS token");
+    assert_eq!(
+        v["updated_at"], shown["updated_at"],
+        "echo must be a CAS token"
+    );
 
     let confirm = ok_env(&db, &["issue", "mv", "CLI-1", "in-review"], TABLE);
     assert_eq!(confirm, "moved CLI-1: in-progress → in-review\n");
@@ -336,9 +500,7 @@ fn project_note_add_confirms_or_echoes() {
     assert_eq!(v["note"], "Lesson");
     let confirm = ok_env(
         &db,
-        &[
-            "project", "note", "add", "CLI", "Another", "--body", "more",
-        ],
+        &["project", "note", "add", "CLI", "Another", "--body", "more"],
         TABLE,
     );
     assert_eq!(confirm, "added note \"Another\" to CLI ## Notes\n");
@@ -364,9 +526,7 @@ fn no_listed_mutation_succeeds_silently_in_either_mode() {
             "--target",
             "2027-01-01",
         ],
-        &[
-            "project", "note", "add", "CLI", "N", "--body", "b",
-        ],
+        &["project", "note", "add", "CLI", "N", "--body", "b"],
     ];
     for env in [JSON, TABLE] {
         let db = seeded(if env == JSON { "silentj" } else { "silentt" });
@@ -417,7 +577,7 @@ fn confirmations_name_the_entity_and_the_change() {
 fn list_rows_are_lean_and_full_detail_is_complete() {
     let db = seeded("lean");
     let row: serde_json::Value = serde_json::from_str(
-        ok(&db, &["issue", "ls", "-p", "CLI"])
+        ok(&db, &["issue", "ls", "-p", "CLI", "--all"])
             .lines()
             .next()
             .unwrap(),
@@ -447,9 +607,9 @@ fn list_rows_are_lean_and_full_detail_is_complete() {
     for present in ["description", "git_branch_name", "position", "created_at"] {
         assert!(full.get(present).is_some(), "--full missing {present}");
     }
-    // show stays the complete shape with null-not-absent optionals.
+    // Explicit --json stays the complete shape with null-not-absent optionals.
     let shown: serde_json::Value =
-        serde_json::from_str(&ok(&db, &["issue", "show", "CLI-1"])).unwrap();
+        serde_json::from_str(&ok(&db, &["issue", "show", "CLI-1", "--json"])).unwrap();
     assert!(shown.get("milestone").is_some_and(|v| v.is_null()));
 }
 

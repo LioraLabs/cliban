@@ -15,6 +15,117 @@
 # CLI-81: every state shared with `ticket sync` must reach the same guard.
 assert_ticket_mutation_guards ready
 
+# CLI-98 — readiness requires recoverable plan, ticket work, review, and an
+# unfinished board ticket before the handoff can become in-review.
+
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "No plan")
+branch=$(branch_of "$key")
+fixture_ticket_worktree "$branch"
+commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt work
+cb issue log "$key" "Final review: SPEC ✅; QUALITY pass" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "ready refuses a missing plan"
+assert_stderr_has "cliban issue edit $key --section plan" "missing-plan refusal names the repair"
+
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "Plan without steps")
+branch=$(branch_of "$key")
+fixture_ticket_worktree "$branch"
+commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt work
+cb issue edit "$key" --section plan --create-section --description-file - >/dev/null <<'EOF'
+### Task 1: still only prose
+EOF
+cb issue log "$key" "Final review: SPEC ✅; QUALITY pass" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "ready refuses a plan without checklist items"
+assert_stderr_has "checklist" "empty-plan refusal names the missing evidence"
+
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "No ticket commits")
+branch=$(branch_of "$key")
+fixture_ticket_worktree "$branch"
+ready_evidence "$key"
+run_flow ticket ready "$key"
+assert_status 2 "ready refuses zero commits past the milestone"
+assert_stderr_has " commit" "zero-commit refusal names the repair"
+
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "No review verdict")
+branch=$(branch_of "$key")
+fixture_ticket_worktree "$branch"
+commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt work
+cb issue edit "$key" --section plan --create-section --description-file - >/dev/null <<'EOF'
+### Task 1: fixture
+
+- [x] **Step 1: exercised**
+EOF
+run_flow ticket ready "$key"
+assert_status 2 "ready refuses a missing review verdict"
+assert_stderr_has "cliban issue log $key" "review refusal names the repair"
+
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "Malformed review waiver")
+branch=$(branch_of "$key")
+fixture_ticket_worktree "$branch"
+commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt work
+cb issue edit "$key" --section plan --create-section --description-file - >/dev/null <<'EOF'
+### Task 1: fixture
+
+- [x] **Step 1: exercised**
+EOF
+cb issue log "$key" "review waived by orchestrator:" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "ready refuses a waiver without a reason"
+assert_stderr_has "review waived by orchestrator: <reason>" "waiver refusal prints the exact next record"
+
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "Whitespace review waiver")
+branch=$(branch_of "$key")
+fixture_ticket_worktree "$branch"
+commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt work
+cb issue edit "$key" --section plan --create-section --description-file - >/dev/null <<'EOF'
+### Task 1: fixture
+
+- [x] **Step 1: exercised**
+EOF
+cb issue log "$key" "review waived by orchestrator:     " >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "ready refuses a whitespace-only waiver reason"
+
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "Embedded review waiver")
+branch=$(branch_of "$key")
+fixture_ticket_worktree "$branch"
+commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt work
+cb issue edit "$key" --section plan --create-section --description-file - >/dev/null <<'EOF'
+### Task 1: fixture
+
+- [x] **Step 1: exercised**
+EOF
+cb issue log "$key" "note — review waived by orchestrator: narrow change" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "ready refuses an embedded waiver phrase"
+
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "Already done")
+branch=$(branch_of "$key")
+fixture_ticket_worktree "$branch"
+commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt work
+ready_evidence "$key"
+cb issue mv "$key" "done" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "ready refuses a done ticket"
+assert_stderr_has "already done" "done refusal names the terminal state"
+
 # ------------------------------------------------------------- the happy path
 
 fixture_new
@@ -24,12 +135,18 @@ branch=$(branch_of "$key")
 fixture_ticket_worktree "$branch"
 commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt "the ticket's work"
 cb issue mv "$key" in-progress >/dev/null
+cb issue edit "$key" --section plan --create-section --description-file - >/dev/null <<'EOF'
+### Task 1: fixture
+
+- [x] **Step 1: exercised**
+EOF
+cb issue log "$key" "review waived by orchestrator: narrow, well-covered change" >/dev/null
 tip=$(gitf rev-parse "$branch")
 tsha=$(gitf rev-parse --short "$branch")
 msha=$(gitf rev-parse --short milestone/test-milestone)
 
 run_flow ticket ready "$key"
-assert_status 0 "a synced branch in a clean tree is ready"
+assert_status 0 "an exact orchestrator waiver makes a synced branch ready"
 assert_stdout_is "$tip" "the tip, alone, is on stdout"
 assert_eq "$(status_of "$key")" "in-review" "the ticket moved to in-review"
 assert_timeline_has "$key" "in-progress → in-review" "the move is on the timeline"
@@ -42,7 +159,7 @@ assert_board_has "$key" "milestone/test-milestone@$msha" \
     "the board line records what the branch was found to contain"
 assert_eq "$(gitf rev-parse "$branch")" "$tip" "the branch was not moved"
 assert_eq "$(gitt "$branch" status --porcelain)" "" "the worktree was left alone"
-assert_stderr_has "orchestrator" "the guidance says who picks it up from here"
+assert_eq "$FLOW_STDERR" "" "ready success adds no ceremony to stderr"
 
 # ------------------------------------------------------------ a stale branch
 #
@@ -57,6 +174,7 @@ branch=$(branch_of "$key")
 fixture_ticket_worktree "$branch"
 commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt "the ticket's work"
 commit_file_at "$(fixture_milestone_wt)" milestone-side.txt "another ticket landed"
+ready_evidence "$key"
 msha=$(gitf rev-parse --short milestone/test-milestone)
 before=$(status_of "$key")
 
@@ -87,6 +205,7 @@ key=$(new_issue "Work still in flight")
 branch=$(branch_of "$key")
 fixture_ticket_worktree "$branch"
 commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt "the ticket's work"
+ready_evidence "$key"
 printf 'not committed\n' >>"$(fixture_ticket_wt "$branch")/ticket-side.txt"
 before=$(status_of "$key")
 
@@ -104,6 +223,7 @@ fixture_milestone_worktree
 key=$(new_issue "Untracked leftovers")
 branch=$(branch_of "$key")
 fixture_ticket_worktree "$branch"
+ready_evidence "$key"
 printf 'scratch\n' >"$(fixture_ticket_wt "$branch")/scratch.txt"
 
 run_flow ticket ready "$key"
@@ -118,6 +238,7 @@ key=$(new_issue "Declared ready twice")
 branch=$(branch_of "$key")
 fixture_ticket_worktree "$branch"
 commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt "the ticket's work"
+ready_evidence "$key"
 tip=$(gitf rev-parse "$branch")
 run_flow ticket ready "$key"
 assert_status 0 "the first run succeeds"
@@ -142,6 +263,7 @@ key=$(new_issue "Board rejects the move")
 branch=$(branch_of "$key")
 fixture_ticket_worktree "$branch"
 commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt "the ticket's work"
+ready_evidence "$key"
 before=$(status_of "$key")
 break_board_moves
 
@@ -159,6 +281,7 @@ key=$(new_issue "Activity log is down")
 branch=$(branch_of "$key")
 fixture_ticket_worktree "$branch"
 commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt "the ticket's work"
+ready_evidence "$key"
 break_board_writes
 
 run_flow ticket ready "$key"

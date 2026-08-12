@@ -64,7 +64,7 @@ pub struct ActivityArgs {
     /// include archived issues
     #[arg(long)]
     archived: bool,
-    /// cap the number of events (0 = no cap; default 50, or 0 with --issue)
+    /// cap the number of events (0 = no cap; default 15, or 0 with --issue)
     #[arg(long)]
     limit: Option<i64>,
     /// NDJSON output (one compact JSON object per line)
@@ -117,7 +117,7 @@ pub async fn run(db: &Option<String>, a: ActivityArgs) -> CliResult<()> {
         }
     });
     let since = crate::since::parse(&since_str, "--since")?;
-    let limit = a.limit.unwrap_or(if a.issue.is_some() { 0 } else { 50 });
+    let limit = a.limit.unwrap_or(if a.issue.is_some() { 0 } else { 15 });
     let issue_key = a.issue.as_deref().map(str::to_uppercase);
     let project = crate::scope::project(a.project.clone());
     let store = store_open::open(db).await?;

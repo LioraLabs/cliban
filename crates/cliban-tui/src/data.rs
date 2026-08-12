@@ -310,7 +310,8 @@ impl Data {
     pub fn set_project_archived(&self, key: &str, archived: bool) -> Result<(), DataError> {
         let key = key.to_string();
         self.rt.block_on(self.store.call(move |conn| {
-            let p = projects::get_by_key(conn, &key)?.ok_or(cliban_core::Error::ProjectNotFound)?;
+            let p = projects::get_by_key(conn, &key)?
+                .ok_or_else(|| cliban_core::Error::ProjectNotFound(key.clone()))?;
             projects::update(
                 conn,
                 &p,
@@ -434,8 +435,9 @@ impl Data {
             let mid = match &milestone {
                 None => None,
                 Some(name) => {
-                    let p = projects::get_by_id(conn, i.project_id)?
-                        .ok_or(cliban_core::Error::ProjectNotFound)?;
+                    let p = projects::get_by_id(conn, i.project_id)?.ok_or_else(|| {
+                        cliban_core::Error::ProjectNotFound(i.project_id.to_string())
+                    })?;
                     milestones::get(conn, &p.key, name)?.map(|m| m.id)
                 }
             };
@@ -501,8 +503,9 @@ impl Data {
                 // they were made — the activity page's closed filter keys on it.
                 audit::record_move(conn, &cur, &cur.status, &b.status, None);
             }
-            let project = projects::get_by_id(conn, cur.project_id)?
-                .ok_or(cliban_core::Error::ProjectNotFound)?;
+            let project = projects::get_by_id(conn, cur.project_id)?.ok_or_else(|| {
+                cliban_core::Error::ProjectNotFound(cur.project_id.to_string())
+            })?;
             let mid = if b.milestone.is_empty() {
                 None
             } else {
@@ -682,7 +685,8 @@ impl Data {
     pub fn project_buffer(&self, project: &str) -> Result<ProjectBuffer, DataError> {
         let project = project.to_string();
         let p = self.rt.block_on(self.store.call(move |conn| {
-            projects::get_by_key(conn, &project)?.ok_or(cliban_core::Error::ProjectNotFound)
+            projects::get_by_key(conn, &project)?
+                .ok_or_else(|| cliban_core::Error::ProjectNotFound(project.clone()))
         }))?;
         Ok(ProjectBuffer {
             header: format!(
@@ -699,7 +703,8 @@ impl Data {
         let (project, b) = (project.to_string(), b.clone());
         self.rt.block_on(self.store.call(move |conn| {
             let p =
-                projects::get_by_key(conn, &project)?.ok_or(cliban_core::Error::ProjectNotFound)?;
+                projects::get_by_key(conn, &project)?
+                    .ok_or_else(|| cliban_core::Error::ProjectNotFound(project.clone()))?;
             projects::update(
                 conn,
                 &p,

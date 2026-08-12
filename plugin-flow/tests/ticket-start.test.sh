@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-80 — `cliban-flow ticket start <KEY>`: a ticket worktree under the
+# CLI-80, CLI-100 — `cliban-flow ticket start <KEY>`: a ticket worktree under the
 # milestone worktree.
 #
 # Same rule as every suite here: throwaway repo under `mktemp -d`, CLIBAN_DB
@@ -30,10 +30,12 @@ assert_eq "$(git -C "$(fixture_milestone_wt)/.worktrees/$branch" rev-parse --abb
 assert_eq "$(gitf rev-parse --abbrev-ref HEAD)" "main" \
     "the primary checkout is left on what it was on"
 assert_eq "$(gitf status --porcelain)" "" "the primary checkout is left clean"
-assert_stderr_has "cliban-flow: creating $branch" \
-    "the script announces the branch it is about to create"
+assert_eq "$FLOW_STDERR" "" "success adds no ceremony to stderr"
 assert_board_has "$key" "[cliban-flow] ticket start $key: created" \
     "the ticket's activity log records the line"
+assert_eq "$(status_of "$key")" in-progress "starting moves the ticket in-progress"
+assert_eq "$(cb issue show "$key" --json | json_get claimed_by)" test:cliban-flow \
+    "starting claims the ticket for its actor"
 
 # A wave is several tickets on one milestone, started one after another. The
 # first ticket's worktree lands inside the milestone worktree, and nothing
@@ -74,7 +76,7 @@ assert_eq "$(gitf rev-parse "$branch")" "$sha_before" \
     "the second run did not move the ticket branch onto the newer milestone tip"
 assert_eq "$(gitf worktree list --porcelain | grep -c '^worktree ')" "$worktrees_before" \
     "the second run added no second worktree"
-assert_stderr_has "already checked out" "the second run says it found what was there"
+assert_eq "$FLOW_STDERR" "" "idempotent success adds no ceremony to stderr"
 assert_board_has "$key" "[cliban-flow] ticket start $key: already started" \
     "the idempotent run is distinguishable on the board from the creating one"
 
@@ -94,7 +96,7 @@ assert_status 0 "a ticket whose branch exists but is checked out nowhere succeed
 assert_eq "$(gitf rev-parse "$branch")" "$tip" "the existing ticket branch was not moved"
 assert_eq "$(git -C "$(fixture_milestone_wt)/.worktrees/$branch" rev-parse HEAD)" "$tip" \
     "the worktree carries the work the branch already had"
-assert_stderr_has "existing branch" "the narration says it is adopting, not creating"
+assert_eq "$FLOW_STDERR" "" "adoption success adds no ceremony to stderr"
 assert_board_has "$key" "[cliban-flow] ticket start $key: adopted" \
     "adopting is distinguishable on the board from creating"
 
@@ -115,6 +117,39 @@ assert_stderr_has "no longer exists" "the refusal says what is wrong with it"
 assert_stderr_has "worktree prune" "the instruction names the repair it will not do for you"
 
 # ------------------------------------------------------------------ guards
+
+# CLI-98 — start owns the claim and status transition, and must not take a
+# ticket another session already owns.
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "Claimed elsewhere")
+branch=$(branch_of "$key")
+cb issue claim "$key" --by agent:someone-else >/dev/null
+
+run_flow ticket start "$key"
+assert_status 2 "start refuses another actor's claim"
+assert_stderr_has "cliban issue release $key" "claim refusal names the repair"
+assert_eq "$(cb issue show "$key" --json | json_get claimed_by)" agent:someone-else \
+    "the other actor keeps its claim"
+assert_eq "$(status_of "$key")" backlog "claim refusal preserves status"
+assert_eq "$(gitf rev-parse --verify --quiet "refs/heads/$branch" || true)" "" \
+    "claim refusal creates no branch"
+
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "Git rejects start")
+branch=$(branch_of "$key")
+break_worktree_add
+
+run_flow ticket start "$key"
+assert_status 2 "a failed worktree add refuses the start"
+assert_stderr_has "stub: worktree add failed" "git failure preserves its diagnostic"
+unset FLOW_PATH
+assert_eq "$(status_of "$key")" backlog "git failure restores backlog"
+assert_eq "$(cb issue show "$key" --json | json_get claimed_by)" "" \
+    "git failure releases the new claim"
+assert_eq "$(gitf rev-parse --verify --quiet "refs/heads/$branch" || true)" "" \
+    "stubbed git failure creates no branch"
 
 # Mergeability, and therefore a base to branch from, is a question about a
 # milestone branch.

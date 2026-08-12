@@ -3,7 +3,7 @@ use cliban_core::Error;
 /// Map a core error to its exit code: 1 not-found, 2 validation, 3 other.
 pub fn exit_code_for(err: &Error) -> i32 {
     match err {
-        Error::NotFound | Error::ProjectNotFound => 1,
+        Error::NotFound | Error::NamedNotFound(_) | Error::ProjectNotFound(_) => 1,
         Error::Validation(_) => 2,
         _ => 3,
     }
@@ -12,7 +12,10 @@ pub fn exit_code_for(err: &Error) -> i32 {
 /// The human message printed after `error: `.
 pub fn message_for(err: &Error) -> String {
     match err {
-        Error::NotFound | Error::ProjectNotFound => "not found".to_string(),
+        Error::NotFound => "not found".to_string(),
+        Error::NamedNotFound(identity) | Error::ProjectNotFound(identity) => {
+            format!("not found: {identity}")
+        }
         Error::Validation(pairs) => {
             let detail = pairs
                 .iter()

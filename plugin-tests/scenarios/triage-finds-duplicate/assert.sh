@@ -2,14 +2,14 @@
 set -u
 DB="$1"; fail=0
 
-n=$(cliban --db "$DB" issue ls --project ACME --json | wc -l)
+n=$(cliban --db "$DB" issue ls --project ACME --all --json | wc -l)
 if [ "$n" -ne 1 ]; then
   echo "FAIL: expected the existing ticket to be reused, got $n issues (a duplicate was filed)"
-  cliban --db "$DB" issue ls --project ACME --json | jq -r '"  - " + .key + " " + .title'
+  cliban --db "$DB" issue ls --project ACME --all --json | jq -r '"  - " + .key + " " + .title'
   fail=1
 fi
 
-key=$(cliban --db "$DB" issue ls --project ACME --json | jq -r '.key' | head -1)
+key=$(cliban --db "$DB" issue ls --project ACME --all --json | jq -r '.key' | head -1)
 
 # The new evidence has to land somewhere on the existing ticket — activity log
 # or an added section — not be silently dropped.

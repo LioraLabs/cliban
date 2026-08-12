@@ -471,7 +471,10 @@ fn a_second_import_does_not_create_a_second_issue() {
             )
             .assert_ok();
     }
-    let run = board.run(&["issue", "ls", "--project", "PROJ", "--json"], None);
+    let run = board.run(
+        &["issue", "ls", "--project", "PROJ", "--all", "--json"],
+        None,
+    );
     run.assert_ok();
     let count = run.stdout.lines().filter(|l| !l.trim().is_empty()).count();
     assert_eq!(count, 1, "importing twice created {count} issues");
@@ -518,7 +521,10 @@ fn import_dry_run_writes_nothing() {
     assert!(run.stdout.contains("dry run"), "{}", run.stdout);
     assert!(run.stdout.contains("Not yet imported"), "{}", run.stdout);
 
-    let ls = board.run(&["issue", "ls", "--project", "PROJ", "--json"], None);
+    let ls = board.run(
+        &["issue", "ls", "--project", "PROJ", "--all", "--json"],
+        None,
+    );
     ls.assert_ok();
     assert!(
         ls.stdout.trim().is_empty(),
@@ -1449,7 +1455,10 @@ fn import_mine_creates_refreshes_and_skips_out_of_cycle_work() {
     assert_eq!(out["refreshed"], 1, "{out}");
     assert_eq!(out["skipped"], 1, "{out}");
 
-    let ls = board.run(&["issue", "ls", "--project", "PROJ", "--json"], None);
+    let ls = board.run(
+        &["issue", "ls", "--project", "PROJ", "--all", "--json"],
+        None,
+    );
     ls.assert_ok();
     let count = ls.stdout.lines().filter(|l| !l.trim().is_empty()).count();
     assert_eq!(
@@ -1525,7 +1534,10 @@ fn import_mine_dry_run_writes_nothing() {
     assert!(run.stdout.contains("dry run"), "{}", run.stdout);
     assert!(run.stdout.contains("ENG-2"), "{}", run.stdout);
 
-    let ls = board.run(&["issue", "ls", "--project", "PROJ", "--json"], None);
+    let ls = board.run(
+        &["issue", "ls", "--project", "PROJ", "--all", "--json"],
+        None,
+    );
     ls.assert_ok();
     assert!(
         ls.stdout.trim().is_empty(),

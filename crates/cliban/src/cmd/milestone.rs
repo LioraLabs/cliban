@@ -209,7 +209,7 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             project,
             json,
             table,
-        } => show(db, name, project, crate::output::mode(json, table)).await,
+        } => show(db, name, project, crate::output::mode(json, table), json).await,
         MilestoneCmd::Edit {
             project,
             name,
@@ -574,6 +574,7 @@ async fn show(
     name: String,
     project: Option<String>,
     mode: Mode,
+    explicit_json: bool,
 ) -> CliResult<()> {
     let resolved = name;
     let project_key = crate::scope::required_project(project)?;
@@ -584,7 +585,7 @@ async fn show(
     let m = store
         .call(move |conn| milestones::get(conn, &get_key, &get_name))
         .await?
-        .ok_or(cliban_core::Error::NotFound)?;
+        .ok_or_else(|| CliError::not_found(format!("not found: {resolved}")))?;
 
     // Resolve issue list for the milestone (non-archived, this project).
     let list_key = project_key.clone();
@@ -605,27 +606,18 @@ async fn show(
     let count = issue_list.len() as i64;
 
     if mode.is_json() {
-        // Build alpha-ordered map inline so `issues` lands between issue_count
-        // and name (keys stay alphabetical).
-        let mut map = Map::new();
-        map.insert("created_at".into(), json!(format_usec(m.inserted_at)));
-        map.insert("description".into(), json!(m.description));
-        map.insert("issue_count".into(), json!(count));
-        map.insert("name".into(), json!(m.name));
-        map.insert("project".into(), json!(project_key));
-        map.insert("status".into(), json!(m.status));
-        map.insert(
-            "target_date".into(),
-            match m.target_date.map(format_date) {
-                Some(s) => json!(s),
-                None => Value::Null,
-            },
+        let value = crate::output::build_milestone_json(
+            &m.name,
+            Some(project_key),
+            &m.description,
+            m.target_date.map(format_date),
+            &m.status,
+            &format_usec(m.inserted_at),
+            &format_usec(m.updated_at),
+            count,
+            crate::output::single_detail(explicit_json),
         );
-        map.insert("updated_at".into(), json!(format_usec(m.updated_at)));
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&Value::Object(map)).unwrap()
-        );
+        println!("{}", serde_json::to_string_pretty(&value).unwrap());
         return Ok(());
     }
 
@@ -676,7 +668,8 @@ async fn apply_edit(
     let m = store
         .call(move |conn| {
             let cur =
-                milestones::get(conn, &call_key, &name)?.ok_or(cliban_core::Error::NotFound)?;
+                milestones::get(conn, &call_key, &name)?
+                    .ok_or_else(|| cliban_core::Error::NamedNotFound(name.clone()))?;
             milestones::update(conn, &cur, params)
         })
         .await?;
@@ -723,8 +716,8 @@ async fn log(
     store
         .call(move |conn| {
             let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-            let cur =
-                milestones::get(&tx, &call_key, &call_name)?.ok_or(cliban_core::Error::NotFound)?;
+            let cur = milestones::get(&tx, &call_key, &call_name)?
+                .ok_or_else(|| cliban_core::Error::NamedNotFound(call_name.clone()))?;
             let new_desc = crate::descmd::append_activity_log(&cur.description, &entry, now);
             milestones::update(
                 &tx,
@@ -773,6 +766,7 @@ async fn waves(
         println!(
             "{}",
             json!({
+                "chains": w.chains,
                 "done": w.done,
                 "external_blocked": w.external_blocked,
                 "waves": w.waves,
@@ -791,6 +785,16 @@ async fn waves(
     }
     if !w.done.is_empty() {
         println!("done: {}", w.done.join(", "));
+    }
+    if !w.chains.is_empty() {
+        println!(
+            "chains: {}",
+            w.chains
+                .iter()
+                .map(|c| format!("[{}]", c.join(", ")))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
     }
     Ok(())
 }

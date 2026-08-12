@@ -16,7 +16,8 @@ use crate::descmd;
 use crate::descmd::find_section;
 use crate::errors::{CliError, CliResult};
 use crate::output::{
-    build_issue_json, write_issue_table, Detail, IssueJsonInputs, IssueRow, Mode, RelationOut,
+    build_issue_json, write_issue_summary_table, write_issue_table, Detail, IssueJsonInputs,
+    IssueRow, IssueSummaryRow, Mode, RelationOut,
 };
 use crate::store_open;
 
@@ -197,6 +198,9 @@ pub struct LsArgs {
     /// include archived issues
     #[arg(long)]
     archived: bool,
+    /// include every issue, including done and archived
+    #[arg(long)]
+    all: bool,
     /// only issues updated since: 4h, 3d, 2w, today, yesterday, 2026-07-25, or RFC3339
     #[arg(long = "updated-since")]
     updated_since: Option<String>,
@@ -631,7 +635,9 @@ pub async fn run(db: &Option<String>, args: IssueArgs) -> CliResult<()> {
             )
             .await
         }
-        IssueCmd::Current { json, table } => current(db, crate::output::mode(json, table)).await,
+        IssueCmd::Current { json, table } => {
+            current(db, crate::output::mode(json, table), json).await
+        }
         IssueCmd::Claim {
             key,
             by,
@@ -850,7 +856,8 @@ async fn add(db: &Option<String>, a: AddArgs) -> CliResult<()> {
         let name = lbl;
         store
             .call(move |conn| {
-                let issue = issues::get_by_id(conn, id)?.ok_or(cliban_core::Error::NotFound)?;
+                let issue = issues::get_by_id(conn, id)?
+                    .ok_or_else(|| cliban_core::Error::NamedNotFound(format!("issue id {id}")))?;
                 issues::add_label(conn, &issue, &name)
             })
             .await?;
@@ -1042,13 +1049,17 @@ async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
     let issue = store
         .call(move |conn| issues::get_by_key(conn, &lookup))
         .await?
-        .ok_or(cliban_core::Error::NotFound)?;
+        .ok_or_else(|| CliError::not_found(format!("not found: {key}")))?;
 
     if crate::output::mode(a.json, a.table).is_json() {
         let inputs = issue_json_inputs(&store, &issue).await?;
         println!(
             "{}",
-            serde_json::to_string_pretty(&build_issue_json(inputs, Detail::Full)).unwrap()
+            serde_json::to_string_pretty(&build_issue_json(
+                inputs,
+                crate::output::single_detail(a.json),
+            ))
+            .unwrap()
         );
         return Ok(());
     }
@@ -1148,6 +1159,21 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
 
     let store = store_open::open(db).await?;
 
+    let summary = a.status.is_none()
+        && !a.full
+        && a.priority.is_none()
+        && a.milestone.is_none()
+        && a.parent.is_none()
+        && a.sort.is_none()
+        && a.label.is_empty()
+        && !a.no_subs
+        && !a.archived
+        && !a.all
+        && a.updated_since.is_none()
+        && !a.ready
+        && !a.blocked
+        && a.limit == 0;
+
     // Core list handles project/status/milestone, but its `archived` flag is an
     // exact match (archived = this). `--archived` means *include* archived:
     // unset → only non-archived; set → both. So when set we fetch both and
@@ -1155,7 +1181,7 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
     let list_project = project.clone();
     let list_status = status.clone();
     let list_milestone = a.milestone.clone().filter(|m| !m.is_empty());
-    let include_archived = a.archived;
+    let include_archived = a.archived || a.all;
     let mut issues = store
         .call(move |conn| {
             let mut out = issues::list(
@@ -1182,6 +1208,13 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
             Ok(out)
         })
         .await?;
+
+    if status.is_none() && !a.all {
+        issues.retain(|i| i.status != "done");
+    }
+    if summary {
+        return write_issue_summary(&store, &issues, crate::output::mode(a.json, a.table)).await;
+    }
 
     // These filters apply after the fetch; the result set is the same as
     // filtering in the query.
@@ -1273,6 +1306,56 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
     Ok(())
 }
 
+async fn write_issue_summary(store: &Store, issues: &[Issue], mode: Mode) -> CliResult<()> {
+    let mut rows: std::collections::BTreeMap<(bool, String), IssueSummaryRow> =
+        std::collections::BTreeMap::new();
+    for issue in issues {
+        let (name, _) = resolve_refs(store, issue).await?;
+        let key = (name.is_empty(), name.clone());
+        let row = rows.entry(key).or_insert_with(|| IssueSummaryRow {
+            milestone: (!name.is_empty()).then_some(name),
+            backlog: 0,
+            in_progress: 0,
+            blocked: 0,
+            in_review: 0,
+        });
+        match issue.status.as_str() {
+            "backlog" => row.backlog += 1,
+            "in-progress" => row.in_progress += 1,
+            "blocked" => row.blocked += 1,
+            "in-review" => row.in_review += 1,
+            _ => {}
+        }
+    }
+    let rows: Vec<_> = rows.into_values().collect();
+    if mode.is_json() {
+        for row in rows {
+            let mut value = serde_json::Map::new();
+            if row.backlog > 0 {
+                value.insert("backlog".into(), serde_json::json!(row.backlog));
+            }
+            if row.blocked > 0 {
+                value.insert("blocked".into(), serde_json::json!(row.blocked));
+            }
+            if row.in_progress > 0 {
+                value.insert("in_progress".into(), serde_json::json!(row.in_progress));
+            }
+            if row.in_review > 0 {
+                value.insert("in_review".into(), serde_json::json!(row.in_review));
+            }
+            value.insert(
+                "milestone".into(),
+                row.milestone
+                    .map_or(serde_json::Value::Null, serde_json::Value::String),
+            );
+            println!("{}", serde_json::Value::Object(value));
+        }
+    } else {
+        print!("{}", write_issue_summary_table(&rows));
+    }
+    Ok(())
+}
+
 /// `issue ls --search` branch: default limit 50
 /// (the `--limit` flag overrides; 0 → 50), NDJSON rows carry a `score` field,
 /// human output uses the search table with a leading SCORE column.
@@ -1287,11 +1370,14 @@ async fn run_search(db: &Option<String>, a: &LsArgs, query: String) -> CliResult
         status: a.status.clone(),
         priority: a.priority.map(|p| p.as_str().to_string()),
         parent: a.parent.clone(),
-        include_archived: a.archived,
+        include_archived: a.archived || a.all,
         exclude_subs: a.no_subs,
         limit: effective_limit,
     };
-    let matches = crate::search::search(&store, opts).await?;
+    let mut matches = crate::search::search(&store, opts).await?;
+    if a.status.is_none() && !a.all {
+        matches.retain(|m| m.issue.status != "done");
+    }
 
     if crate::output::mode(a.json, a.table).is_json() {
         for m in &matches {
@@ -1593,7 +1679,7 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
     let before = store
         .call(move |conn| issues::get_by_key(conn, &snapshot_key))
         .await?
-        .ok_or(cliban_core::Error::NotFound)?;
+        .ok_or_else(|| cliban_core::Error::NamedNotFound(key.clone()))?;
     let (before_milestone, before_parent) = resolve_refs(&store, &before).await?;
 
     // Apply the core update (only when there is a field-level change).
@@ -1620,8 +1706,8 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
         let create_section = a.create_section;
         store
             .call(move |conn| {
-                let issue =
-                    issues::get_by_key(conn, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+                let issue = issues::get_by_key(conn, &lookup)?
+                    .ok_or_else(|| cliban_core::Error::NamedNotFound(lookup.clone()))?;
                 check_cas(&issue, cas_check.as_deref())?;
                 let mut upd = upd;
                 if let Some(anchor) = &section_for_job {
@@ -1649,7 +1735,7 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
                 Ok(issue)
             })
             .await?
-            .ok_or(cliban_core::Error::NotFound)?;
+            .ok_or_else(|| cliban_core::Error::NamedNotFound(key.clone()))?;
     }
 
     // Capture the relation/label intent before the loops below consume it.
@@ -1665,8 +1751,8 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
         let lookup = key.clone();
         store
             .call(move |conn| {
-                let issue =
-                    issues::get_by_key(conn, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+                let issue = issues::get_by_key(conn, &lookup)?
+                    .ok_or_else(|| cliban_core::Error::NamedNotFound(lookup.clone()))?;
                 issues::add_label(conn, &issue, &lbl)
             })
             .await?;
@@ -1675,8 +1761,8 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
         let lookup = key.clone();
         store
             .call(move |conn| {
-                let issue =
-                    issues::get_by_key(conn, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+                let issue = issues::get_by_key(conn, &lookup)?
+                    .ok_or_else(|| cliban_core::Error::NamedNotFound(lookup.clone()))?;
                 issues::remove_label(conn, &issue, &lbl)
             })
             .await?;
@@ -1717,7 +1803,7 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
     let issue = store
         .call(move |conn| issues::get_by_key(conn, &reload))
         .await?
-        .ok_or(cliban_core::Error::NotFound)?;
+        .ok_or_else(|| cliban_core::Error::NamedNotFound(key.clone()))?;
 
     // Everything applied; record what moved.
     let (after_milestone, after_parent) = resolve_refs(&store, &issue).await?;
@@ -1805,7 +1891,8 @@ async fn log(db: &Option<String>, a: LogArgs, teach: Option<Teach>) -> CliResult
     store
         .call(move |conn| {
             let tx = conn.unchecked_transaction()?;
-            let issue = issues::get_by_key(&tx, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+            let issue = issues::get_by_key(&tx, &lookup)?
+                .ok_or_else(|| cliban_core::Error::NamedNotFound(lookup.clone()))?;
             let new_desc = descmd::append_activity_log(&issue.description, &entry, now);
             let updated = format_usec(now);
             tx.execute(
@@ -1829,7 +1916,6 @@ async fn log(db: &Option<String>, a: LogArgs, teach: Option<Teach>) -> CliResult
                 serde_json::json!(format!("issue {}", t.canonical)),
             );
         }
-        m.insert("entry".into(), serde_json::json!(msg));
         m.insert("key".into(), serde_json::json!(a.key));
         m.insert("timestamp".into(), serde_json::json!(format_usec(now)));
         println!(
@@ -1853,7 +1939,8 @@ async fn tick(db: &Option<String>, a: TickArgs) -> CliResult<()> {
     let (updated_at, noop, task) = store
         .call(move |conn| {
             let tx = conn.unchecked_transaction()?;
-            let issue = issues::get_by_key(&tx, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+            let issue = issues::get_by_key(&tx, &lookup)?
+                .ok_or_else(|| cliban_core::Error::NamedNotFound(lookup.clone()))?;
             let task = resolve_task(task_arg, &issue.description)?;
             let new_desc = match descmd::tick_step(&issue.description, task, step) {
                 Ok(descmd::TickOutcome::Ticked(d)) => d,
@@ -1968,7 +2055,7 @@ async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
                 .optional()?;
             let (parent_id, proj_id, parent_desc, parent_parent, issue_seq) = match parent {
                 Some(v) => v,
-                None => return Err(cliban_core::Error::NotFound),
+                None => return Err(cliban_core::Error::NamedNotFound(lookup.clone())),
             };
 
             if mode == "sub-issue" && parent_parent.is_some() {
@@ -2177,7 +2264,8 @@ async fn cp(db: &Option<String>, a: CpArgs) -> CliResult<()> {
     let lookup = key.clone();
     let (src, src_milestone, labels) = store
         .call(move |conn| {
-            let issue = issues::get_by_key(conn, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+            let issue = issues::get_by_key(conn, &lookup)?
+                .ok_or_else(|| cliban_core::Error::NamedNotFound(lookup.clone()))?;
             let milestone = match issue.milestone_id {
                 Some(mid) => milestones::get_by_id(conn, mid)?.map(|m| m.name),
                 None => None,
@@ -2224,7 +2312,8 @@ async fn cp(db: &Option<String>, a: CpArgs) -> CliResult<()> {
         let id = issue.id;
         store
             .call(move |conn| {
-                let issue = issues::get_by_id(conn, id)?.ok_or(cliban_core::Error::NotFound)?;
+                let issue = issues::get_by_id(conn, id)?
+                    .ok_or_else(|| cliban_core::Error::NamedNotFound(format!("issue id {id}")))?;
                 issues::add_label(conn, &issue, &lbl)
             })
             .await?;
@@ -2251,7 +2340,7 @@ async fn cp(db: &Option<String>, a: CpArgs) -> CliResult<()> {
     let issue = store
         .call(move |conn| issues::get_by_key(conn, &reload))
         .await?
-        .ok_or(cliban_core::Error::NotFound)?;
+        .ok_or_else(|| cliban_core::Error::NamedNotFound(issue.key.clone()))?;
 
     print_issue_result(
         &store,
@@ -2447,7 +2536,8 @@ async fn import(db: &Option<String>, a: ImportArgs) -> CliResult<()> {
             let name = lbl.clone();
             store
                 .call(move |conn| {
-                    let issue = issues::get_by_id(conn, id)?.ok_or(cliban_core::Error::NotFound)?;
+                    let issue = issues::get_by_id(conn, id)?
+                        .ok_or_else(|| cliban_core::Error::NamedNotFound(format!("issue id {id}")))?;
                     issues::add_label(conn, &issue, &name)
                 })
                 .await
@@ -2512,7 +2602,8 @@ async fn mv(
     let move_status = status.clone();
     let from = store
         .call(move |conn| {
-            let issue = issues::get_by_key(conn, &move_key)?.ok_or(cliban_core::Error::NotFound)?;
+            let issue = issues::get_by_key(conn, &move_key)?
+                .ok_or_else(|| cliban_core::Error::NamedNotFound(move_key.clone()))?;
             let from = issue.status.clone();
             // Desired state already holds: no reposition, no updated_at
             // churn, no audit record — a retry is not a second move.
@@ -2539,7 +2630,7 @@ async fn mv(
         let issue = store
             .call(move |conn| issues::get_by_key(conn, &reload))
             .await?
-            .ok_or(cliban_core::Error::NotFound)?;
+            .ok_or_else(|| cliban_core::Error::NamedNotFound(key.clone()))?;
         let inputs = issue_json_inputs(&store, &issue).await?;
         let mut v = build_issue_json(inputs, Detail::Echo);
         if let serde_json::Value::Object(m) = &mut v {
@@ -2580,7 +2671,7 @@ async fn cat(db: &Option<String>, a: CatArgs) -> CliResult<()> {
     let issue = store
         .call(move |conn| issues::get_by_key(conn, &key))
         .await?
-        .ok_or(cliban_core::Error::NotFound)?;
+        .ok_or_else(|| cliban_core::Error::NamedNotFound(a.key.clone()))?;
     if let Some(section) = &a.section {
         let anchor = resolve_section(section)?;
         let (start, end, ok) = find_section(&issue.description, &anchor);
@@ -2625,7 +2716,8 @@ async fn set_archived_on(store: &Store, key: String, archived: bool) -> CliResul
     let key = parse_issue_key(&key)?;
     let result = store
         .call(move |conn| {
-            let issue = issues::get_by_key(conn, &key)?.ok_or(cliban_core::Error::NotFound)?;
+            let issue = issues::get_by_key(conn, &key)?
+                .ok_or_else(|| cliban_core::Error::NamedNotFound(key.clone()))?;
             if issue.archived == archived {
                 return Ok((issue, true));
             }
@@ -2736,7 +2828,7 @@ fn current_branch() -> Result<String, CliError> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-async fn current(db: &Option<String>, mode: Mode) -> CliResult<()> {
+async fn current(db: &Option<String>, mode: Mode, explicit_json: bool) -> CliResult<()> {
     let branch = current_branch()?;
     let (proj, seq) = parse_branch(&branch).ok_or_else(|| {
         // Wrapped as "not found: <msg>" so the caller sees what was missing.
@@ -2762,7 +2854,11 @@ async fn current(db: &Option<String>, mode: Mode) -> CliResult<()> {
         let inputs = issue_json_inputs(&store, &issue).await?;
         println!(
             "{}",
-            serde_json::to_string_pretty(&build_issue_json(inputs, Detail::Full)).unwrap()
+            serde_json::to_string_pretty(&build_issue_json(
+                inputs,
+                crate::output::single_detail(explicit_json),
+            ))
+            .unwrap()
         );
     } else {
         println!("{} {}", issue.key, issue.title);
@@ -2809,7 +2905,8 @@ async fn claim_cmd(
     let as_actor = actor.clone();
     let (issue, claim) = store
         .call(move |conn| {
-            let issue = issues::get_by_key(conn, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+            let issue = issues::get_by_key(conn, &lookup)?
+                .ok_or_else(|| cliban_core::Error::NamedNotFound(lookup.clone()))?;
             let prev = claims::get(conn, issue.id)?;
             let claim = claims::claim(conn, &issue, &as_actor, force)?;
             match prev {
@@ -2848,7 +2945,8 @@ async fn release_cmd(db: &Option<String>, key: String, mode: Mode) -> CliResult<
     let lookup = key.clone();
     let (issue, was_held_by) = store
         .call(move |conn| {
-            let issue = issues::get_by_key(conn, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+            let issue = issues::get_by_key(conn, &lookup)?
+                .ok_or_else(|| cliban_core::Error::NamedNotFound(lookup.clone()))?;
             let was = claims::release(conn, &issue)?;
             if let Some(holder) = &was {
                 crate::audit::record(
@@ -2886,7 +2984,7 @@ async fn lint_cmd(db: &Option<String>, key: String, mode: Mode) -> CliResult<()>
     let issue = store
         .call(move |conn| issues::get_by_key(conn, &lookup))
         .await?
-        .ok_or(cliban_core::Error::NotFound)?;
+        .ok_or_else(|| cliban_core::Error::NamedNotFound(key.clone()))?;
     let findings = crate::lint::lint_description(&issue.description);
     let errors = findings
         .iter()
@@ -2971,7 +3069,8 @@ async fn append_section_cmd(db: &Option<String>, a: AppendSectionArgs) -> CliRes
     let create = a.create_section;
     let issue = store
         .call(move |conn| {
-            let issue = issues::get_by_key(conn, &lookup)?.ok_or(cliban_core::Error::NotFound)?;
+            let issue = issues::get_by_key(conn, &lookup)?
+                .ok_or_else(|| cliban_core::Error::NamedNotFound(lookup.clone()))?;
             require_section(&issue, &anchor_job, create)?;
             let text = cliban_core::sections::sanitize_section_body(&anchor_job, &text)
                 .map_err(|m| cliban_core::Error::validation("section", &m))?;

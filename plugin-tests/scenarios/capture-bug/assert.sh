@@ -2,13 +2,13 @@
 set -u
 DB="$1"; fail=0
 
-n=$(cliban --db "$DB" issue ls --project ACME --json 2>/dev/null | wc -l)
+n=$(cliban --db "$DB" issue ls --project ACME --all --json 2>/dev/null | wc -l)
 if [ "$n" -ne 1 ]; then
   echo "FAIL: expected exactly 1 issue on the board, got $n"
   exit 1
 fi
 
-key=$(cliban --db "$DB" issue ls --project ACME --json | jq -r '.key')
+key=$(cliban --db "$DB" issue ls --project ACME --all --json | jq -r '.key')
 show=$(cliban --db "$DB" issue show "$key" --json)
 
 printf '%s' "$show" | jq -e '.labels | index("bug")' >/dev/null \

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-79 — the dispatcher's own surface: routing, usage, and the exit-code
+# CLI-79, CLI-100 — the dispatcher's own surface: routing, usage, and the exit-code
 # contract every subcommand keeps.
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib.sh
@@ -18,10 +18,14 @@ assert_out_has "ticket status" "help lists the subcommands that exist"
 # claiming `ticket start` before it was routed was caught exactly this way.
 assert_out_has "milestone start" "help lists milestone start"
 assert_out_has "milestone finish" "help lists milestone finish"
+# CLI-84 — the recovery survey is part of the advertised dispatcher surface.
+assert_out_has "milestone status" "help lists milestone status"
+assert_out_has "milestone abandon" "help lists milestone abandon"
 assert_out_has "ticket start" "help lists ticket start"
 assert_out_has "ticket sync" "help lists ticket sync"
 assert_out_has "ticket ready" "help lists ticket ready"
 assert_out_has "ticket integrate" "help lists ticket integrate"
+assert_out_has "ticket abandon" "help lists ticket abandon"
 
 run_flow --help
 assert_status 0 "--help is the same as help"
@@ -43,6 +47,9 @@ assert_status 2 "ticket status with no key is refused"
 run_flow ticket integrate
 assert_status 2 "ticket integrate with no key is refused"
 
+run_flow ticket abandon
+assert_status 2 "ticket abandon with no key is refused"
+
 # CLI-80 — the milestone group, and the option parsing only it has.
 #
 # Every case below must refuse before touching anything: the fixture's milestone
@@ -63,6 +70,12 @@ assert_status 2 "milestone start with no name is refused"
 
 run_flow milestone finish
 assert_status 2 "milestone finish with no name is refused"
+
+run_flow milestone status
+assert_status 2 "milestone status with no name is refused"
+
+run_flow milestone abandon
+assert_status 2 "milestone abandon with no name is refused"
 
 run_flow milestone start "Test milestone" "Another milestone" -p FLOW
 assert_status 2 "milestone start with two names is refused"

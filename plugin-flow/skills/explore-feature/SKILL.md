@@ -15,7 +15,7 @@ Diverge on a rough idea until the design is agreed, then publish a **container**
 Read the repo areas the idea touches. Then read the board — this is the part that isn't obvious:
 
 ```bash
-cliban issue ls --json                          # open work this could collide with
+cliban issue ls --all --json                    # work this could collide with
 cliban project search <KEY> "<terms>" --json    # lessons already learned here
 ```
 

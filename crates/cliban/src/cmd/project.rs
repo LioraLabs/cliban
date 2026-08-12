@@ -310,10 +310,6 @@ fn confirm_project(p: &cliban_core::schema::Project, verb: &str, mode: Mode) -> 
     Ok(())
 }
 
-fn project_json(p: &cliban_core::schema::Project) -> serde_json::Value {
-    project_json_detail(p, crate::output::Detail::Full)
-}
-
 fn project_json_detail(
     p: &cliban_core::schema::Project,
     detail: crate::output::Detail,
@@ -340,7 +336,9 @@ async fn add(
     mode: Mode,
 ) -> CliResult<()> {
     let key = key.to_uppercase();
-    let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| key.clone());
+    let name = name
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| key.clone());
     let description = resolve_description(description, description_file)?;
     let store = store_open::open(db).await?;
     let p = store
@@ -393,11 +391,13 @@ async fn ls(
 async fn show(db: &Option<String>, key: Option<String>, json: bool, table: bool) -> CliResult<()> {
     let key = crate::scope::project_identity(key)?;
     let store = store_open::open(db).await?;
+    let lookup = key.clone();
     let p = store
-        .call(move |conn| projects::fetch_by_key(conn, &key))
-        .await?;
+        .call(move |conn| projects::get_by_key(conn, &lookup))
+        .await?
+        .ok_or_else(|| CliError::not_found(format!("not found: {key}")))?;
     if crate::output::mode(json, table).is_json() {
-        let v = project_json(&p);
+        let v = project_json_detail(&p, crate::output::single_detail(json));
         println!("{}", serde_json::to_string_pretty(&v).unwrap());
     } else {
         println!("{} — {}\n{}", p.key, p.name, p.description);

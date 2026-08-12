@@ -42,6 +42,7 @@
 set -euo pipefail
 
 PROG=cliban-flow
+FLOW_INVOCATION=$(printf '%q ' "$PROG" "$@")
 BOARD_PREFIX='[cliban-flow]'
 
 # "<group> <command>", set by the dispatcher and used in every board line.
@@ -49,7 +50,7 @@ ACTION=""
 # The repository every git call runs against; set by require_repo.
 REPO=""
 # The loaded ticket; set by load_issue.
-ISSUE_KEY="" ISSUE_BRANCH="" ISSUE_MILESTONE="" ISSUE_PROJECT="" ISSUE_STATUS="" ISSUE_TITLE=""
+ISSUE_KEY="" ISSUE_BRANCH="" ISSUE_MILESTONE="" ISSUE_PROJECT="" ISSUE_STATUS="" ISSUE_TITLE="" ISSUE_CLAIMED_BY=""
 # The loaded milestone; set by load_milestone.
 MILESTONE_NAME="" MILESTONE_BRANCH=""
 # The project key milestone reads and writes are scoped by; set by
@@ -63,12 +64,18 @@ FLOW_PROJECT=""
 say() { printf '%s\n' "$*"; }
 warn() { printf '%s: %s\n' "$PROG" "$*" >&2; }
 
-# announce <what> — what a creating or destructive step is about to do, printed
-# before it runs, so an interrupted run leaves a record of how far it got. On
-# stderr with everything else that is not the answer: a caller does
-# `wt=$(cliban-flow ticket start KEY)` and gets the path alone only while the
-# narration stays off stdout.
-announce() { printf '%s: %s\n' "$PROG" "$*" >&2; }
+# Successful mutations are recorded on the board; stdout carries their data.
+announce() { :; }
+QUIET_ERROR=""
+
+# Hide command chatter on success, but preserve the diagnostic on failure.
+quiet() {
+    local output status
+    output=$("$@" 2>&1); status=$?
+    QUIET_ERROR=""
+    [ "$status" -eq 0 ] || QUIET_ERROR=$output
+    return "$status"
+}
 
 # instruct <line>... — the "what to do next" that follows a verdict or refusal.
 # Indented on stderr so it reads as guidance rather than as more output.
@@ -79,10 +86,19 @@ instruct() {
 
 # refuse <summary> <instruction>... — a guard failed. Nothing was changed.
 refuse() {
-    local summary=$1
+    local summary=$1 line why="" next=""
     shift
-    printf '%s: refused: %s\n' "$PROG" "$summary" >&2
-    instruct "$@"
+    for line in "$@"; do
+        [ -n "$line" ] || continue
+        case $line in
+            '    '*) next="${next:+$next; }${line#    }" ;;
+            *) why="${why:+$why }$line" ;;
+        esac
+    done
+    [ -z "$QUIET_ERROR" ] || why="${why:+$why }git: $(printf '%s' "$QUIET_ERROR" | tr '\n' ' ')"
+    [ -n "$why" ] || why="the requested transition is unsafe in the current state"
+    [ -n "$next" ] || next=${FLOW_INVOCATION% }
+    printf '%s: refused: %s\n  why: %s\n  next: %s\n' "$PROG" "$summary" "$why" "$next" >&2
     exit 2
 }
 
@@ -126,6 +142,13 @@ usage: cliban-flow <group> <command> [args]
                         Fast-forward main to the milestone branch. Prints the
                         landed SHA.
 
+  milestone status <NAME> [-p KEY]
+                        Read-only recovery survey of the board, milestone,
+                        ticket branches and their registered worktrees.
+
+  milestone abandon <NAME> [-p KEY] --confirm <REASON>
+                        Release its tickets and discard clean milestone work.
+
   ticket start <KEY>    Create <KEY>'s branch off the current milestone tip and
                         check it out in a worktree under the milestone
                         worktree. Prints the worktree path.
@@ -144,6 +167,9 @@ usage: cliban-flow <group> <command> [args]
   ticket integrate <KEY> [--dry-run]
                         Squash a ready ticket onto its milestone branch, mark it
                         done, and remove its worktree. Dry-run only reports.
+
+  ticket abandon <KEY> --confirm <REASON>
+                        Release the claim and discard clean ticket work.
 
 Both start subcommands are idempotent: a second run reports what is already
 there rather than recreating it.
@@ -396,11 +422,11 @@ load_issue() {
     json=$(cliban issue show "$1" --json 2>/dev/null) || refuse \
         "no issue named $1 on the board" \
         "Check the key. If this is a scratch board, check CLIBAN_DB points at it."
-    row=$(printf '%s' "$json" | json_fields key git_branch_name milestone status title) || refuse \
+    row=$(printf '%s' "$json" | json_fields key git_branch_name milestone status title claimed_by) || refuse \
         "could not read $1 from the board" \
         "\`cliban issue show $1 --json\` returned something this script could not" \
         "parse. cliban may be newer or older than this dispatcher expects."
-    IFS=$'\x1f' read -r ISSUE_KEY ISSUE_BRANCH ISSUE_MILESTONE ISSUE_STATUS ISSUE_TITLE <<<"$row"
+    IFS=$'\x1f' read -r ISSUE_KEY ISSUE_BRANCH ISSUE_MILESTONE ISSUE_STATUS ISSUE_TITLE ISSUE_CLAIMED_BY <<<"$row"
     # The board's own spelling of the key, so the audit trail stays greppable
     # when someone types `flow-1`.
     [ -n "$ISSUE_KEY" ] && [ -n "$ISSUE_BRANCH" ] || refuse \
@@ -499,6 +525,23 @@ load_milestone() {
             "both. Rename one of them so the two differ by more than punctuation" \
             "or case."
     done <<<"$names"
+}
+
+unsettled_milestone_issues() {
+    local rows candidates key title activity unsettled=""
+    rows=$(cliban issue ls -p "$PROJECT" -m "$MILESTONE_NAME" --full --archived --json 2>/dev/null) || return 1
+    candidates=$(printf '%s' "$rows" | python3 -c 'import json, sys
+for line in sys.stdin:
+    issue = json.loads(line)
+    if issue["status"] != "done" and not issue["archived"]:
+        print(f"{issue['"'"'key'"'"']}\x1f{issue['"'"'title'"'"']}")') || return 1
+    while IFS=$'\x1f' read -r key title; do
+        [ -n "$key" ] || continue
+        activity=$(cliban issue cat "$key" --section activity 2>/dev/null) || activity=""
+        printf '%s' "$activity" | grep -qF 'work discarded:' && continue
+        unsettled="${unsettled:+$unsettled, }$key: $title"
+    done <<<"$candidates"
+    printf '%s' "$unsettled"
 }
 
 # parse_project_option — strips --project/-p out of a subcommand's arguments and
@@ -679,6 +722,14 @@ milestone_dispatch() {
             ACTION="milestone finish"
             cmd_milestone_finish "$@"
             ;;
+        status)
+            ACTION="milestone status"
+            cmd_milestone_status "$@"
+            ;;
+        abandon)
+            ACTION="milestone abandon"
+            cmd_milestone_abandon "$@"
+            ;;
         '') usage_error "milestone needs a command" ;;
         *) usage_error "unknown milestone command: $command" ;;
     esac
@@ -708,6 +759,10 @@ ticket_dispatch() {
             ACTION="ticket integrate"
             cmd_ticket_integrate "$@"
             ;;
+        abandon)
+            ACTION="ticket abandon"
+            cmd_ticket_abandon "$@"
+            ;;
         '') usage_error "ticket needs a command" ;;
         *) usage_error "unknown ticket command: $command" ;;
     esac
@@ -726,6 +781,145 @@ main() {
 }
 
 # ---------------------------------------------------------------- commands
+
+# milestone status <NAME> [-p KEY] — reconstruct every durable fact needed to
+# resume an interrupted milestone. Unlike action subcommands, a survey records
+# no board line: observation must not become the newest action it is reporting.
+cmd_milestone_status() {
+    parse_project_option "$@"
+    set -- ${ARGS_REST[@]+"${ARGS_REST[@]}"}
+    local name=${1:-}
+    [ -n "$name" ] || usage_error "milestone status needs a milestone name"
+    [ $# -le 1 ] || usage_error "milestone status takes one milestone name, got: $*"
+    require_repo
+    require_project
+    load_milestone "$name"
+
+    REPO="$REPO" PROJECT="$PROJECT" MILESTONE_NAME="$MILESTONE_NAME" \
+        MILESTONE_BRANCH="$MILESTONE_BRANCH" python3 - <<'PY'
+import json
+import os
+import re
+import subprocess
+
+repo = os.environ["REPO"]
+project = os.environ["PROJECT"]
+name = os.environ["MILESTONE_NAME"]
+mbranch = os.environ["MILESTONE_BRANCH"]
+
+def run(*args, check=True):
+    p = subprocess.run(args, cwd=repo, text=True, stdout=subprocess.PIPE,
+                       stderr=subprocess.DEVNULL)
+    if check and p.returncode:
+        raise SystemExit(f"cliban-flow: survey could not run: {' '.join(args)}")
+    return p
+
+def git(*args, check=True):
+    return run("git", *args, check=check)
+
+def cliban(*args):
+    return run("cliban", *args).stdout
+
+def branch_exists(branch):
+    return git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}",
+               check=False).returncode == 0
+
+def ancestor(left, right):
+    return git("merge-base", "--is-ancestor", f"refs/heads/{left}",
+               f"refs/heads/{right}", check=False).returncode == 0
+
+worktrees = {}
+path = None
+for line in git("worktree", "list", "--porcelain").stdout.splitlines():
+    if line.startswith("worktree "):
+        path = line[9:]
+    elif line.startswith("branch refs/heads/") and path:
+        worktrees[line[18:]] = path
+    elif not line:
+        path = None
+
+issues = [json.loads(line) for line in cliban(
+    "issue", "ls", "-p", project, "-m", name, "--all", "--full", "--json"
+).splitlines() if line]
+waves = json.loads(cliban("milestone", "waves", name, "-p", project, "--json"))
+
+have_milestone = branch_exists(mbranch)
+if have_milestone and branch_exists("main"):
+    main_drift = "no" if ancestor("main", mbranch) else "yes"
+else:
+    main_drift = "unknown"
+
+parts = ["[" + ", ".join(wave) + "]" for wave in waves.get("waves", [])]
+print(f"milestone: {name}")
+print(f"project: {project}")
+print(f"branch: {mbranch if have_milestone else 'missing'}")
+print(f"main-drift: {main_drift}")
+print("waves: " + (" -> ".join(parts) if parts else "none"))
+if waves.get("done"):
+    print("done: " + ", ".join(waves["done"]))
+if waves.get("external_blocked"):
+    print("external-blocked: " + ", ".join(waves["external_blocked"]))
+
+for issue in issues:
+    key = issue["key"]
+    branch = issue["git_branch_name"]
+    claim = issue.get("claimed_by") or "none"
+    description = issue.get("description") or ""
+    actions = [line[line.index("[cliban-flow]"):].strip()
+               for line in description.splitlines() if "[cliban-flow]" in line]
+    last = actions[-1] if actions else "none"
+    have_ticket = branch_exists(branch)
+    integrated = "no"
+    if have_milestone:
+        found = git("log", f"refs/heads/{mbranch}", "--extended-regexp",
+                    f"--grep=^Ticket: {re.escape(key)}$", "-1",
+                    "--format=%H").stdout.strip()
+        integrated = "yes" if found else "no"
+    ahead = 0
+    relation = "missing"
+    if have_milestone and have_ticket:
+        ahead = int(git("rev-list", "--count",
+                        f"refs/heads/{mbranch}..refs/heads/{branch}").stdout)
+        if ancestor(mbranch, branch):
+            relation = "level" if ancestor(branch, mbranch) else "descendant"
+        elif ancestor(branch, mbranch):
+            relation = "ancestor"
+        else:
+            relation = "diverged"
+    ticked = bool(re.search(r"^- \[[xX]\]", description, re.MULTILINE))
+    silent = issue.get("status") == "in-progress" and ahead > 0 and not ticked
+
+    print(f"ticket: {key} status={issue['status']} claim={claim}")
+    print(f"  branch: {branch if have_ticket else 'missing'}")
+    print(f"  integrated: {integrated}")
+    print(f"  last-action: {last}")
+    print(f"  silent-agent: {'yes' if silent else 'no'}")
+    wt = worktrees.get(branch)
+    if not wt:
+        print("  worktree: none")
+        print(f"  ahead: {ahead}")
+        print(f"  relation: {relation}")
+        continue
+    if not os.path.isdir(wt):
+        print(f"  worktree: {wt} (missing)")
+        print(f"  ahead: {ahead}")
+        print(f"  relation: {relation}")
+        continue
+    print(f"  worktree: {wt}")
+    status = git("-C", wt, "status", "--porcelain", "--", ":(exclude).worktrees",
+                 check=False).stdout.strip().splitlines()
+    unmerged = git("-C", wt, "diff", "--name-only", "--diff-filter=U",
+                   check=False).stdout.strip().splitlines()
+    merging = git("-C", wt, "rev-parse", "--verify", "--quiet", "MERGE_HEAD",
+                  check=False).returncode == 0
+    print(f"  dirty: {'yes' if status else 'no'}")
+    print("  uncommitted: " + (", ".join(status) if status else "none"))
+    print(f"  merge: {'yes' if merging else 'no'}")
+    print("  unmerged: " + (", ".join(unmerged) if unmerged else "none"))
+    print(f"  ahead: {ahead}")
+    print(f"  relation: {relation}")
+PY
+}
 
 # milestone start <NAME> [-p KEY] — stand up the milestone's git layout.
 #
@@ -782,7 +976,6 @@ cmd_milestone_start() {
             "    $PROG milestone start \"$MILESTONE_NAME\" -p $PROJECT"
 
         say "$existing"
-        instruct "$MILESTONE_BRANCH is already checked out there; nothing to do."
         board_record_milestone "$MILESTONE_NAME" \
             "already started ($MILESTONE_BRANCH at $existing)"
         exit 0
@@ -823,7 +1016,7 @@ cmd_milestone_start() {
         # script that does not spell a ref `refs/heads/`. `git worktree add`
         # treats a full ref as a commit and checks it out detached; only the
         # bare name makes the new worktree sit *on* the branch.
-        gitr worktree add "$path" "$MILESTONE_BRANCH" >&2 || refuse_milestone "$MILESTONE_NAME" \
+        quiet gitr worktree add "$path" "$MILESTONE_BRANCH" || refuse_milestone "$MILESTONE_NAME" \
             "git could not add a worktree at $path for $MILESTONE_BRANCH" \
             "git's own error is above. The branch was not created by this step, so" \
             "nothing about it has changed."
@@ -834,7 +1027,7 @@ cmd_milestone_start() {
             "The integration branch starts at main. This repository has no local" \
             "main, so there is nothing to branch off."
         announce "creating $MILESTONE_BRANCH off main@$(short_sha main) and checking it out at $path"
-        gitr worktree add -b "$MILESTONE_BRANCH" "$path" refs/heads/main >&2 ||
+        quiet gitr worktree add -b "$MILESTONE_BRANCH" "$path" refs/heads/main ||
             refuse_milestone "$MILESTONE_NAME" \
                 "git could not create $MILESTONE_BRANCH at $path" \
                 "git's own error is above. git creates the branch before it checks" \
@@ -846,7 +1039,6 @@ cmd_milestone_start() {
     fi
 
     say "$path"
-    instruct "The primary checkout $primary was not touched."
     board_record_milestone "$MILESTONE_NAME" "$outcome ($MILESTONE_BRANCH at $path)"
     exit 0
 }
@@ -863,6 +1055,14 @@ cmd_milestone_finish() {
     require_project
     load_milestone "$name"
 
+    local unsettled
+    unsettled=$(unsettled_milestone_issues) || refuse_milestone "$MILESTONE_NAME" \
+        "could not list the issues in milestone \"$MILESTONE_NAME\"" \
+        "The board must be readable before main can move. Retry the command."
+    [ -z "$unsettled" ] || refuse_milestone "$MILESTONE_NAME" \
+        "milestone \"$MILESTONE_NAME\" still has unsettled issues: $unsettled" \
+        "Finish or explicitly discard them, then retry."
+
     have_branch main || refuse_milestone "$MILESTONE_NAME" \
         "the local main branch does not exist" \
         "This command only fast-forwards main; restore or create the intended main first."
@@ -874,7 +1074,16 @@ cmd_milestone_finish() {
         "Merge main into $MILESTONE_BRANCH via a dispatched agent in the milestone" \
         "worktree, resolve and verify there, then retry. The orchestrator must not resolve it."
 
-    local primary head tip
+    local tip verified_tip
+    tip=$(full_sha "$MILESTONE_BRANCH")
+    if [ "$tip" != "$(full_sha main)" ]; then
+        verified_tip=$(gitr log -1 --format=%H --grep='^Ticket: ' "refs/heads/$MILESTONE_BRANCH")
+        [ "$tip" = "$verified_tip" ] || refuse_milestone "$MILESTONE_NAME" \
+            "$MILESTONE_BRANCH@$tip differs from the last verified ticket integration ${verified_tip:-none}" \
+            "Put the shared change through a dispatched ticket, then sync, verify, ready, and integrate it."
+    fi
+
+    local primary head
     primary=$(primary_worktree) || refuse \
         "could not read this repository's worktree list" "git's own error is above."
     head=$(worktree_head "$primary") || refuse \
@@ -886,9 +1095,8 @@ cmd_milestone_finish() {
         "the primary checkout $primary has uncommitted changes" \
         "Commit or stash them before fast-forwarding main."
 
-    tip=$(full_sha "$MILESTONE_BRANCH")
     announce "fast-forwarding main to $MILESTONE_BRANCH@$tip"
-    git -C "$primary" merge --ff-only "refs/heads/$MILESTONE_BRANCH" >&2 || refuse_milestone "$MILESTONE_NAME" \
+    quiet git -C "$primary" merge --ff-only "refs/heads/$MILESTONE_BRANCH" || refuse_milestone "$MILESTONE_NAME" \
         "git could not fast-forward main to $MILESTONE_BRANCH" \
         "Git's own error is above. Nothing here will attempt a non-fast-forward merge."
     board_record_milestone "$MILESTONE_NAME" "finished (main at $tip from $MILESTONE_BRANCH)"
@@ -905,6 +1113,31 @@ cmd_milestone_finish() {
 # Under the milestone worktree rather than beside the primary checkout so that
 # the milestone's build state — every ticket's target directory, every
 # node_modules — stays out of the tree the user works and runs from.
+START_NEW_CLAIM=0 START_STATUS_CHANGED=0 START_ORIGINAL_STATUS=""
+start_ticket_on_board() {
+    START_NEW_CLAIM=0 START_STATUS_CHANGED=0 START_ORIGINAL_STATUS=$ISSUE_STATUS
+    cliban issue claim "$ISSUE_KEY" >/dev/null 2>&1 || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY is claimed by another actor" \
+        "Have its owner release it: cliban issue release $ISSUE_KEY"
+    [ -n "$ISSUE_CLAIMED_BY" ] || START_NEW_CLAIM=1
+    [ "$ISSUE_STATUS" = in-progress ] || START_STATUS_CHANGED=1
+    cliban issue mv "$ISSUE_KEY" in-progress >/dev/null 2>&1 || {
+        rollback_ticket_start
+        refuse_ticket "$ISSUE_KEY" \
+            "$ISSUE_KEY could not move to in-progress" \
+            "Inspect the board: cliban issue show $ISSUE_KEY --json"
+    }
+}
+
+rollback_ticket_start() {
+    [ "$START_STATUS_CHANGED" -eq 0 ] ||
+        cliban issue mv "$ISSUE_KEY" "$START_ORIGINAL_STATUS" >/dev/null 2>&1 ||
+        warn "could not restore $ISSUE_KEY to $START_ORIGINAL_STATUS"
+    [ "$START_NEW_CLAIM" -eq 0 ] ||
+        cliban issue release "$ISSUE_KEY" >/dev/null 2>&1 ||
+        warn "could not release $ISSUE_KEY after start failed"
+}
+
 cmd_ticket_start() {
     local key=${1:-}
     [ -n "$key" ] || usage_error "ticket start needs an issue key"
@@ -1020,8 +1253,8 @@ cmd_ticket_start() {
             "$ISSUE_BRANCH is registered to $existing, which no longer exists" \
             "${PRUNE_INSTRUCTIONS[@]}" \
             "    $PROG ticket start $ISSUE_KEY"
+        start_ticket_on_board
         say "$existing"
-        instruct "$ISSUE_BRANCH is already checked out there; nothing to do."
         board_record "$ISSUE_KEY" "already started ($ISSUE_BRANCH at $existing)"
         exit 0
     fi
@@ -1034,19 +1267,24 @@ cmd_ticket_start() {
         "Inspect it, then move it aside or run \`git worktree prune\` if it is a" \
         "leftover, and re-run."
 
+    start_ticket_on_board
+
     local outcome
     if have_branch "$ISSUE_BRANCH"; then
         # The branch outlived its worktree and carries work. Recreating it off
         # the milestone tip would throw that away without saying so.
         announce "adding a worktree at $path for the existing branch $ISSUE_BRANCH@$(short_sha "$ISSUE_BRANCH")"
-        gitr worktree add "$path" "$ISSUE_BRANCH" >&2 || refuse_ticket "$ISSUE_KEY" \
-            "git could not add a worktree at $path for $ISSUE_BRANCH" \
-            "git's own error is above. The branch was not created by this step, so" \
-            "nothing about it has changed."
+        if ! quiet gitr worktree add "$path" "$ISSUE_BRANCH"; then
+            rollback_ticket_start
+            refuse_ticket "$ISSUE_KEY" \
+                "git could not add a worktree at $path for $ISSUE_BRANCH" \
+                "git's own error is above. The branch was not created by this step."
+        fi
         outcome="adopted"
     else
         announce "creating $ISSUE_BRANCH off $mbranch@$(short_sha "$mbranch") and checking it out at $path"
-        gitr worktree add -b "$ISSUE_BRANCH" "$path" "refs/heads/$mbranch" >&2 ||
+        if ! quiet gitr worktree add -b "$ISSUE_BRANCH" "$path" "refs/heads/$mbranch"; then
+            rollback_ticket_start
             refuse_ticket "$ISSUE_KEY" \
                 "git could not create $ISSUE_BRANCH at $path" \
                 "git's own error is above. git creates the branch before it checks" \
@@ -1054,11 +1292,11 @@ cmd_ticket_start() {
                 "not:" \
                 "" \
                 "    git -C \"$REPO\" branch --list $ISSUE_BRANCH"
+        fi
         outcome="created"
     fi
 
     say "$path"
-    instruct "The primary checkout $primary was not touched."
     board_record "$ISSUE_KEY" "$outcome ($ISSUE_BRANCH at $path)"
     exit 0
 }
@@ -1082,7 +1320,6 @@ cmd_ticket_status() {
 
     if is_ancestor "$mbranch" "$ISSUE_BRANCH"; then
         say "mergeable"
-        instruct "$mbranch@$msha is an ancestor of $ISSUE_BRANCH@$tsha."
         board_record "$ISSUE_KEY" \
             "mergeable ($mbranch@$msha is an ancestor of $ISSUE_BRANCH@$tsha)"
         exit 0
@@ -1090,20 +1327,9 @@ cmd_ticket_status() {
 
     say "sync-required: $mbranch@$msha is not an ancestor of $ISSUE_BRANCH"
     instruct \
-        "$ISSUE_BRANCH is at $tsha and does not contain the milestone tip." \
-        "" \
-        "The agent implementing $ISSUE_KEY brings it forward and resolves whatever" \
-        "that surfaces:" \
-        "" \
+        "$ISSUE_BRANCH@$tsha lacks $mbranch@$msha; the agent syncs it, the orchestrator must not." \
         "    cliban-flow ticket sync $ISSUE_KEY" \
-        "    <re-run this repo's build and its full test suite>" \
-        "    cliban-flow ticket ready $ISSUE_KEY" \
-        "" \
-        "The orchestrator must not resolve this itself. Integration squashes the" \
-        "ticket branch's tree unbuilt and untested, which is only safe while that" \
-        "tree is the one the implementer built and tested; a merge performed here" \
-        "would produce a tree nobody has ever run." \
-        ""
+        "    <build and test> && cliban-flow ticket ready $ISSUE_KEY"
     board_record "$ISSUE_KEY" \
         "sync-required ($mbranch@$msha is not an ancestor of $ISSUE_BRANCH@$tsha)"
     exit 1
@@ -1147,13 +1373,6 @@ cmd_ticket_sync() {
     # commit for the sake of having something to report.
     if is_ancestor "$mbranch" "$ISSUE_BRANCH"; then
         say "$(full_sha "$ISSUE_BRANCH")"
-        instruct \
-            "$ISSUE_BRANCH@$tsha already contains $mbranch@$msha; nothing to merge." \
-            "" \
-            "That is the state \`ticket ready\` requires, so if the build and the" \
-            "full suite are green on this tree:" \
-            "" \
-            "    $PROG ticket ready $ISSUE_KEY"
         board_record "$ISSUE_KEY" \
             "already up to date ($ISSUE_BRANCH@$tsha already contains $mbranch@$msha)"
         exit 0
@@ -1167,8 +1386,9 @@ cmd_ticket_sync() {
     # -m rather than git's default message, so the commit says which branch went
     # into which and a conflicted merge's MERGE_MSG says it too — that is the
     # message the implementer's own `git commit` will use.
-    if git -C "$TICKET_WT" merge --no-edit \
-        -m "Merge $mbranch into $ISSUE_BRANCH" "refs/heads/$mbranch" >&2; then
+    local merge_output
+    if merge_output=$(git -C "$TICKET_WT" merge --no-edit \
+        -m "Merge $mbranch into $ISSUE_BRANCH" "refs/heads/$mbranch" 2>&1); then
 
         local after ff=""
         after=$(full_sha "$ISSUE_BRANCH")
@@ -1178,17 +1398,6 @@ cmd_ticket_sync() {
         [ "$after" != "$(full_sha "$mbranch")" ] || ff=", fast-forward"
 
         say "$after"
-        instruct \
-            "$ISSUE_BRANCH is now at $(short_sha "$ISSUE_BRANCH") and contains $mbranch@$msha." \
-            "" \
-            "Nothing has built or tested that tree. This tool does not run builds:" \
-            "which commands they are varies per repository and reading their output" \
-            "is judgement. Integration then squashes this tree unbuilt and untested," \
-            "on the strength of your having done it here:" \
-            "" \
-            "    <this repository's build>" \
-            "    <this repository's full test suite>" \
-            "    $PROG ticket ready $ISSUE_KEY"
         board_record "$ISSUE_KEY" \
             "merged ($mbranch@$msha into $ISSUE_BRANCH@$tsha, clean$ff, now at $(short_sha "$ISSUE_BRANCH"))"
         exit 0
@@ -1199,40 +1408,25 @@ cmd_ticket_sync() {
     # none, and is not this subcommand's expected outcome.
     local unmerged
     unmerged=$(git -C "$TICKET_WT" diff --name-only --diff-filter=U 2>/dev/null) || unmerged=""
-    [ -n "$unmerged" ] || refuse_ticket "$ISSUE_KEY" \
+    if [ -z "$unmerged" ]; then
+        QUIET_ERROR=$merge_output
+        refuse_ticket "$ISSUE_KEY" \
         "git could not merge $mbranch into $ISSUE_BRANCH, and left no conflict to resolve" \
         "git's own error is above. This is not the ordinary conflicting merge —" \
         "that leaves unmerged paths in the index and this left none — so check" \
         "what state the worktree is in before doing anything else:" \
         "" \
         "    git -C \"$TICKET_WT\" status"
+    fi
 
     say "$unmerged"
     instruct \
-        "The paths on stdout could not be merged. The merge is in progress in" \
-        "$TICKET_WT." \
-        "" \
-        "The agent implementing $ISSUE_KEY resolves this." \
-        "" \
-        "The orchestrator will not do it: it has no knowledge of what either" \
-        "colliding ticket intended, and a resolution made there would produce a" \
-        "tree nobody has built or tested — exactly what integration is not" \
-        "allowed to squash." \
-        "" \
+        "Conflict in $TICKET_WT; the paths are on stdout." \
+        "The agent implementing $ISSUE_KEY resolves this. The orchestrator will not do it." \
         "    git -C \"$TICKET_WT\" status" \
-        "    # resolve each path, then" \
-        "    git -C \"$TICKET_WT\" add <path>..." \
-        "    git -C \"$TICKET_WT\" commit" \
-        "" \
-        "Then log what you resolved and why. The resolution is the part of this" \
-        "that outlives you, and it is what a review of the resolution diff reads:" \
-        "" \
+        "    git -C \"$TICKET_WT\" add <path>... && git -C \"$TICKET_WT\" commit" \
         "    cliban issue log $ISSUE_KEY \"resolved <paths> against $mbranch: <how>\"" \
-        "" \
-        "Then build, run the full suite, and:" \
-        "" \
-        "    $PROG ticket ready $ISSUE_KEY" \
-        ""
+        "    $PROG ticket ready $ISSUE_KEY"
     board_record "$ISSUE_KEY" \
         "conflicted ($mbranch@$msha into $ISSUE_BRANCH@$tsha, unmerged: $(printf '%s' "$unmerged" | tr '\n' ' ' | sed 's/ $//'))"
     exit 1
@@ -1257,6 +1451,10 @@ cmd_ticket_ready() {
     [ $# -le 1 ] || usage_error "ticket ready takes one issue key, got: $*"
     require_repo
     load_issue "$key"
+
+    [ "$ISSUE_STATUS" != "done" ] || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY is already done, so it cannot be handed over again" \
+        "Inspect it: cliban issue show $ISSUE_KEY --json"
 
     load_ticket_milestone_branch "there is no tip it could be checked against" \
         "Ready means the branch contains its milestone's tip, which needs a" \
@@ -1286,6 +1484,26 @@ cmd_ticket_ready() {
         "    <this repository's full test suite>" \
         "    $PROG ticket ready $ISSUE_KEY"
 
+    local plan activity
+    plan=$(cliban issue cat "$ISSUE_KEY" --section plan 2>/dev/null) || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY has no plan on the board" \
+        "Create it: cliban issue edit $ISSUE_KEY --section plan --create-section --description-file -"
+    printf '%s\n' "$plan" | grep -Eq '^- \[[ xX]\] ' || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY's plan has no checklist items" \
+        "Add one: cliban issue edit $ISSUE_KEY --section plan --description-file -"
+
+    [ "$(gitr rev-list --count "refs/heads/$mbranch..refs/heads/$ISSUE_BRANCH")" -gt 0 ] || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_BRANCH has no commits past $mbranch" \
+        "Commit the ticket work: git -C \"$TICKET_WT\" commit"
+
+    activity=$(cliban issue cat "$ISSUE_KEY" --section activity 2>/dev/null) || activity=""
+    if ! printf '%s\n' "$activity" | grep -Eqi 'review.*SPEC.*QUALITY' &&
+        ! printf '%s\n' "$activity" | grep -Eq '^- [^—]+ — review waived by orchestrator: [[:space:]]*[^[:space:]].*$'; then
+        refuse_ticket "$ISSUE_KEY" \
+            "$ISSUE_KEY has neither a review verdict nor an orchestrator waiver" \
+            "Record one: cliban issue log $ISSUE_KEY \"review waived by orchestrator: <reason>\""
+    fi
+
     local tip
     tip=$(full_sha "$ISSUE_BRANCH")
     local detail="$ISSUE_BRANCH@$tsha contains $mbranch@$msha"
@@ -1295,9 +1513,6 @@ cmd_ticket_ready() {
     # handoff on the board.
     if [ "$ISSUE_STATUS" = in-review ]; then
         say "$tip"
-        instruct "$ISSUE_KEY is already in-review; nothing to move." \
-            "" \
-            "$detail, and its worktree is clean."
         board_record "$ISSUE_KEY" "already ready ($detail)"
         exit 0
     fi
@@ -1316,13 +1531,6 @@ cmd_ticket_ready() {
             "    $PROG ticket ready $ISSUE_KEY"
 
     say "$tip"
-    instruct \
-        "$ISSUE_KEY is in-review and $detail." \
-        "" \
-        "The orchestrator integrates from here and owns the move to done. It" \
-        "will not build or test what it squashes, so whatever you ran on this" \
-        "tree is the last thing that did." \
-        ""
     board_record "$ISSUE_KEY" "ready ($detail)"
     exit 0
 }
@@ -1392,11 +1600,11 @@ cmd_ticket_integrate() {
 
     subjects=$(gitr log --reverse --format='- %s' "refs/heads/$mbranch..refs/heads/$ISSUE_BRANCH")
     announce "squashing $ISSUE_BRANCH@$ttip onto $mbranch@$mtip"
-    git -C "$mwt" merge --squash "refs/heads/$ISSUE_BRANCH" >&2 || refuse_ticket "$ISSUE_KEY" \
+    quiet git -C "$mwt" merge --squash "refs/heads/$ISSUE_BRANCH" || refuse_ticket "$ISSUE_KEY" \
         "git could not squash $ISSUE_BRANCH onto $mbranch" \
         "The index may contain a partial squash. Inspect $mwt; the orchestrator must not resolve it."
-    git -C "$mwt" commit -m "$subject" -m "Discarded commit subjects:
-$subjects" -m "Ticket: $ISSUE_KEY" >&2 || refuse_ticket "$ISSUE_KEY" \
+    quiet git -C "$mwt" commit -m "$subject" -m "Discarded commit subjects:
+$subjects" -m "Ticket: $ISSUE_KEY" || refuse_ticket "$ISSUE_KEY" \
         "git could not commit the squash for $ISSUE_KEY" \
         "The squash is staged in $mwt. Inspect it before retrying."
 
@@ -1412,11 +1620,128 @@ $subjects" -m "Ticket: $ISSUE_KEY" >&2 || refuse_ticket "$ISSUE_KEY" \
         "could not move $ISSUE_KEY to done after squash $squash_sha" \
         "The git commit exists; retry the board move before integrating anything else."
     cliban linear push "$ISSUE_KEY" >/dev/null 2>&1 || true
-    gitr worktree remove "$TICKET_WT" >&2 || refuse_ticket "$ISSUE_KEY" \
+    quiet gitr worktree remove "$TICKET_WT" || refuse_ticket "$ISSUE_KEY" \
         "could not remove ticket worktree $TICKET_WT" \
         "The squash and board move succeeded. Remove only that worktree manually."
     board_record "$ISSUE_KEY" "integrated ($ISSUE_BRANCH@$ttip as $squash_sha on $mbranch; branch retained)"
     say "$squash_sha"
+}
+
+# abandon_ticket <reason> — discard only clean git state; always release the
+# board claim and record why. load_issue must have populated ISSUE_* first.
+abandon_ticket() {
+    local reason=$1 wt primary expected retained=""
+    primary=$(primary_worktree) || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    wt=$(worktree_for_branch "$ISSUE_BRANCH") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+
+    if [ -n "$wt" ]; then
+        if [ "$wt" = "$primary" ]; then
+            retained="branch and primary worktree retained"
+        elif worktree_missing "$wt"; then
+            retained="missing worktree registration and branch retained"
+        elif [ -z "$ISSUE_MILESTONE" ]; then
+            retained="unscoped worktree and branch retained"
+        elif expected="$primary-${ISSUE_MILESTONE:+$(slugify "$ISSUE_MILESTONE")}/.worktrees/$ISSUE_BRANCH" && [ "$wt" != "$expected" ]; then
+            retained="foreign worktree and branch retained"
+        elif worktree_dirty "$wt"; then
+            retained="dirty worktree and branch retained"
+        else
+            announce "removing abandoned ticket worktree $wt"
+            quiet gitr worktree remove "$wt" || retained="worktree and branch retained after git refused removal"
+        fi
+    fi
+
+    wt=$(worktree_for_branch "$ISSUE_BRANCH") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    if [ -z "$wt" ] && have_branch "$ISSUE_BRANCH"; then
+        announce "deleting abandoned ticket branch $ISSUE_BRANCH"
+        quiet gitr branch -D "$ISSUE_BRANCH" || retained="branch retained after git refused deletion"
+    fi
+
+    cliban issue log "$ISSUE_KEY" "work discarded: $reason${retained:+; $retained}" >/dev/null || refuse_ticket "$ISSUE_KEY" \
+        "could not record why $ISSUE_KEY was abandoned" \
+        "The git cleanup may already be complete; retry to release the claim."
+    cliban issue release "$ISSUE_KEY" >/dev/null || refuse_ticket "$ISSUE_KEY" \
+        "could not release $ISSUE_KEY's claim" \
+        "The discard is recorded; retry the command to release the claim."
+    board_record "$ISSUE_KEY" "abandoned ($reason${retained:+; $retained})"
+}
+
+cmd_ticket_abandon() {
+    local key=${1:-} reason=""
+    [ -n "$key" ] || usage_error "ticket abandon needs an issue key"
+    shift
+    [ "${1:-}" = --confirm ] || usage_error "ticket abandon needs --confirm <reason>"
+    reason=${2:-}
+    [ -n "$reason" ] || usage_error "ticket abandon needs --confirm <reason>"
+    [ $# -eq 2 ] || usage_error "ticket abandon takes one issue key and --confirm <reason>"
+    require_repo
+    load_issue "$key"
+    abandon_ticket "$reason"
+    say "${retained:-abandoned}"
+}
+
+cmd_milestone_abandon() {
+    local name="" reason="" arg keys key mwt primary expected retained=""
+    while [ $# -gt 0 ]; do
+        arg=$1
+        case $arg in
+            -p | --project)
+                [ $# -ge 2 ] || usage_error "$arg needs a project key"
+                FLOW_PROJECT=$2; shift 2 ;;
+            --project=*) FLOW_PROJECT=${arg#--project=}; shift ;;
+            --confirm)
+                [ $# -ge 2 ] || usage_error "milestone abandon needs --confirm <reason>"
+                reason=$2; shift 2 ;;
+            -*) usage_error "unknown option: $arg" ;;
+            *)
+                [ -z "$name" ] || usage_error "milestone abandon takes one milestone name"
+                name=$arg; shift ;;
+        esac
+    done
+    [ -n "$name" ] || usage_error "milestone abandon needs a milestone name"
+    [ -n "$reason" ] || usage_error "milestone abandon needs --confirm <reason>"
+    require_repo
+    require_project
+    load_milestone "$name"
+
+    keys=$(cliban issue ls -p "$PROJECT" -m "$MILESTONE_NAME" --all --json | json_lines_field key) ||
+        refuse_milestone "$MILESTONE_NAME" "could not list milestone tickets" \
+            "No teardown ran; retry when the board is readable."
+    while IFS= read -r key; do
+        [ -n "$key" ] || continue
+        load_issue "$key"
+        abandon_ticket "$reason"
+    done <<<"$keys"
+
+    primary=$(primary_worktree) || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    mwt=$(worktree_for_branch "$MILESTONE_BRANCH") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    if [ -n "$mwt" ]; then
+        if [ "$mwt" = "$primary" ]; then
+            retained="milestone branch and primary worktree retained"
+        elif worktree_missing "$mwt"; then
+            retained="missing milestone worktree registration and branch retained"
+        elif expected="$primary-${MILESTONE_BRANCH#milestone/}" && [ "$mwt" != "$expected" ]; then
+            retained="foreign milestone worktree and branch retained"
+        elif worktree_dirty "$mwt"; then
+            retained="dirty milestone worktree and branch retained"
+        else
+            announce "removing abandoned milestone worktree $mwt"
+            quiet gitr worktree remove "$mwt" || retained="milestone worktree and branch retained after git refused removal"
+        fi
+    fi
+    mwt=$(worktree_for_branch "$MILESTONE_BRANCH") || refuse \
+        "could not read this repository's worktree list" "git's own error is above."
+    if [ -z "$mwt" ] && have_branch "$MILESTONE_BRANCH"; then
+        announce "deleting abandoned milestone branch $MILESTONE_BRANCH"
+        quiet gitr branch -D "$MILESTONE_BRANCH" || retained="milestone branch retained after git refused deletion"
+    fi
+    board_record_milestone "$MILESTONE_NAME" "abandoned ($reason${retained:+; $retained})"
+    say "${retained:-abandoned}"
 }
 
 main "$@"

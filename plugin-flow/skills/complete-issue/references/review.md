@@ -5,9 +5,7 @@ cost **one** review at their checkpoint, not N. Reviewing after every task is wh
 makes a ticket crawl; the checkpoints put the gate where a bug would otherwise
 compound — typically right before later tasks stack on a foundational slice.
 
-Not every ticket earns a gate, either. A plan with no `### Review Checkpoint`
-marker has exactly one gate: the end of the plan. That is a legitimate shape for
-a small ticket, and choosing it is the planner's call at step 5.
+Not every ticket earns a gate. When review is chosen, a checkpoint-free plan gets one cumulative review at the end.
 
 ## Who reviews
 
@@ -117,5 +115,5 @@ what a per-checkpoint view structurally cannot see:
 - Dead code, orphaned helpers, abandoned intermediate states
 - Scope that grew past what the ticket asked for, accumulated a slice at a time
 
-On a plan with no checkpoint markers, this **is** the only gate, and it is not
-optional.
+When final review is chosen, it covers the whole ticket even if the plan has no
+checkpoint markers.

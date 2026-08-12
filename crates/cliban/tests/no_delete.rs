@@ -106,7 +106,9 @@ fn rm_archives_rather_than_destroying() {
 
     // …and each is reversible, so `rm` costs nothing irreversible.
     assert_eq!(run(&db, &["issue", "unarchive", "CLI-1"]).2, 0);
-    assert!(run(&db, &["issue", "ls", "--json"]).0.contains("CLI-1"));
+    assert!(run(&db, &["issue", "ls", "--all", "--json"])
+        .0
+        .contains("CLI-1"));
 }
 
 #[test]
@@ -178,7 +180,9 @@ fn archiving_remains_the_supported_path_and_is_reversible() {
         "…but are still there"
     );
     assert_eq!(run(&db, &["issue", "unarchive", "CLI-1"]).2, 0);
-    assert!(run(&db, &["issue", "ls", "--json"]).0.contains("CLI-1"));
+    assert!(run(&db, &["issue", "ls", "--all", "--json"])
+        .0
+        .contains("CLI-1"));
 }
 
 /// Labels are not work items — they carry no timeline, and detaching one

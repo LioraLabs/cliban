@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI-79 — `cliban-flow ticket status <KEY>`: the mergeability gate.
+# CLI-79, CLI-100 — `cliban-flow ticket status <KEY>`: the mergeability gate.
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib.sh
 . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -17,7 +17,7 @@ run_flow ticket status "$key"
 assert_status 0 "a branch containing the milestone tip is mergeable"
 assert_stdout_is "mergeable" "the verdict, alone, is on stdout"
 assert_out_lacks "sync-required" "the mergeable verdict says nothing about syncing"
-assert_stderr_has "milestone/test-milestone" "the guidance on stderr names the milestone branch"
+assert_eq "$FLOW_STDERR" "" "an affirmative verdict adds no ceremony to stderr"
 assert_board_has "$key" "[cliban-flow] ticket status $key: mergeable" \
     "the mergeable verdict is recorded on the board"
 

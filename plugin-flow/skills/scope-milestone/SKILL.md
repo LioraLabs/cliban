@@ -24,7 +24,7 @@ cliban issue cat <KEY> --section spec
 
 Given neither a name nor a key, ask. If the user wants to scope from a conversation with nothing on the board yet, that's `explore-feature` — offer it rather than improvising a container.
 
-Then read the surroundings: `issue ls --json` for collisions, `project search <KEY> "<terms>" --json` for lessons that constrain the design.
+Then read the surroundings: `issue ls --all --json` for collisions, `project search <KEY> "<terms>" --json` for lessons that constrain the design.
 
 ## 2. Grill toward the slice boundaries
 
@@ -74,6 +74,9 @@ Cut **tracer bullets**: each a narrow but *complete* path through every layer it
 **Wide refactors are the exception.** A mechanical change whose blast radius fans across the codebase can't land green as a tracer bullet. Sequence it **expand → migrate → contract**: add the new form beside the old, migrate call sites in batches sized by blast radius (one ticket each, blocked by the expand, green throughout because the old form still exists), then delete the old form in a ticket blocked by every batch.
 
 Present the breakdown numbered — title, blocked-by, what it delivers end to end. Ask whether the granularity is right, whether each edge is real or just a habit of ordering, and whether anything should merge or split. **Publish nothing before the user approves.**
+
+When small tickets have shared context but neither blocks the other, suggest a
+`related_to` chain for implementer affinity. Add it only after the user approves.
 
 ## 5. Publish
 

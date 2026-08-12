@@ -93,6 +93,8 @@ environment.
 | `label add\|ls\|rm` | labels (`label rm` deletes — labels have no history) |
 | `linear import\|push\|sync` | Linear bridge — read references/linear-bridge.md first |
 
+Prefer the canonical issue labels `bug`, `feature`, `refactor`, and `chore`; labels are created on first use and orphaned labels are not garbage-collected.
+
 ## Vocabulary
 
 - Priorities: `none|low|medium|high|urgent`. Milestone statuses:
@@ -122,6 +124,8 @@ The bodies are the payload: `ls` to find keys, `show` to read one entity,
 ## The non-obvious reads
 
 ```bash
+cliban issue ls                            # per-milestone open-status counts
+cliban issue ls --all                      # every issue row, including done/archived
 cliban issue ls --ready                    # takeable: backlog, unblocked, unclaimed — composes with every filter
 cliban issue ls --blocked                  # at least one open blocker
 cliban issue ls --search "ordering"        # fuzzy across title/key/labels/description; adds score
