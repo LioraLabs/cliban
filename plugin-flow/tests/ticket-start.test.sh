@@ -37,6 +37,26 @@ assert_eq "$(status_of "$key")" in-progress "starting moves the ticket in-progre
 assert_eq "$(cb issue show "$key" --json | json_get claimed_by)" test:cliban-flow \
     "starting claims the ticket for its actor"
 
+# CLI-109 — the same lifecycle primitive starts a ticket with no milestone.
+fixture_new
+key=$(new_issue_no_milestone "A standalone ticket to start")
+branch=$(branch_of "$key")
+tip=$(gitf rev-parse main)
+
+run_flow ticket start "$key"
+assert_status 0 "starting a standalone ticket succeeds"
+assert_stdout_is "$(fixture_standalone_wt "$branch")" \
+    "the standalone worktree is rooted under the primary checkout"
+assert_eq "$(gitf rev-parse "$branch")" "$tip" "the standalone branch starts at main"
+assert_eq "$(status_of "$key")" in-progress "standalone start moves the ticket in-progress"
+assert_eq "$(cb issue show "$key" --json | json_get claimed_by)" test:cliban-flow \
+    "standalone start claims the ticket"
+
+run_flow ticket start "$key"
+assert_status 0 "repeating standalone start succeeds"
+assert_stdout_is "$(fixture_standalone_wt "$branch")" \
+    "repeating standalone start returns the same worktree"
+
 # A wave is several tickets on one milestone, started one after another. The
 # first ticket's worktree lands inside the milestone worktree, and nothing
 # obliges a repository to gitignore `.worktrees/` — this fixture deliberately
@@ -150,19 +170,6 @@ assert_eq "$(cb issue show "$key" --json | json_get claimed_by)" "" \
     "git failure releases the new claim"
 assert_eq "$(gitf rev-parse --verify --quiet "refs/heads/$branch" || true)" "" \
     "stubbed git failure creates no branch"
-
-# Mergeability, and therefore a base to branch from, is a question about a
-# milestone branch.
-fixture_new
-fixture_milestone_worktree
-key=$(new_issue_no_milestone "Loose ticket")
-
-run_flow ticket start "$key"
-assert_status 2 "a ticket on no milestone is refused"
-assert_stderr_has "is on no milestone" "the refusal says what is missing"
-assert_stderr_has "cliban issue edit $key --milestone" "the instruction is how to fix it"
-assert_board_has "$key" "[cliban-flow] ticket start $key: refused" \
-    "the refusal is recorded on the board"
 
 # Creating the milestone branch here would answer "what does this integrate
 # into" by inventing it.

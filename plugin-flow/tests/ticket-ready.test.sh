@@ -161,6 +161,41 @@ assert_eq "$(gitf rev-parse "$branch")" "$tip" "the branch was not moved"
 assert_eq "$(gitt "$branch" status --porcelain)" "" "the worktree was left alone"
 assert_eq "$FLOW_STDERR" "" "ready success adds no ceremony to stderr"
 
+# CLI-109 — standalone work uses the same ready handoff without a milestone.
+fixture_new
+key=$(new_issue_no_milestone "Standalone and green")
+branch=$(branch_of "$key")
+run_flow ticket start "$key"
+commit_file_at "$(fixture_standalone_wt "$branch")" ticket-side.txt work
+ready_evidence "$key"
+tip=$(gitf rev-parse "$branch")
+
+run_flow ticket ready "$key"
+assert_status 0 "a standalone ticket becomes ready"
+assert_stdout_is "$tip" "standalone ready prints the immutable tip"
+assert_eq "$(status_of "$key")" in-review "standalone ready moves the ticket in-review"
+assert_board_has "$key" "$branch@$tip" "standalone ready records the full immutable SHA"
+
+run_flow ticket ready "$key"
+assert_status 0 "repeating standalone ready succeeds"
+assert_stdout_is "$tip" "repeating standalone ready returns the same immutable tip"
+assert_board_has "$key" "already ready ($branch@$tip)" \
+    "same-tip standalone ready is retry-safe"
+
+cb issue log "$key" "Final review: SPEC ✅; QUALITY pass before a later commit" >/dev/null
+commit_file_at "$(fixture_standalone_wt "$branch")" later.txt late
+later=$(gitf rev-parse "$branch")
+run_flow ticket ready "$key"
+assert_status 2 "a later commit invalidates standalone readiness"
+assert_stderr_has "new review verdict" "the refusal names the missing renewed evidence"
+
+cb issue log "$key" "Final review: SPEC ✅; QUALITY pass after $later" >/dev/null
+run_flow ticket ready "$key"
+assert_status 0 "ready renews a handoff after fresh verification"
+assert_stdout_is "$later" "the renewed handoff prints the new immutable tip"
+assert_board_has "$key" "ready ($branch@$later)" \
+    "a later commit replaces rather than reuses the old readiness evidence"
+
 # ------------------------------------------------------------ a stale branch
 #
 # The one refusal the whole protocol rests on. Integration squashes this tree

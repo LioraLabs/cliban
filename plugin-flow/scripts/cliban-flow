@@ -149,8 +149,8 @@ usage: cliban-flow <group> <command> [args]
   milestone abandon <NAME> [-p KEY] --confirm <REASON>
                         Release its tickets and discard clean milestone work.
 
-  ticket start <KEY>    Create <KEY>'s branch off the current milestone tip and
-                        check it out in a worktree under the milestone
+  ticket start <KEY>    Create <KEY>'s branch off its milestone tip, or main for
+                        a standalone ticket, and check it out in an isolated
                         worktree. Prints the worktree path.
 
   ticket status <KEY>   Is <KEY>'s branch integrable? Read-only: prints
@@ -161,8 +161,8 @@ usage: cliban-flow <group> <command> [args]
   ticket sync <KEY>     Merge the milestone tip into the ticket branch. Prints
                         the resulting tip SHA, or conflicted paths at exit 1.
 
-  ticket ready <KEY>    Verify the synced branch and clean worktree, then move
-                        the ticket to in-review. Prints the ticket tip SHA.
+  ticket ready <KEY>    Verify the branch and clean worktree, then move the
+                        ticket to in-review. Prints the ticket tip SHA.
 
   ticket integrate <KEY> [--dry-run]
                         Squash a ready ticket onto its milestone branch, mark it
@@ -1103,7 +1103,7 @@ cmd_milestone_finish() {
     say "$tip"
 }
 
-# ticket start <KEY> — the ticket's worktree, under the milestone's.
+# ticket start <KEY> — the ticket's worktree, under its integration worktree.
 #
 # Rooted at <milestone worktree>/.worktrees/<git_branch_name>, and branched off
 # the milestone branch's tip *as it is now*: ticket worktrees are made at wave
@@ -1145,21 +1145,34 @@ cmd_ticket_start() {
     require_repo
     load_issue "$key"
 
-    load_ticket_milestone_branch "it has nothing to branch from" \
-        "A ticket branch starts at its milestone's tip and its worktree hangs off" \
-        "the milestone's. Put the ticket on a milestone first:"
-
-    local mbranch start_milestone
-    mbranch=$TICKET_MBRANCH
-    start_milestone="    $PROG milestone start \"$ISSUE_MILESTONE\" -p $ISSUE_PROJECT"
-
-    local primary mwt
+    local primary base root path mbranch="" start_milestone="" mwt=""
     primary=$(primary_worktree) || refuse \
         "could not read this repository's worktree list" "git's own error is above."
-    mwt=$(worktree_for_branch "$mbranch") || refuse \
-        "could not read this repository's worktree list" "git's own error is above."
+    if [ -z "$ISSUE_MILESTONE" ]; then
+        have_branch main || refuse_ticket "$ISSUE_KEY" \
+            "the local main branch does not exist" \
+            "A standalone ticket starts from main, so create or restore that branch first."
+        [ "$(worktree_head "$primary")" = main ] || refuse_ticket "$ISSUE_KEY" \
+            "the primary checkout $primary is not on main" \
+            "A standalone ticket starts from the primary checkout's main branch. Put it back:" \
+            "" \
+            "    git -C \"$primary\" checkout main"
+        ! worktree_dirty "$primary" || refuse_ticket "$ISSUE_KEY" \
+            "the primary checkout $primary has uncommitted changes" \
+            "Commit or stash them before starting a standalone ticket."
+        base=main
+        root="$primary/.worktrees"
+    else
+        load_ticket_milestone_branch "it has nothing to branch from" \
+            "A dispatched ticket branch starts at its milestone's tip and its worktree hangs off" \
+            "the milestone's."
+        mbranch=$TICKET_MBRANCH
+        base=$mbranch
+        start_milestone="    $PROG milestone start \"$ISSUE_MILESTONE\" -p $ISSUE_PROJECT"
+        mwt=$(worktree_for_branch "$mbranch") || refuse \
+            "could not read this repository's worktree list" "git's own error is above."
 
-    if [ -z "$mwt" ]; then
+        if [ -z "$mwt" ]; then
         # The milestone's worktree may well be right where it belongs and simply
         # not on the branch. Sending someone to `milestone start` here would
         # bounce them into the occupied-path refusal and back, and neither
@@ -1181,9 +1194,9 @@ cmd_ticket_start() {
             "milestone does not have one. Make it:" \
             "" \
             "$start_milestone"
-    fi
+        fi
 
-    [ "$mwt" != "$primary" ] || refuse_ticket "$ISSUE_KEY" \
+        [ "$mwt" != "$primary" ] || refuse_ticket "$ISSUE_KEY" \
         "$mbranch is checked out in the primary checkout $primary" \
         "Ticket worktrees are rooted under the milestone worktree, so this would" \
         "put every ticket's build state inside the tree the user works and runs" \
@@ -1194,26 +1207,27 @@ cmd_ticket_start() {
         "    git -C \"$primary\" checkout main" \
         "$start_milestone"
 
-    read_prune_instructions
+        read_prune_instructions
 
-    ! worktree_missing "$mwt" || refuse_ticket "$ISSUE_KEY" \
+        ! worktree_missing "$mwt" || refuse_ticket "$ISSUE_KEY" \
         "$mbranch is registered to $mwt, which no longer exists" \
         "${PRUNE_INSTRUCTIONS[@]}" \
         "$start_milestone"
 
-    ! worktree_dirty "$mwt" || refuse_ticket "$ISSUE_KEY" \
+        ! worktree_dirty "$mwt" || refuse_ticket "$ISSUE_KEY" \
         "the milestone worktree $mwt has uncommitted changes" \
         "$ISSUE_BRANCH would start at $mbranch's tip, which is not what is in that" \
         "tree — whatever is uncommitted there would silently not be in it. Commit" \
         "or stash it first:" \
         "" \
-        "    git -C \"$mwt\" status"
+            "    git -C \"$mwt\" status"
 
-    # Nothing this subcommand creates may land outside the milestone worktree.
+        root="$mwt/.worktrees"
+    fi
+
+    # Nothing this subcommand creates may land outside its owning worktree.
     # The name comes from the board, and a guard that trusts its input is not a
     # guard; this one is checked before anything is announced or created.
-    local root path
-    root="$mwt/.worktrees"
     path="$root/$ISSUE_BRANCH"
 
     # path_within compares paths as written, which a symlink makes a lie: every
@@ -1282,8 +1296,8 @@ cmd_ticket_start() {
         fi
         outcome="adopted"
     else
-        announce "creating $ISSUE_BRANCH off $mbranch@$(short_sha "$mbranch") and checking it out at $path"
-        if ! quiet gitr worktree add -b "$ISSUE_BRANCH" "$path" "refs/heads/$mbranch"; then
+        announce "creating $ISSUE_BRANCH off $base@$(short_sha "$base") and checking it out at $path"
+        if ! quiet gitr worktree add -b "$ISSUE_BRANCH" "$path" "refs/heads/$base"; then
             rollback_ticket_start
             refuse_ticket "$ISSUE_KEY" \
                 "git could not create $ISSUE_BRANCH at $path" \
@@ -1456,33 +1470,40 @@ cmd_ticket_ready() {
         "$ISSUE_KEY is already done, so it cannot be handed over again" \
         "Inspect it: cliban issue show $ISSUE_KEY --json"
 
-    load_ticket_milestone_branch "there is no tip it could be checked against" \
-        "Ready means the branch contains its milestone's tip, which needs a" \
-        "milestone. Put the ticket on one first:"
-    require_ticket_branch
-    load_ticket_worktree
-
-    local mbranch=$TICKET_MBRANCH
-    local msha tsha
-    msha=$(short_sha "$mbranch")
-    tsha=$(short_sha "$ISSUE_BRANCH")
+    local mbranch="" msha="" tsha
 
     # The same test `ticket status` reports on and `milestone integrate` will
     # gate on: strict ancestry, never a trial merge. A branch that is merely
     # behind would merge cleanly and is still not ready, because the tree that
     # would land is not the tree that was built and tested.
-    is_ancestor "$mbranch" "$ISSUE_BRANCH" || refuse_ticket "$ISSUE_KEY" \
-        "$mbranch@$msha is not an ancestor of $ISSUE_BRANCH@$tsha" \
-        "Ready means integrable, and integration squashes this branch's tree" \
-        "unbuilt and untested — which is only safe while that tree is the one you" \
-        "built and tested. A branch that is behind is not that tree, however" \
-        "cleanly it would merge. Bring it forward, re-run the build and the full" \
-        "suite on what comes out, and come back:" \
-        "" \
-        "    $PROG ticket sync $ISSUE_KEY" \
-        "    <this repository's build>" \
-        "    <this repository's full test suite>" \
-        "    $PROG ticket ready $ISSUE_KEY"
+    if [ -n "$ISSUE_MILESTONE" ]; then
+        load_ticket_milestone_branch "there is no tip it could be checked against"
+        mbranch=$TICKET_MBRANCH
+    fi
+    require_ticket_branch
+    load_ticket_worktree
+    tsha=$(short_sha "$ISSUE_BRANCH")
+
+    if [ -n "$ISSUE_MILESTONE" ]; then
+        msha=$(short_sha "$mbranch")
+        is_ancestor "$mbranch" "$ISSUE_BRANCH" || refuse_ticket "$ISSUE_KEY" \
+            "$mbranch@$msha is not an ancestor of $ISSUE_BRANCH@$tsha" \
+            "Ready means integrable, and integration squashes this branch's tree" \
+            "unbuilt and untested — which is only safe while that tree is the one you" \
+            "built and tested. A branch that is behind is not that tree, however" \
+            "cleanly it would merge. Bring it forward, re-run the build and the full" \
+            "suite on what comes out, and come back:" \
+            "" \
+            "    $PROG ticket sync $ISSUE_KEY" \
+            "    <this repository's build>" \
+            "    <this repository's full test suite>" \
+            "    $PROG ticket ready $ISSUE_KEY"
+    else
+        have_branch main || refuse_ticket "$ISSUE_KEY" \
+            "the local main branch does not exist" \
+            "A standalone ticket starts from main, so create or restore that branch first."
+        mbranch=main
+    fi
 
     local plan activity
     plan=$(cliban issue cat "$ISSUE_KEY" --section plan 2>/dev/null) || refuse_ticket "$ISSUE_KEY" \
@@ -1506,15 +1527,36 @@ cmd_ticket_ready() {
 
     local tip
     tip=$(full_sha "$ISSUE_BRANCH")
-    local detail="$ISSUE_BRANCH@$tsha contains $mbranch@$msha"
+    local detail="$ISSUE_BRANCH@$tip"
+    [ -z "$ISSUE_MILESTONE" ] || detail="$detail contains $mbranch@$(full_sha "$mbranch")"
 
     # Already there. Re-running must not depend on cliban's handling of a move
     # to the status something is already in, and must not read as a second
     # handoff on the board.
-    if [ "$ISSUE_STATUS" = in-review ]; then
+    if [ "$ISSUE_STATUS" = in-review ] &&
+        printf '%s\n' "$activity" | grep -Fq "[cliban-flow] ticket ready $ISSUE_KEY: ready ($detail)"; then
         say "$tip"
         board_record "$ISSUE_KEY" "already ready ($detail)"
         exit 0
+    fi
+
+    if [ "$ISSUE_STATUS" = in-review ]; then
+        local after_ready
+        after_ready=$(printf '%s\n' "$activity" | awk \
+            -v marker="[cliban-flow] ticket ready $ISSUE_KEY: ready (" '
+                index($0, marker) { after = ""; seen = 1; next }
+                seen { after = after $0 ORS }
+                END { printf "%s", after }
+            ')
+        local for_tip
+        for_tip=$(printf '%s\n' "$after_ready" | grep -F "$tip" || true)
+        if ! printf '%s\n' "$for_tip" | grep -Eqi 'review.*SPEC.*✅.*QUALITY.*(pass|✅)' &&
+            ! printf '%s\n' "$for_tip" | grep -Eq '^- [^—]+ — review waived by orchestrator: [[:space:]]*[^[:space:]].*$'; then
+            refuse_ticket "$ISSUE_KEY" \
+                "$ISSUE_BRANCH moved from its recorded ready SHA" \
+                "The old review evidence applies to the old tree. Verify this HEAD and record" \
+                "a new review verdict or orchestrator waiver naming $tip, then run ready again."
+        fi
     fi
 
     announce "moving $ISSUE_KEY to in-review at $ISSUE_BRANCH@$tsha"

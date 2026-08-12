@@ -115,6 +115,8 @@ fixture_milestone_worktree() {
 # of the script, so an assertion against it is a specification.
 fixture_ticket_wt() { printf '%s/.worktrees/%s' "$(fixture_milestone_wt)" "$1"; }
 
+fixture_standalone_wt() { printf '%s/.worktrees/%s' "$FIXTURE_REPO" "$1"; }
+
 # fixture_ticket_worktree <branch> — that worktree, branched off the fixture
 # milestone's tip and built with plain git rather than by running `ticket
 # start`. A sync or ready case must fail because sync or ready is wrong, never
@@ -142,8 +144,13 @@ assert_ticket_mutation_guards() {
     branch=$(branch_of "$key")
     gitf branch "$branch" main
     run_flow ticket "$command" "$key"
-    assert_status 2 "$command refuses a ticket on no milestone"
-    assert_stderr_has "is on no milestone" "$command reaches the no-milestone guard"
+    assert_status 2 "$command refuses a loose branch with no worktree"
+    if [ "$command" = ready ]; then
+        assert_stderr_has "checked out in no worktree" \
+            "ready accepts standalone tickets and reaches the worktree guard"
+    else
+        assert_stderr_has "is on no milestone" "$command reaches the no-milestone guard"
+    fi
 
     fixture_new
     cb milestone add "!!!" --project FLOW >/dev/null
