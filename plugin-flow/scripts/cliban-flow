@@ -1509,9 +1509,20 @@ cmd_ticket_ready() {
     plan=$(cliban issue cat "$ISSUE_KEY" --section plan 2>/dev/null) || refuse_ticket "$ISSUE_KEY" \
         "$ISSUE_KEY has no plan on the board" \
         "Create it: cliban issue edit $ISSUE_KEY --section plan --create-section --description-file -"
-    printf '%s\n' "$plan" | grep -Eq '^- \[[ xX]\] ' || refuse_ticket "$ISSUE_KEY" \
-        "$ISSUE_KEY's plan has no checklist items" \
-        "Add one: cliban issue edit $ISSUE_KEY --section plan --description-file -"
+    printf '%s\n' "$plan" | grep -Eq '[^[:space:]]' || refuse_ticket "$ISSUE_KEY" \
+        "$ISSUE_KEY's plan is empty" \
+        "Add an approach: cliban issue edit $ISSUE_KEY --section plan --description-file -"
+    if printf '%s\n' "$plan" | grep -Eq '^### Task [0-9]+:' &&
+        ! printf '%s\n' "$plan" | grep -Eq '^- \[[ xX]\] '; then
+        refuse_ticket "$ISSUE_KEY" \
+            "$ISSUE_KEY's structured plan has no checklist items" \
+            "Add its steps or use a freeform approach: cliban issue edit $ISSUE_KEY --section plan --description-file -"
+    fi
+    if printf '%s\n' "$plan" | grep -Eq '^- \[ \] '; then
+        refuse_ticket "$ISSUE_KEY" \
+            "$ISSUE_KEY's structured plan has unfinished checklist items" \
+            "Finish them or make the plan proportional: cliban issue edit $ISSUE_KEY --section plan --description-file -"
+    fi
 
     [ "$(gitr rev-list --count "refs/heads/$mbranch..refs/heads/$ISSUE_BRANCH")" -gt 0 ] || refuse_ticket "$ISSUE_KEY" \
         "$ISSUE_BRANCH has no commits past $mbranch" \

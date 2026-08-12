@@ -31,17 +31,47 @@ assert_stderr_has "cliban issue edit $key --section plan" "missing-plan refusal 
 
 fixture_new
 fixture_milestone_worktree
-key=$(new_issue "Plan without steps")
+key=$(new_issue "Proportional prose plan")
 branch=$(branch_of "$key")
 fixture_ticket_worktree "$branch"
 commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt work
 cb issue edit "$key" --section plan --create-section --description-file - >/dev/null <<'EOF'
-### Task 1: still only prose
+Update the one lifecycle document and run its focused prose contract.
 EOF
 cb issue log "$key" "Final review: SPEC ✅; QUALITY pass" >/dev/null
 run_flow ticket ready "$key"
-assert_status 2 "ready refuses a plan without checklist items"
-assert_stderr_has "checklist" "empty-plan refusal names the missing evidence"
+assert_status 0 "ready accepts a non-empty prose plan"
+assert_eq "$(status_of "$key")" "in-review" "the prose-planned ticket moved in-review"
+
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "Structured plan without steps")
+branch=$(branch_of "$key")
+fixture_ticket_worktree "$branch"
+commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt work
+cb issue edit "$key" --section plan --create-section --description-file - >/dev/null <<'EOF'
+### Task 1: missing its steps
+EOF
+cb issue log "$key" "Final review: SPEC ✅; QUALITY pass" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "ready refuses a structured plan without checklist items"
+assert_stderr_has "structured plan has no checklist" "step-free structured-plan refusal names the missing evidence"
+
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "Unfinished structured plan")
+branch=$(branch_of "$key")
+fixture_ticket_worktree "$branch"
+commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt work
+cb issue edit "$key" --section plan --create-section --description-file - >/dev/null <<'EOF'
+### Task 1: unfinished
+
+- [ ] **Step 1: still open**
+EOF
+cb issue log "$key" "Final review: SPEC ✅; QUALITY pass" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "ready refuses an unfinished structured plan"
+assert_stderr_has "unfinished checklist" "structured-plan refusal names the missing evidence"
 
 fixture_new
 fixture_milestone_worktree

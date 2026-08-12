@@ -12,7 +12,7 @@ has() { grep -Fiq -- "$2" "$1" || { printf 'missing %s in %s\n' "$2" "$1" >&2; f
 
 has "$issue" 'recoverability guarantee'
 has "$issue" 'before execution begins'
-has "$issue" 'commit new files early'
+# CLI-110 — commit cadence is implementation judgment, not board ceremony.
 # CLI-97
 # shellcheck disable=SC2016
 has "$issue" 'session-start hook surfaces `in-review` candidates'
