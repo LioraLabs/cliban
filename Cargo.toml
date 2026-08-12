@@ -3,17 +3,17 @@ resolver = "2"
 members = ["crates/cliban-core", "crates/cliban-tui", "crates/cliban", "crates/cliban-server", "crates/cliban-tenancy", "crates/cliban-sync"]
 
 [workspace.package]
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/LioraLabs/cliban"
 homepage = "https://github.com/LioraLabs/cliban"
 
 [workspace.dependencies]
-cliban-core = { path = "crates/cliban-core", version = "0.9.0" }
-cliban-tui = { path = "crates/cliban-tui", version = "0.9.0" }
-cliban-tenancy = { path = "crates/cliban-tenancy", version = "0.9.0" }
-cliban-sync = { path = "crates/cliban-sync", version = "0.9.0" }
+cliban-core = { path = "crates/cliban-core", version = "0.10.0" }
+cliban-tui = { path = "crates/cliban-tui", version = "0.10.0" }
+cliban-tenancy = { path = "crates/cliban-tenancy", version = "0.10.0" }
+cliban-sync = { path = "crates/cliban-sync", version = "0.10.0" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros"] }
 serde = { version = "1", features = ["derive"] }

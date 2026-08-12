@@ -1,7 +1,7 @@
 # Maintainer: Alex Gilbert <code@lioralabs.dev>
 
 pkgname=cliban-bin
-pkgver=0.9.0
+pkgver=0.10.0
 pkgrel=1
 pkgdesc="Self-hosted, agent-first kanban for the terminal: flat CLI, ratatui board, SQLite storage"
 arch=('x86_64' 'aarch64')
