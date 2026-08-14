@@ -207,7 +207,7 @@ pub struct LsArgs {
     /// fuzzy search query across title/key/labels/description
     #[arg(long)]
     search: Option<String>,
-    /// cap result count (0 = uncapped; --search defaults to 50)
+    /// cap result count (0 = uncapped; --search defaults to 10)
     #[arg(long, default_value_t = 0)]
     limit: i64,
     /// only takeable issues: backlog status, no open blocker, unclaimed
@@ -1356,11 +1356,11 @@ async fn write_issue_summary(store: &Store, issues: &[Issue], mode: Mode) -> Cli
     Ok(())
 }
 
-/// `issue ls --search` branch: default limit 50
-/// (the `--limit` flag overrides; 0 → 50), NDJSON rows carry a `score` field,
+/// `issue ls --search` branch: default limit 10
+/// (the `--limit` flag overrides; 0 → 10), NDJSON rows carry a `score` field,
 /// human output uses the search table with a leading SCORE column.
 async fn run_search(db: &Option<String>, a: &LsArgs, query: String) -> CliResult<()> {
-    let effective_limit = if a.limit == 0 { 50 } else { a.limit };
+    let effective_limit = if a.limit == 0 { 10 } else { a.limit };
     let store = store_open::open(db).await?;
     let opts = crate::search::Options {
         query,

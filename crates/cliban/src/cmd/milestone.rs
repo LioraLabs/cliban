@@ -15,6 +15,58 @@ use crate::errors::{CliError, CliResult};
 use crate::output::{Detail, Mode};
 use crate::store_open;
 
+async fn resolve_name(store: &Store, project: &str, input: &str, mode: Mode) -> CliResult<String> {
+    let list_project = project.to_string();
+    let milestones = store
+        .call(move |conn| milestones::list(conn, Some(&list_project)))
+        .await?;
+
+    if let Some(m) = milestones.iter().find(|m| m.name == input) {
+        return Ok(m.name.clone());
+    }
+
+    let folded: Vec<_> = milestones
+        .iter()
+        .filter(|m| m.name.eq_ignore_ascii_case(input))
+        .collect();
+    if folded.len() == 1 {
+        return Ok(folded[0].name.clone());
+    }
+
+    let mut matches: Vec<_> = milestones
+        .iter()
+        .filter_map(|m| crate::search::fuzzy_find(input, &m.name).map(|(score, _)| (score, m)))
+        .collect();
+    matches.sort_by(|(a, am), (b, bm)| b.cmp(a).then_with(|| am.name.cmp(&bm.name)));
+    if matches.len() == 1
+        && matches[0].0 > 0
+        && input.chars().count() * 2 >= matches[0].1.name.chars().count()
+    {
+        return Ok(matches[0].1.name.clone());
+    }
+
+    let candidates: Vec<&str> = if matches.is_empty() {
+        milestones.iter().take(5).map(|m| m.name.as_str()).collect()
+    } else {
+        matches
+            .iter()
+            .take(5)
+            .map(|(_, m)| m.name.as_str())
+            .collect()
+    };
+    if mode.is_json() {
+        for name in &candidates {
+            println!("{}", json!({"name": name, "project": project}));
+        }
+    }
+    let suffix = if candidates.is_empty() || mode.is_json() {
+        String::new()
+    } else {
+        format!("; candidates: {}", candidates.join(", "))
+    };
+    Err(CliError::not_found(format!("not found: {input}{suffix}")))
+}
+
 #[derive(clap::Args)]
 pub struct MilestoneArgs {
     #[command(subcommand)]
@@ -223,6 +275,7 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             table,
         } => {
             let project_key = crate::scope::required_project(project)?;
+            let mode = crate::output::mode(json, table);
             let (m, count) = apply_edit(
                 db,
                 project_key.clone(),
@@ -233,9 +286,9 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
                 status,
                 target,
                 clear_target,
+                mode,
             )
             .await?;
-            let mode = crate::output::mode(json, table);
             if mode.is_json() {
                 let v = milestone_json(&m, &project_key, count, Detail::Echo);
                 println!("{}", serde_json::to_string(&v).unwrap());
@@ -277,6 +330,7 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
                 Some("cancelled".to_string()),
                 None,
                 false,
+                Mode::Table,
             )
             .await?;
             println!(
@@ -576,10 +630,10 @@ async fn show(
     mode: Mode,
     explicit_json: bool,
 ) -> CliResult<()> {
-    let resolved = name;
     let project_key = crate::scope::required_project(project)?;
 
     let store = store_open::open(db).await?;
+    let resolved = resolve_name(&store, &project_key, &name, mode).await?;
     let get_key = project_key.clone();
     let get_name = resolved.clone();
     let m = store
@@ -643,6 +697,7 @@ async fn apply_edit(
     status: Option<String>,
     target: Option<String>,
     clear_target: bool,
+    mode: Mode,
 ) -> CliResult<(Milestone, i64)> {
     let (desc_content, desc_set) = resolve_description(description, description_file)?;
 
@@ -664,12 +719,12 @@ async fn apply_edit(
     }
 
     let store = store_open::open(db).await?;
+    let name = resolve_name(&store, &project_key, &name, mode).await?;
     let call_key = project_key.clone();
     let m = store
         .call(move |conn| {
-            let cur =
-                milestones::get(conn, &call_key, &name)?
-                    .ok_or_else(|| cliban_core::Error::NamedNotFound(name.clone()))?;
+            let cur = milestones::get(conn, &call_key, &name)?
+                .ok_or_else(|| cliban_core::Error::NamedNotFound(name.clone()))?;
             milestones::update(conn, &cur, params)
         })
         .await?;
@@ -711,6 +766,7 @@ async fn log(
     let msg = crate::stdin_input::log_message(message, message_file)?;
 
     let store = store_open::open(db).await?;
+    let name = resolve_name(&store, &project_key, &name, mode).await?;
     let now = Utc::now();
     let (call_key, call_name, entry) = (project_key.clone(), name.clone(), msg.clone());
     store
@@ -759,6 +815,7 @@ async fn waves(
 ) -> CliResult<()> {
     let project = crate::scope::required_project(project)?;
     let store = store_open::open(db).await?;
+    let name = resolve_name(&store, &project, &name, mode).await?;
     let w = store
         .call(move |conn| milestones::waves(conn, &project, &name))
         .await?;
