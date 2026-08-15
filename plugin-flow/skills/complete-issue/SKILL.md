@@ -41,15 +41,12 @@ confirm it before execution begins.
 ## Work
 
 Inspect the installed skills and apply the implementation, debugging, language,
-and review disciplines relevant to this ticket.
-
-Every API turn re-reads the whole conversation, so cost grows with the square
-of your turn count — tool-call economy is the cheapest optimization there is.
-Batch independent tool calls in one message, chain sequential shell steps into
-one Bash call (`cargo build && cargo test`, not two turns), and don't re-read
-files or re-run checks a prior turn already settled. Keep this workflow porous: it
-defines lifecycle invariants, not how to program. Commits are the durable work
-record; choose their cadence. Log only discoveries, dead ends, scope changes,
+and review disciplines relevant to this ticket. Every API turn re-reads the
+whole conversation, so cost grows with the square of your turn count: batch
+independent tool calls in one message, chain sequential shell steps into one
+Bash call, and don't re-read files a prior turn settled. Keep this workflow
+porous: it defines lifecycle invariants, not how to program. Commits are the
+durable work record; choose their cadence. Log only discoveries, dead ends, scope changes,
 and decisions. Amend the Spec when evidence disproves it. Promote discovered
 scope instead of absorbing it.
 
