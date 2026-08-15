@@ -69,7 +69,7 @@ Then resolve the original ticket — either it becomes the milestone's first sli
 
 ## 4. Draft the slices, then quiz
 
-Cut **tracer bullets**: each a narrow but *complete* path through every layer it touches, demoable on its own, sized to one fresh context. Prefactoring first — make the change easy, then make the easy change. Give each its blocking edges.
+Cut **tracer bullets**: each a narrow but *complete* path through every layer it touches, demoable on its own, sized to one fresh context. Sizing is also the biggest cost lever: an executor's per-turn cost grows with its accumulated conversation, so a ticket needing ~400 tool calls costs roughly 4× two tickets needing ~200 each — aim for slices an agent can land in ~100–150 tool calls. Prefactoring first — make the change easy, then make the easy change. Give each its blocking edges.
 
 **Wide refactors are the exception.** A mechanical change whose blast radius fans across the codebase can't land green as a tracer bullet. Sequence it **expand → migrate → contract**: add the new form beside the old, migrate call sites in batches sized by blast radius (one ticket each, blocked by the expand, green throughout because the old form still exists), then delete the old form in a ticket blocked by every batch.
 

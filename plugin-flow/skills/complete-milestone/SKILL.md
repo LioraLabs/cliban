@@ -64,7 +64,7 @@ Start each ticket **at wave time**, off the current milestone tip, never all up 
 cliban-flow ticket start <KEY>
 ```
 
-The command prints the ticket worktree path. Dispatch one agent per ticket there, parallel within a wave, as **`general-purpose`** — it has to spawn its own implementer and reviewer subagents, which tool-restricted types (`Explore`, `Plan`) cannot do.
+The command prints the ticket worktree path. Dispatch one agent per ticket there, parallel within a wave, as **`general-purpose`** — it has to spawn its own implementer and reviewer subagents, which tool-restricted types (`Explore`, `Plan`) cannot do. When the harness supports a per-dispatch model override, dispatch ticket agents on its mid-tier coding model (Claude Code: `model: sonnet`) — ticket execution is the dominant token cost and doesn't need the orchestrator's tier; planning and pass-2 review verdicts stay on the session model.
 Give each dispatch the task name derived from its ticket key by lowercasing and
 replacing `-` with `_` (`CLI-95` becomes `cli_95`). Keep the returned agent ID;
 liveness checks address that ID, not an agent type.
