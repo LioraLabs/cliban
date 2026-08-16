@@ -43,17 +43,19 @@ Don't derive the partition by hand — the CLI computes it from the blocking gra
 
 ```bash
 cliban milestone waves --project <KEY> "<milestone name>" --json
-# {"waves":[["PROJ-5"],["PROJ-6","PROJ-8"],["PROJ-7"]], "done":[…], "external_blocked":[…]}
+# {"waves":[["PROJ-5"],["PROJ-6","PROJ-8"],["PROJ-7"]], "chains":[…],
+#  "collisions":[{"keys":["PROJ-6","PROJ-8"],"path":"src/router.rs"}], …}
 ```
 
 `waves[0]` is dispatchable now; wave N is safe once 1..N-1 have merged. Re-run after each integration rather than tracking readiness yourself.
 
 `chains` never schedule; they staff. Walk a chain with one implementer, in the
 order printed, starting each ticket only at its wave time from the current
-milestone tip. A chain is an author-approved `related_to` group or a linear run
-of blocking edges, and the run is the case that pays: its tickets are
-serialised anyway and sit on one surface, so dispatching each one cold buys no
-parallelism and re-learns the same code every wave. Reuse context, never ticket
+milestone tip. A chain is an author-approved `related_to` group, a linear run
+of blocking edges, or same-wave tickets predicted to touch one file. The run is
+the case that pays: its tickets are serialised anyway and sit on one surface,
+so dispatching each one cold buys no parallelism and re-learns the same code
+every wave. Reuse context, never ticket
 worktrees or branches. Split a chain only when its carrier grows too expensive
 to keep (see the sweep) or the tickets prove unrelated.
 
@@ -61,15 +63,22 @@ to keep (see the sweep) or the tickets prove unrelated.
 - **Non-empty `external_blocked`** is a stop-and-ask: those issues are gated by work *outside* the milestone, and no amount of wave-finishing frees them.
 
 The blocking graph answers what *may* run concurrently, not what *should*.
-Before dispatching a wave, predict collisions: read each ticket's Spec for the
-surface it names, and check the repo's history for files those surfaces change
-together (`git log --format= --name-only -- <paths>`). Tickets converging on a
-shared file are **serialized** — chained onto one implementer in dependency
-order — not dispatched in parallel; if the overlap spans most of the milestone,
-stop and re-slice with `scope-milestone` instead. Name any surviving overlap in
-each brief. The evidence for the cost: one wave partitioned along a language
-boundary went 8/8 clean; a sibling wave with no blocking edges and two shared
-files went 3/3 rejected at triple exploration and review cost.
+`collisions` answers the rest wherever tickets carry a `## Files` prediction:
+each entry names one path that several tickets in a single wave expect to
+touch, and those tickets are already joined into a chain, so the staffing rule
+above serializes them for you. Read the entries anyway. A collision spanning
+most of a wave is a slicing problem to take back to `scope-milestone`, not a
+staffing one.
+
+A prediction is a prediction, so keep the older check as its cross-check and as
+the fallback for tickets carrying no `## Files`: read each ticket's Spec for the
+surface it names, and ask the repo's history which files those surfaces change
+together (`git log --format= --name-only -- <paths>`). Name any surviving
+overlap in each brief. The evidence for the cost: one wave partitioned along a
+language boundary went 8/8 clean; a sibling wave with no blocking edges and two
+shared files went 3/3 rejected at triple exploration and review cost. When an
+executor finds its prediction wrong it amends the section, and you relay that
+to running siblings exactly as `--invariants` relays anything else.
 
 Announce the plan: `Waves: [PROJ-5] -> [PROJ-6, PROJ-8] -> [PROJ-7]`.
 

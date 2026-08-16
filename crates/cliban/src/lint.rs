@@ -401,4 +401,22 @@ mod tests {
             "{f:?}"
         );
     }
+
+    #[test]
+    fn a_malformed_files_entry_is_an_error_not_a_warning() {
+        // Silently dropped, it removes the ticket from collision detection.
+        let d = "## Spec\n\ns\n\n## Files\n\n- M good/path.rs\n- X bad/status.rs\n";
+        let f = lint_description(d);
+        let bad: Vec<_> = f.iter().filter(|f| f.message.contains("## Files")).collect();
+        assert_eq!(bad.len(), 1, "{f:?}");
+        assert_eq!(bad[0].severity, Severity::Error, "{f:?}");
+        assert!(bad[0].message.contains("X bad/status.rs"), "{f:?}");
+    }
+
+    #[test]
+    fn a_well_formed_files_section_with_prose_lints_clean() {
+        let d = "## Spec\n\ns\n\n## Files\n\nPredicted, amended when wrong.\n\n\
+                 - A new/file.rs\n- M old/file.rs\n- D gone/file.rs\n";
+        assert!(lint_description(d).is_empty(), "{:?}", lint_description(d));
+    }
 }
