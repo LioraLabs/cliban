@@ -165,6 +165,34 @@ fn waves_drop_externally_blocked_members_from_related_groups() {
     );
 }
 
+// The `related_to` mirror of the transitive case: the gated member is two hops
+// from the outside blocker, so it never enters the raw single-hop `external`
+// set and only the fixpoint excludes it. A filter reading `external` instead of
+// `external_blocked` keeps the pairing and every other test still passes.
+#[test]
+fn waves_drop_transitively_gated_members_from_related_groups() {
+    let db = std::env::temp_dir().join(format!("cliban_waves_reltrans_{}.db", std::process::id()));
+    let db = db.to_str().unwrap();
+    run(db, &["project", "add", "CLI", "Cliban"]);
+    run(db, &["milestone", "add", "M", "-p", "CLI"]);
+    for title in ["a", "gated", "gate"] {
+        run(db, &["issue", "add", title, "-p", "CLI", "-m", "M"]);
+    }
+    run(db, &["issue", "add", "outsider", "-p", "CLI"]);
+    run(db, &["issue", "edit", "CLI-1", "--related-to", "CLI-2"]);
+    run(db, &["issue", "edit", "CLI-2", "--blocked-by", "CLI-3"]);
+    run(db, &["issue", "edit", "CLI-3", "--blocked-by", "CLI-4"]);
+
+    let raw = run(db, &["milestone", "waves", "M", "-p", "CLI", "--json"]);
+    let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(json["chains"], serde_json::json!([]), "{raw}");
+    assert_eq!(
+        json["external_blocked"],
+        serde_json::json!(["CLI-2", "CLI-3"]),
+        "{raw}"
+    );
+}
+
 // The existing external-gating test puts the gate on a node adjacent to both
 // excluded neighbors, which a shallow "check direct external membership on
 // both sides" fix (no fixpoint) would also pass. This one puts the gate on
