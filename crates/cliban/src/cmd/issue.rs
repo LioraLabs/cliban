@@ -1002,7 +1002,7 @@ async fn resolve_refs(store: &Store, issue: &Issue) -> CliResult<(String, String
     Ok(pair)
 }
 
-/// Map a `--section` value to its H2 anchor. The four contract sections have
+/// Map a `--section` value to its H2 anchor. The five contract sections have
 /// case-insensitive short aliases; anything else is a **verbatim** H2 anchor —
 /// `--section "Decisions so far"` targets `## Decisions so far`, exact match.
 fn resolve_section(s: &str) -> Result<String, CliError> {

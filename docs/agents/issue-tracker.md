@@ -18,6 +18,7 @@ the workflow contract that governs where each artifact lands is the
 | Implementation plan | issue `## Plan` — proportional and optionally structured for `lint`/`tick`/`promote` |
 | Progress, findings, dead ends | issue `## Activity Log` via `cliban issue log` |
 | Durable reusable lessons | project `## Notes` — search first: `cliban project search CLI "<terms>" --json` |
+| Predicted changeset | issue `## Files` — one `A`/`M`/`D` entry per path, read by `milestone waves` for collision detection |
 | ADRs, CONTEXT.md, domain docs | this repo, plaintext, git-tracked — never cliban |
 
 Implementation plans are deliberately not git-tracked. ADRs deliberately are.
