@@ -46,6 +46,17 @@ a chain when useful; reuse context, never ticket worktrees or branches.
 - **A cycle exits 2** naming the issues — fix the board before orchestrating.
 - **Non-empty `external_blocked`** is a stop-and-ask: those issues are gated by work *outside* the milestone, and no amount of wave-finishing frees them.
 
+The blocking graph answers what *may* run concurrently, not what *should*.
+Before dispatching a wave, predict collisions: read each ticket's Spec for the
+surface it names, and check the repo's history for files those surfaces change
+together (`git log --format= --name-only -- <paths>`). Tickets converging on a
+shared file are **serialized** — chained onto one implementer in dependency
+order — not dispatched in parallel; if the overlap spans most of the milestone,
+stop and re-slice with `scope-milestone` instead. Name any surviving overlap in
+each brief. The evidence for the cost: one wave partitioned along a language
+boundary went 8/8 clean; a sibling wave with no blocking edges and two shared
+files went 3/3 rejected at triple exploration and review cost.
+
 Announce the plan: `Waves: [PROJ-5] -> [PROJ-6, PROJ-8] -> [PROJ-7]`.
 
 ## 2. Start the milestone

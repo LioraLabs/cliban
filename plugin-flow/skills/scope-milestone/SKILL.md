@@ -71,6 +71,14 @@ Then resolve the original ticket — either it becomes the milestone's first sli
 
 Cut **tracer bullets**: each a narrow but *complete* path through every layer it touches, demoable on its own, sized to one fresh context. Sizing is also the biggest cost lever: an executor's per-turn cost grows with its accumulated conversation, so a ticket needing ~400 tool calls costs roughly 4× two tickets needing ~200 each — aim for slices an agent can land in ~100–150 tool calls. Prefactoring first — make the change easy, then make the easy change. Give each its blocking edges.
 
+**Partition along surface boundaries.** Sibling slices that will touch the
+same files collide at merge time in ways git does not mark — duplicated
+helpers, incompatible signature changes — so predicted overlap between
+unblocked siblings is a slicing smell. Two signals are free: the surface each
+draft names, and the repo's own history of which files change together
+(`git log --format= --name-only`). Overlapping slices merge, re-slice along
+the boundary, or take an explicit blocking edge so they never share a wave.
+
 **Wide refactors are the exception.** A mechanical change whose blast radius fans across the codebase can't land green as a tracer bullet. Sequence it **expand → migrate → contract**: add the new form beside the old, migrate call sites in batches sized by blast radius (one ticket each, blocked by the expand, green throughout because the old form still exists), then delete the old form in a ticket blocked by every batch.
 
 Present the breakdown numbered — title, blocked-by, what it delivers end to end. Ask whether the granularity is right, whether each edge is real or just a habit of ordering, and whether anything should merge or split. **Publish nothing before the user approves.**
