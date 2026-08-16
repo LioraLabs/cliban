@@ -75,7 +75,7 @@ Start each ticket **at wave time**, off the current milestone tip, never all up 
 cliban-flow ticket start <KEY>
 ```
 
-The command prints the ticket worktree path. Dispatch one agent per ticket there, parallel within a wave, as **`general-purpose`** — it has to spawn its own implementer and reviewer subagents, which tool-restricted types (`Explore`, `Plan`) cannot do. When the harness supports a per-dispatch model override, dispatch ticket agents on its mid-tier coding model (Claude Code: `model: sonnet`) — ticket execution is the dominant token cost and doesn't need the orchestrator's tier; planning and pass-2 review verdicts stay on the session model.
+The command prints the ticket worktree path. Dispatch one agent per ticket there, parallel within a wave, as **`general-purpose`** — it has to spawn its own implementer and reviewer subagents, which tool-restricted types (`Explore`, `Plan`) cannot do. When the harness supports a per-dispatch model override, dispatch ticket agents on its mid-tier coding model (Claude Code: `model: sonnet`) — ticket execution is the dominant token cost and doesn't need the orchestrator's tier. Reviewers and re-reviewers stay on the session model, deliberately: a review that misses a destructive defect costs more than any model delta.
 Give each dispatch the task name derived from its ticket key by lowercasing and
 replacing `-` with `_` (`CLI-95` becomes `cli_95`). Keep the returned agent ID;
 liveness checks address that ID, not an agent type.
@@ -94,6 +94,15 @@ one-line evidence, and merge risk. Either side may request review; the
 orchestrator makes the final decision at every confidence level. If it skips,
 record `review waived by orchestrator: <reason>` on the ticket so ready can
 proceed. Confidence informs but never binds this decision.
+
+When it reviews instead, dispatch with the template in
+[review.md](../complete-issue/references/review.md) — never an improvised
+brief — and have the verdict logged on the ticket. `ticket ready` greps the
+Activity Log for either the waiver line above or one line carrying `review`,
+`SPEC: ACCEPT`, and `QUALITY: pass` with no `Critical` or `Important` on it
+(`pass-2 review verdict: SPEC: ACCEPT, QUALITY: pass` is the canonical shape).
+The template's verdict satisfies the gate by construction; a reworded one is
+refused with the ticket genuinely reviewed.
 
 ## 4. Sweep running work
 
