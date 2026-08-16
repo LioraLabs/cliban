@@ -138,6 +138,62 @@ fn waves_emit_a_run_in_dependency_order_not_key_order() {
     );
 }
 
+// `related_to` groups are gated by the same `schedulable` predicate as
+// inferred runs: a member that is externally blocked drops out of the group,
+// not just out of blocking-run chains. Here the group shrinks to one member
+// and a one-element group is not a chain.
+#[test]
+fn waves_drop_externally_blocked_members_from_related_groups() {
+    let db = std::env::temp_dir().join(format!("cliban_waves_relext_{}.db", std::process::id()));
+    let db = db.to_str().unwrap();
+    run(db, &["project", "add", "CLI", "Cliban"]);
+    run(db, &["milestone", "add", "M", "-p", "CLI"]);
+    for title in ["a", "b"] {
+        run(db, &["issue", "add", title, "-p", "CLI", "-m", "M"]);
+    }
+    run(db, &["issue", "add", "outsider", "-p", "CLI"]);
+    run(db, &["issue", "edit", "CLI-1", "--related-to", "CLI-2"]);
+    run(db, &["issue", "edit", "CLI-1", "--blocked-by", "CLI-3"]);
+
+    let raw = run(db, &["milestone", "waves", "M", "-p", "CLI", "--json"]);
+    let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(json["chains"], serde_json::json!([]), "{raw}");
+    assert_eq!(
+        json["external_blocked"],
+        serde_json::json!(["CLI-1"]),
+        "{raw}"
+    );
+}
+
+// The existing external-gating test puts the gate on a node adjacent to both
+// excluded neighbors, which a shallow "check direct external membership on
+// both sides" fix (no fixpoint) would also pass. This one puts the gate on
+// the HEAD of a three-node run, so the tail is only transitively
+// unschedulable and only a real fixpoint over `external_blocked` catches it.
+#[test]
+fn waves_keep_transitively_gated_tail_out_of_chains() {
+    let db = std::env::temp_dir().join(format!("cliban_waves_transext_{}.db", std::process::id()));
+    let db = db.to_str().unwrap();
+    run(db, &["project", "add", "CLI", "Cliban"]);
+    run(db, &["milestone", "add", "M", "-p", "CLI"]);
+    for title in ["head", "mid", "tail"] {
+        run(db, &["issue", "add", title, "-p", "CLI", "-m", "M"]);
+    }
+    run(db, &["issue", "add", "outsider", "-p", "CLI"]);
+    run(db, &["issue", "edit", "CLI-2", "--blocked-by", "CLI-1"]);
+    run(db, &["issue", "edit", "CLI-3", "--blocked-by", "CLI-2"]);
+    run(db, &["issue", "edit", "CLI-1", "--blocked-by", "CLI-4"]);
+
+    let raw = run(db, &["milestone", "waves", "M", "-p", "CLI", "--json"]);
+    let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(json["chains"], serde_json::json!([]), "{raw}");
+    assert_eq!(
+        json["external_blocked"],
+        serde_json::json!(["CLI-1", "CLI-2", "CLI-3"]),
+        "{raw}"
+    );
+}
+
 // An author-approved `related_to` group outranks an inferred run, so the run
 // splits around it instead of claiming its members twice.
 #[test]
