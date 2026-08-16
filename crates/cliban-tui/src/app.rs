@@ -23,7 +23,7 @@ pub struct Card {
     pub labels: Vec<String>,
 }
 
-/// cliban's 5 kanban columns (NOT loom's agent states).
+/// cliban's 5 kanban columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ColumnId {
     Backlog,
@@ -72,7 +72,7 @@ impl ColumnId {
     }
 }
 
-/// Scope chips (loom §18): project key + milestone name. Invariant: the
+/// Scope chips: project key + milestone name. Invariant: the
 /// milestone always belongs to the scoped project, so it is None whenever
 /// project is None.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

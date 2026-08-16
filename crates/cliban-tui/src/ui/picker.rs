@@ -179,7 +179,7 @@ mod tests {
     fn picker_renders_title_query_items_and_footer() {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
-        let items = vec!["LOOM  Loom".into(), "COOK  Cook".into()];
+        let items = vec!["BOOK  Book".into(), "COOK  Cook".into()];
         terminal
             .draw(|f| {
                 draw(
@@ -187,7 +187,7 @@ mod tests {
                     Rect::new(0, 0, 80, 24),
                     PickerView {
                         title: "Pick project",
-                        query: "lo",
+                        query: "bo",
                         items: &items,
                         cursor: 0,
                     },
@@ -196,8 +196,8 @@ mod tests {
             .unwrap();
         let s = dump(&terminal);
         assert!(s.contains("Pick project"), "title missing");
-        assert!(s.contains("> lo"), "query line missing");
-        assert!(s.contains("LOOM"), "first item missing");
+        assert!(s.contains("> bo"), "query line missing");
+        assert!(s.contains("BOOK"), "first item missing");
         assert!(s.contains("COOK"), "second item missing");
         assert!(s.contains("Enter"), "footer missing");
         assert!(s.contains("Esc"), "footer missing");
@@ -272,9 +272,9 @@ mod tests {
 
     #[test]
     fn fuzzy_indices_substring_case_insensitive() {
-        let items: Vec<String> = vec!["LOOM  Loom".into(), "COOK  Cook".into()];
-        assert_eq!(fuzzy_indices(&items, "loom"), vec![0]);
-        assert_eq!(fuzzy_indices(&items, "LOOM"), vec![0]);
+        let items: Vec<String> = vec!["BOOK  Book".into(), "COOK  Cook".into()];
+        assert_eq!(fuzzy_indices(&items, "book"), vec![0]);
+        assert_eq!(fuzzy_indices(&items, "BOOK"), vec![0]);
         assert_eq!(fuzzy_indices(&items, "oo"), vec![0, 1]);
         assert_eq!(fuzzy_indices(&items, "zzz"), Vec::<usize>::new());
     }

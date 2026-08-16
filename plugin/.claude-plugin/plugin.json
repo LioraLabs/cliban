@@ -1,7 +1,7 @@
 {
   "name": "cliban",
   "description": "Drive the cliban kanban board from the CLI: issues, projects, milestones, labels, progressive project memory, the Linear import/push bridge, and per-repo setup that binds a repo to its board. Live board state is injected into every session. Workflow skills ship separately as cliban-flow",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "author": {
     "name": "Liora Labs"
   },

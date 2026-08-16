@@ -1,4 +1,4 @@
-//! Port of `backend/lib/loom/labels.ex` + `Loom.Schema.Label`.
+//! Labels: per-project tags, attached to issues many-to-many.
 
 use rusqlite::{params, Connection, OptionalExtension};
 

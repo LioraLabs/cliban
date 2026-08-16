@@ -2,7 +2,7 @@
 //!
 //! Ecto stores `:utc_datetime_usec` columns as ISO8601 strings with
 //! microsecond precision and a `Z` suffix, e.g. `2026-05-23T23:39:36.809441Z`
-//! (verified against the live `loom.db`). `:date` columns store as
+//! (verified against a live database). `:date` columns store as
 //! `YYYY-MM-DD`. We reproduce these exactly so a Rust-written row is
 //! byte-indistinguishable from a BEAM-written one and round-trips through the
 //! same DB.

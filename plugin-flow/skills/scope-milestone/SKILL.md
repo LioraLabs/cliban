@@ -45,11 +45,19 @@ one ticket ends and the next begins; a question that cannot change the
 breakdown belongs to the executor — note it and move on. Done when the
 frontier is empty.
 
+**A frontier that will not empty in one sitting becomes tickets.** A decision
+needing research, a spike, or a night's thought is work; publish each as a
+`decision`-labeled issue in the container with real `--blocked-by` edges to the
+decisions it waits on, so `issue ls --ready` is the live frontier. Resolving one
+appends its answer to the container's `## Spec` and closes it. Slicing resumes
+when none are open — assumed answers in prose are how a milestone gets sliced
+around a decision nobody made.
+
 ## 3. Re-test the shape
 
 `explore-feature` guessed the container's shape; re-test it with the answers
 in. A milestone, as expected → fill it. A ticket still one slice → step 5's
-ticket path. A ticket that outgrew one context window → promote it, saying
+ticket path. A ticket carrying more than one deliverable → promote it, saying
 why:
 
 ```bash
@@ -65,10 +73,9 @@ now lives elsewhere, where `issue ls --ready` would offer it to an executor.
 ## 4. Draft the slices, then quiz
 
 Cut **tracer bullets**: each a narrow but complete path through every layer it
-touches, demoable alone, sized to ~100–150 tool calls of execution — sizing is
-the biggest cost lever, since an executor's per-turn price grows with its
-accumulated context. Prefactor first — make the change easy, then make the
-easy change. Give each slice its blocking edges.
+touches, demoable alone, and sized so its plan is a handful of tasks — a slice
+whose plan does not fit that is two slices. Prefactor first — make the change
+easy, then make the easy change. Give each slice its blocking edges.
 
 **Partition along surface boundaries.** Sibling slices touching the same files
 collide at merge in ways git does not mark. Two free signals: the surface each
@@ -83,9 +90,10 @@ each, blocked by the expand, green throughout), then delete the old form in a
 ticket blocked by every batch.
 
 Present the breakdown numbered — title, blocked-by, what it delivers end to
-end. Ask whether the granularity is right and whether each edge is real. For
-small tickets with shared context but no edge, suggest a `related_to` chain
-for implementer affinity. **Publish nothing before the user approves.**
+end. Ask whether the granularity is right and whether each edge is real:
+blocking edges are the only thing that orders execution, so a dependency you
+leave in prose is a dependency nobody schedules around. **Publish nothing before
+the user approves.**
 
 ## 5. Publish
 
@@ -130,8 +138,9 @@ Either path owes the contract:
 - **Edges are relations, never prose** — a `Blocked by:` line in a description
   is invisible to `issue ls --ready` and `milestone waves`.
 - **`## Files` carries the predicted changeset**, one `A`/`M`/`D` entry per
-  path; `milestone waves` intersects these within a wave to catch collisions
-  at scope time, and the executor treats it as its leash on exploration.
+  path; the executor treats it as its leash on exploration, and
+  `milestone waves` intersects these within a wave to report collisions the
+  orchestrator briefs its agents with — reported, never scheduled on.
   Predict, don't guarantee — the executor amends it.
   `issue lint` rejects a malformed entry.
 - **No file paths or code in the prose** outside `## Files`, except a snippet

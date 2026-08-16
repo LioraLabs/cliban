@@ -3,8 +3,8 @@
 //! writes with `cliban issue log` (which lives in the description's
 //! `## Activity Log` section and is owned by the CLI's `descmd`).
 //!
-//! Originally a port of `backend/lib/loom/activity_log.ex`, whose `append`
-//! mirrored the table back into the description on every write. cliban does
+//! An earlier design mirrored the table back into the description on every
+//! write. cliban does
 //! not: two writers rewriting one markdown section is a clobber waiting to
 //! happen, so the two sources are merged at read time by `cliban activity`
 //! and `cliban issue show --section activity`.

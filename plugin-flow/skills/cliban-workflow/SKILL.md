@@ -21,7 +21,9 @@ once per session before the first board action. It binds:
 | Project key | repo basename matched case-insensitively against `project ls`; ask on miss |
 | Key placement | issue keys live in dispatcher branches and commits — never in source, comments, tests, or docs |
 | Workspace | isolated `.worktrees/<git_branch_name>` worktree |
-| Reviewer | general-purpose agent with `complete-issue`'s review brief |
+| Implementer | general-purpose agent on the mid-tier coding model — Claude Code: `model: sonnet` — one plan task per dispatch |
+| Verifier | general-purpose agent on the same mid-tier model, mechanical only: re-runs the gate, reads the range against the brief |
+| Reviewer | general-purpose agent on the session model with `complete-issue`'s review brief |
 
 Wiring a new repo is `setup-cliban`'s job; don't improvise a binding. If
 `cliban` is missing from `$PATH`, skip all board actions silently this session.
@@ -72,13 +74,20 @@ describes — a plan or spec belongs in its issue, not in a `docs/plans/` file.
 
 ## Plans
 
-Proportional to the work: a sentence for small work; ordered `### Task N:`
-headings with column-zero checkboxes for large. Freeform is valid;
+A plan is a set of dispatch briefs plus the seams between them: the planner
+writes it, one implementer carries out one task, a verifier gates that task, and
+judgment is bought only where the plan marked a seam. Whoever runs
+`complete-issue` is the planner and stays on the session model; implementers and
+verifiers are mid-tier. A planner writes only what it can name completely first
+— a tiny ticket, one named review fix — and dispatches everything else.
+
+Proportional to the work: a sentence and one task for small work; ordered
+`### Task N:` headings with column-zero checkboxes for large. Freeform is valid;
 `lint`/`tick`/`promote` are tools, not lifecycle gates. Name observable
-outcomes, edge cases, and the executable evidence that will prove each claim.
-Non-trivial or risky work gets one fresh-context review over the complete
-ticket diff once by default before ready; add a mid-ticket checkpoint only
-where a wrong foundation compounds expensively.
+outcomes, edge cases, the seam each task's tests observe, and the executable
+evidence that will prove each claim. The end of the ticket is always a review
+seam; a mid-ticket seam is worth its price only where a wrong foundation
+compounds expensively.
 
 ## The stages
 

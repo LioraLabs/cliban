@@ -547,7 +547,7 @@ fn plan_ticks_and_promotions_are_recorded_on_both_issues() {
 #[test]
 fn filters_narrow_the_feed() {
     let db = seeded();
-    ok(&db, &["project", "add", "LM", "Loom"]);
+    ok(&db, &["project", "add", "LM", "Lumen"]);
     ok(&db, &["issue", "add", "other", "--project", "LM"]);
 
     let cli_only = events(&db, &["--project", "CLI"]);

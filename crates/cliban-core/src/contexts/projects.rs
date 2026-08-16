@@ -1,4 +1,4 @@
-//! Port of `backend/lib/loom/projects.ex` + `Loom.Schema.Project` changesets.
+//! Projects: the top-level container every issue and milestone hangs from.
 //!
 //! All functions take `&Connection` and run on the store's writer thread.
 

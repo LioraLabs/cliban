@@ -115,7 +115,7 @@ pub fn ensure_table(conn: &Connection) -> Result<()> {
     }
     // `origin` arrived after `remote_links` first shipped, so a table created
     // by an older build — or by a sibling fork's vendored copy of the DDL —
-    // exists without the column. Same loom-lockstep rules as the table itself:
+    // exists without the column. Same no-version-bump rule as the table itself:
     // no `SCHEMA_VERSION` bump, just an additive upgrade applied idempotently
     // before every sync command. SQLite has no `ADD COLUMN IF NOT EXISTS`,
     // hence the pragma check. The DEFAULT backfills existing rows as

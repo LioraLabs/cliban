@@ -1,30 +1,34 @@
 #!/usr/bin/env bash
-# the workflow skills use the dispatcher as their only git protocol.
-# sanctioned teardown stays on that same surface.
+# Structural facts about the skills, not their wording.
+#
+# This suite used to grep the skills for sentences. That pinned phrasing, not
+# behavior: every rewrite failed it and no defect ever did. What survives here
+# is what a grep of prose cannot fake — the installed plugin layout resolves its
+# dispatcher, every dispatcher command the skills tell an agent to run exists,
+# the orchestrator teaches the dispatcher instead of raw git, and the shipping
+# version says what it changed. Skill *behavior* is tested by the scenario
+# suite under plugin-tests/, against real agents on throwaway boards.
 set -uo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-workflow=$ROOT/plugin-flow/skills/cliban-workflow/SKILL.md
-issue=$ROOT/plugin-flow/skills/complete-issue/SKILL.md
-milestone=$ROOT/plugin-flow/skills/complete-milestone/SKILL.md
-recovery=$ROOT/plugin-flow/skills/recover-milestone/SKILL.md
+SKILLS=$ROOT/plugin-flow/skills
+workflow=$SKILLS/cliban-workflow/SKILL.md
+milestone=$SKILLS/complete-milestone/SKILL.md
 manifest=$ROOT/plugin-flow/.claude-plugin/plugin.json
 failed=0
 
 has() { grep -Fq -- "$2" "$1" || { printf 'missing %s in %s\n' "$2" "$1" >&2; failed=1; }; }
 lacks() { ! grep -Fq -- "$2" "$1" || { printf 'legacy %s in %s\n' "$2" "$1" >&2; failed=1; }; }
 
-# releases advertise the recovery protocol they install. The version is read
-# from the manifest rather than pinned here: a literal goes stale at every bump,
-# which is how 0.8.0 shipped with no changelog entry at all. What must hold is
-# that whatever version is shipping says what it changed.
+# Releases advertise what they install. The version is read from the manifest
+# rather than pinned here: a literal goes stale at every bump, which is how
+# 0.8.0 shipped with no changelog entry at all.
 version=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$manifest" | head -1)
 [ -n "$version" ] || { printf 'no version in %s\n' "$manifest" >&2; failed=1; }
-has "$ROOT/plugin-flow/CHANGELOG.md" "## $version"
-has "$manifest" 'recover interrupted milestones'
-has "$ROOT/plugin-flow/CHANGELOG.md" 'token cost an explicit lever'
+grep -Eq "^## ($version|Unreleased)" "$ROOT/plugin-flow/CHANGELOG.md" ||
+    { printf 'no changelog entry for %s or Unreleased\n' "$version" >&2; failed=1; }
 
-# the installed skill resolves its sibling dispatcher outside cliban.
+# The installed skill resolves its sibling dispatcher outside the cliban repo.
 has "$workflow" '../../scripts/cliban-flow'
 external=$(mktemp -d)
 mkdir -p "$external/marketplace/.claude-plugin" "$external/adopter"
@@ -43,49 +47,24 @@ installed_workflow=$(find "$external/config/plugins/cache/cli96/cliban-flow" \
 [ -n "$installed_workflow" ] || failed=1
 dispatcher=$(cd -- "$(dirname -- "$installed_workflow")/../.." && pwd)/scripts/cliban-flow
 help=$(cd -- "$external/adopter" && "$dispatcher" help) || failed=1
-case $help in *'milestone start'*) ;; *) failed=1 ;; esac
 rm -rf -- "$external"
-for command in 'milestone start' 'milestone finish' 'milestone abandon' 'ticket start' 'ticket status' 'ticket sync' 'ticket ready' 'ticket integrate' 'ticket abandon'; do
-    has "$workflow" "\`$command\`"
+case $help in *'milestone start'*) ;; *) failed=1 ;; esac
+
+# Every `cliban-flow <noun> <verb>` a skill tells an agent to run exists in the
+# dispatcher's own help. Derived, so adding a command to a skill without adding
+# it to the dispatcher fails here instead of at 2am inside a dispatched agent.
+while read -r noun verb; do
+    case $help in
+        *"$noun $verb"*) ;;
+        *) printf 'skills invoke "cliban-flow %s %s", which help does not list\n' \
+            "$noun" "$verb" >&2; failed=1 ;;
+    esac
+done < <(grep -rhoE 'cliban-flow (milestone|ticket) [a-z]+' "$SKILLS" |
+    sed 's/^cliban-flow //' | sort -u)
+
+# The orchestrator teaches the dispatcher, never hand-rolled git plumbing.
+for plumbing in 'git checkout' 'git merge --no-ff' 'HEAD^2' '<build the project>'; do
+    lacks "$milestone" "$plumbing"
 done
-has "$workflow" 'Ticket ready (standalone or dispatched)'
-has "$workflow" 'stop and say so'
-
-has "$issue" 'ticket sync <KEY>'
-has "$issue" 'ticket ready <KEY>'
-has "$issue" 'resolve the conflicts'
-has "$issue" 'resolution diff'
-
-# dispatcher guards replace these orchestration-time prose checks.
-lacks "$milestone" 'owns claiming, planning'
-lacks "$milestone" 'plan is fully ticked'
-lacks "$issue" 'requested reviewer verdict is still in flight'
-
-has "$milestone" 'milestone start "<milestone name>"'
-has "$milestone" 'ticket start <KEY>'
-has "$milestone" 'ticket integrate <KEY>'
-has "$milestone" 'milestone finish "<milestone name>"'
-has "$milestone" 'milestone abandon "<milestone name>"'
-has "$milestone" 'own worktree'
-has "$milestone" 'strict ancestry'
-has "$milestone" 'squash'
-lacks "$milestone" 'git checkout'
-lacks "$milestone" 'git merge --no-ff'
-lacks "$milestone" 'HEAD^2'
-lacks "$milestone" '<build the project>'
-
-# recovery interprets the read-only survey without repairing or verifying.
-has "$recovery" 'milestone status "<milestone name>"'
-for state in 'Nearly finished' Abandoned 'Silent agent' 'Interrupted merge'; do
-    has "$recovery" "$state"
-done
-for command in 'ticket status <KEY>' 'ticket sync <KEY>' 'ticket ready <KEY>' 'ticket start <KEY>'; do
-    has "$recovery" "\`$command\`"
-done
-has "$recovery" 'one worktree at a time'
-has "$workflow" 'recover-milestone'
-has "$recovery" 'Do not execute repairs'
-has "$recovery" 'Never run builds or tests during recovery'
-has "$recovery" 'ticket abandon <KEY>'
 
 exit "$failed"

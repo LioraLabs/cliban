@@ -845,7 +845,6 @@ async fn waves(
         println!(
             "{}",
             json!({
-                "chains": w.chains,
                 "collisions": w.collisions
                     .iter()
                     .map(|c| json!({"keys": c.keys, "path": c.path}))
@@ -868,16 +867,6 @@ async fn waves(
     }
     if !w.done.is_empty() {
         println!("done: {}", w.done.join(", "));
-    }
-    if !w.chains.is_empty() {
-        println!(
-            "chains: {}",
-            w.chains
-                .iter()
-                .map(|c| format!("[{}]", c.join(", ")))
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
     }
     for c in &w.collisions {
         println!("collision: {} predicted by {}", c.path, c.keys.join(", "));

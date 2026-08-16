@@ -1,7 +1,6 @@
 //! How `migrations::run` reacts to a `schema_migrations` ledger it did not
-//! write. cliban shares its default database path with sibling tools that
-//! vendor `cliban-core` (loom, for one), so the ledger routinely carries
-//! versions this build has never heard of.
+//! write — an older binary opening a database a newer one migrated, or a fork
+//! that vendors `cliban-core` against the same default database path.
 
 use cliban_core::migrations::{self, SCHEMA_VERSION};
 use rusqlite::Connection;
@@ -23,7 +22,7 @@ fn db_with_ledger(versions: &[i64]) -> Connection {
 
 #[test]
 fn a_newer_schema_is_used_as_is_rather_than_refused() {
-    // What loom leaves behind: the legacy baseline plus its own newer version.
+    // What a newer build leaves behind: the baseline plus its own version.
     let conn = db_with_ledger(&[migrations::LEGACY_SCHEMA_VERSION, SCHEMA_VERSION + 1]);
     assert!(
         !migrations::run(&conn).unwrap(),
@@ -70,46 +69,6 @@ fn has_table(conn: &Connection, name: &str) -> bool {
     )
     .unwrap()
         > 0
-}
-
-/// The version loom's vendored fork of cliban-core stamps.
-const LOOM_SCHEMA_VERSION: i64 = 20260713000003;
-
-// A constant invariant, so it is checked when this file compiles rather than
-// when the suite runs.
-//
-// loom vendors a fork of cliban-core and writes the same default database, and
-// its runner has NO escape hatch for a version it does not recognize — it
-// returns `rusqlite::Error::InvalidQuery` ("Query is not read-only") at open
-// time, for every command. A cliban release that stamps a higher version into
-// the shared ledger therefore breaks loom until its vendored copy is updated in
-// lockstep.
-//
-// Adding `remote_links` deliberately did not bump the version: the DDL is
-// additive and applied idempotently by `cliban-sync::links::ensure_table` on
-// every sync command, so no ledger entry is needed. If this stops compiling,
-// read the comment on `REMOTE_LINKS_DDL` before raising the bound.
-const _: () = assert!(
-    SCHEMA_VERSION < LOOM_SCHEMA_VERSION,
-    "cliban's schema version has overtaken loom's; loom's vendored runner will \
-     refuse the shared database at open time"
-);
-
-#[test]
-fn a_loom_written_ledger_is_used_as_is_and_not_stamped() {
-    let conn = db_with_ledger(&[migrations::LEGACY_SCHEMA_VERSION, LOOM_SCHEMA_VERSION]);
-    assert!(
-        !migrations::run(&conn).unwrap(),
-        "loom's version is ahead; use the database as it stands"
-    );
-    let stamped: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",
-            [SCHEMA_VERSION],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(stamped, 0, "must not stamp our version into loom's ledger");
 }
 
 #[test]

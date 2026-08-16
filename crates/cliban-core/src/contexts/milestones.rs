@@ -1,4 +1,5 @@
-//! Port of `backend/lib/loom/milestones.ex` + `Loom.Schema.Milestone`.
+//! Milestones: a named, optionally dated grouping of a project's issues,
+//! plus the dependency-wave computation the orchestration skills schedule on.
 
 use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -315,13 +316,9 @@ pub struct Waves {
     /// this milestone. They cannot be scheduled by finishing the milestone's
     /// own waves.
     pub external_blocked: Vec<String>,
-    /// Advisory same-implementer groups: `related_to` components (sorted),
-    /// linear runs of the intra-milestone blocking graph (in dependency order),
-    /// and same-wave tickets predicted to touch one path (sorted).
-    /// Never scheduling edges; `waves` alone decides what may start.
-    pub chains: Vec<Vec<String>>,
-    /// Why some tickets were joined: one entry per path that more than one
-    /// ticket in a single wave predicts touching, in its `## Files` section.
+    /// Advisory overlap to brief agents with, never a scheduling edge: one
+    /// entry per path that more than one ticket in a single wave predicts
+    /// touching, in its `## Files` section.
     pub collisions: Vec<Collision>,
 }
 
@@ -467,34 +464,22 @@ pub fn waves(conn: &Connection, project_key: &str, name: &str) -> Result<Waves> 
         ));
     }
 
-    // Chains staff the schedulable work, so they are derived last, over the
-    // nodes that survived: done, archived, and externally gated issues are all
-    // out. Pairing a real ticket with one this milestone can never start is
-    // advice nobody can take.
-    let schedulable = |id: &i64| {
-        nodes.get(id).is_some_and(|n| !n.done) && !external_blocked.contains(id)
-    };
-
-    let mut related: HashMap<i64, Vec<i64>> = HashMap::new();
-    {
-        let mut stmt = conn.prepare(
-            "SELECT from_issue_id, to_issue_id FROM issue_relation WHERE type = 'related_to'",
-        )?;
-        for edge in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))? {
-            let (a, b) = edge?;
-            if schedulable(&a) && schedulable(&b) {
-                related.entry(a).or_default().push(b);
-                related.entry(b).or_default().push(a);
-            }
-        }
-    }
     // Tickets in one wave are the ones that would run at the same time, so a
-    // path two of them both predict touching is the collision worth catching.
-    // git marks only some of these, and the ones it does not mark — a helper
-    // invented twice, a signature changed two ways — are the expensive ones.
-    // Joining them is an edge in the same component walk that serves
-    // `related_to`, so one implementer takes them in sequence and the second
-    // starts from a tree that already contains the first.
+    // path two of them both predict touching is the collision worth reporting:
+    // the orchestrator names the overlap in each brief and reviews the assembled
+    // wave for what git does not mark.
+    //
+    // Reporting only, and the only derived output besides the waves themselves.
+    // Two staffing hints used to live here too — `related_to` groups and linear
+    // blocking runs, both emitted as `chains` — on the theory that one agent
+    // walking related tickets pays comprehension once. Deleted: an agent that
+    // delegates its reading has little comprehension to amortise, and a chain
+    // carrier's accumulated context is the thing the orchestrator has to cap.
+    // Collisions fed those chains as well, and since chains were a connected
+    // *component* walk the joining was transitive: A/B sharing `mod.rs` and B/C
+    // sharing `types.rs` collapsed A, B and C onto one agent, so a single hub
+    // path (`lib.rs`, `Cargo.toml`, a registry) serialised a whole wave. Blocking
+    // edges determine the waves; nothing else reorders the work.
     let mut collisions: Vec<Collision> = Vec::new();
     let by_key: HashMap<&str, i64> = nodes.iter().map(|(id, n)| (n.key.as_str(), *id)).collect();
     for layer in &waves_out {
@@ -518,10 +503,6 @@ pub fn waves(conn: &Connection, project_key: &str, name: &str) -> Result<Waves> 
         paths.sort_unstable();
         for path in paths {
             let ids = &by_path[path];
-            for pair in ids.windows(2) {
-                related.entry(pair[0]).or_default().push(pair[1]);
-                related.entry(pair[1]).or_default().push(pair[0]);
-            }
             let mut keys: Vec<String> = ids.iter().map(|id| nodes[id].key.clone()).collect();
             keys.sort();
             collisions.push(Collision {
@@ -529,84 +510,6 @@ pub fn waves(conn: &Connection, project_key: &str, name: &str) -> Result<Waves> 
                 keys,
             });
         }
-    }
-
-    let mut open: Vec<i64> = nodes.keys().copied().filter(schedulable).collect();
-    open.sort_by(|a, b| nodes[a].key.cmp(&nodes[b].key));
-    let mut seen = HashSet::new();
-    let mut chains = Vec::new();
-    let mut chained: HashSet<i64> = HashSet::new();
-    for id in open {
-        if !seen.insert(id) || !related.contains_key(&id) {
-            continue;
-        }
-        let mut stack = vec![id];
-        let mut members = Vec::new();
-        while let Some(next) = stack.pop() {
-            members.push(next);
-            for neighbor in related.get(&next).into_iter().flatten() {
-                if seen.insert(*neighbor) {
-                    stack.push(*neighbor);
-                }
-            }
-        }
-        if members.len() > 1 {
-            chained.extend(members.iter().copied());
-            let mut chain: Vec<String> = members.iter().map(|id| nodes[id].key.clone()).collect();
-            chain.sort();
-            chains.push(chain);
-        }
-    }
-
-    // A linear run of blocking edges is the strongest evidence for
-    // same-implementer work: those tickets are serialised by construction and
-    // land on one surface, so one implementer pays comprehension once instead
-    // of once per wave. Fan-in or fan-out ends a run — that is where the work
-    // genuinely parallelises. An explicit `related_to` group already claimed
-    // its members, so a run splits around them rather than restating them.
-    let mut dependents: HashMap<i64, Vec<i64>> = HashMap::new();
-    for (to, blockers) in &intra {
-        for blocker in blockers {
-            dependents.entry(*blocker).or_default().push(*to);
-        }
-    }
-    let mut next: HashMap<i64, i64> = HashMap::new();
-    let mut has_prev: HashSet<i64> = HashSet::new();
-    for (blocker, deps) in &dependents {
-        if deps.len() != 1 || chained.contains(blocker) || !schedulable(blocker) {
-            continue;
-        }
-        let to = deps[0];
-        if chained.contains(&to)
-            || !schedulable(&to)
-            || intra.get(&to).is_none_or(|b| b.len() != 1)
-        {
-            continue;
-        }
-        next.insert(*blocker, to);
-        has_prev.insert(to);
-    }
-    let mut starts: Vec<i64> = next
-        .keys()
-        .copied()
-        .filter(|id| !has_prev.contains(id))
-        .collect();
-    starts.sort_by(|a, b| nodes[a].key.cmp(&nodes[b].key));
-    for start in starts {
-        // Dependency order, not sorted: the run is also the order to work it.
-        let mut chain = vec![nodes[&start].key.clone()];
-        let mut walked: HashSet<i64> = HashSet::from([start]);
-        let mut cur = start;
-        // Unreachable today: a cycle already returned Err above. Cheap
-        // insurance so a future reordering cannot turn this into a hang.
-        while let Some(step) = next.get(&cur) {
-            if !walked.insert(*step) {
-                break;
-            }
-            chain.push(nodes[step].key.clone());
-            cur = *step;
-        }
-        chains.push(chain);
     }
 
     let mut external_keys: Vec<String> = external_blocked
@@ -621,7 +524,6 @@ pub fn waves(conn: &Connection, project_key: &str, name: &str) -> Result<Waves> 
         waves: waves_out,
         done: done_sorted,
         external_blocked: external_keys,
-        chains,
         collisions,
     })
 }

@@ -1,5 +1,4 @@
-//! Port of `backend/lib/loom/issues.ex` + `Loom.Schema.Issue` changesets,
-//! trimmed for cliban.
+//! Issues: the board's unit of work.
 //!
 //! The semantically-load-bearing pieces:
 //!   * atomic `<KEY>-<N>` key generation (bump issue_seq in the txn),

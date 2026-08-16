@@ -148,9 +148,10 @@ are column-zero GFM checkboxes (`- [ ] **Step 1: ...**`).
 
 `## Files` is the ticket's predicted changeset, one `A`/`M`/`D` entry per path
 (`- M crates/core/src/lib.rs`); prose lines between entries are ignored.
-`milestone waves` intersects predictions within a wave and joins the tickets
-that clash, which is why `lint` treats a malformed entry as an error: an entry
-every reader drops is a ticket silently missing from collision detection.
+`milestone waves` intersects predictions within a wave and reports the tickets
+that clash — advice to brief agents with, never a scheduling edge — which is why
+`lint` treats a malformed entry as an error: an entry every reader drops is a
+ticket silently missing from collision detection.
 
 ```bash
 cliban issue edit PROJ-12 --section spec --description-file -   # replace ONE section, others byte-identical

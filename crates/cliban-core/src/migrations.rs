@@ -11,31 +11,16 @@ pub const SCHEMA_VERSION: i64 = 20260713000002;
 ///
 /// # Why adding this table did NOT bump `SCHEMA_VERSION`
 ///
-/// Because the ledger is not cliban's alone to write. Sibling tools vendor a
-/// fork of this crate and stamp their own versions into the same
-/// `schema_migrations` table in the same default database — and loom's vendored
-/// runner, unlike this one, has no escape hatch for a version it does not
-/// recognize: it returns `rusqlite::Error::InvalidQuery`, whose Display string
-/// is the famously unhelpful "Query is not read-only". Stamping a new cliban
-/// version into a shared ledger therefore breaks loom at open time, for every
-/// command, until its vendored copy is updated in lockstep.
-///
-/// A version bump would buy nothing here anyway. The statements below are
-/// additive and written entirely with `IF NOT EXISTS`, applied from two
-/// directions: the fresh-database path in [`run`], and directly by
+/// A version bump would buy nothing. The statements below are additive and
+/// written entirely with `IF NOT EXISTS`, applied from two directions: the
+/// fresh-database path in [`run`], and directly by
 /// `cliban-sync::links::ensure_table` before every sync command. The second
-/// path is what actually guarantees the table on an existing database — including
-/// one whose ledger a sibling owns, where [`run`] deliberately declines to
-/// migrate at all. Nothing is left for a ledger entry to do.
+/// path is what actually guarantees the table on an existing database —
+/// including one whose ledger a newer build owns, where [`run`] deliberately
+/// declines to migrate at all. Nothing is left for a ledger entry to do.
 ///
 /// The DDL lives here rather than in `cliban-sync` so there is one copy, and so
 /// core does not need to depend on its own dependent.
-///
-/// If a future change genuinely needs a version bump, check
-/// `~/dev/loom/vendor/cliban-core/src/migrations.rs` first: cliban's versions
-/// are date-stamped, so simply cutting a release can move cliban's number past
-/// the sibling's and flip the sibling's entry from "newer, fine" to "unknown,
-/// refuse" in the runner below.
 pub const REMOTE_LINKS_DDL: &[&str] = &[
     // `origin` records who created the pairing ('imported' | 'pushed') and
     // decides which side owns the `## Spec` prose. It appears here so fresh
@@ -186,8 +171,8 @@ pub fn run(conn: &Connection) -> crate::error::Result<bool> {
     let versions = schema_versions(conn)?;
 
     // A ledger entry newer than ours means another, newer build owns this
-    // database — cliban's sibling tools (and forks that vendor cliban-core)
-    // share the default DB path, and their migrations only ever ADD tables.
+    // database — an older binary opening a database a newer one migrated, or a
+    // fork vendoring this crate — and those migrations only ever ADD tables.
     // Everything this build reads is still present, so use the database as it
     // stands and do not stamp our own (older) version onto it. Refusing here
     // is what produced the old "Query is not read-only" dead end.

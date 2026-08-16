@@ -81,7 +81,7 @@ pub struct IssueRelation {
     pub created_at: DateTime<Utc>,
 }
 
-// ---- Enum vocabularies (cliban's, not loom's) ----
+// ---- Enum vocabularies ----
 
 pub const ISSUE_STATUSES: &[&str] = &["backlog", "in-progress", "blocked", "in-review", "done"];
 

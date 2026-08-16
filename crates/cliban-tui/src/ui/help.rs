@@ -87,7 +87,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
     ),
 ];
 
-const FOOTER: &str = "cliban — loom-style board";
+const FOOTER: &str = "cliban — kanban board";
 
 const KEY_COL_WIDTH: usize = 16;
 

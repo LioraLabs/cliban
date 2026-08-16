@@ -1,4 +1,4 @@
-//! cliban TUI — loom's ratatui frontend, rewired to in-process `cliban-core`.
+//! cliban TUI — a ratatui kanban frontend over in-process `cliban-core`.
 
 pub mod actions;
 pub mod app;

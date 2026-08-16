@@ -34,6 +34,12 @@ recommendation, including the cheap one whose job is making the expensive one
 justify itself. Name what is **out of scope** and get agreement — that list
 stops the grill slicing tickets nobody asked for.
 
+**Spike when the question is "does this shape work in code".** Another round of
+questions cannot answer it and a ticket is too much to commit. Build the
+smallest throwaway that settles it, in a scratch worktree, labeled throwaway
+from the first line; the answer goes into the design's Decisions and the
+artifact is deleted. What survives a spike is a sentence, never a branch.
+
 ## 3. Get approval
 
 Present the design, sections scaled to their complexity. Done when it names:
