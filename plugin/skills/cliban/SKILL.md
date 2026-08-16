@@ -155,8 +155,11 @@ cliban issue log PROJ-12 "note"         # writes ## Activity Log AND the durable
 
 - A missing section on write is exit 2 listing the ones that exist;
   `--create-section` when you mean to add one. Payloads are the section
-  *body* — an inner H2 is exit 2. `--section activity` is refused on
-  writes: the log belongs to `issue log`.
+  *body* — an inner H2 is exit 2, and so is a payload whose unbalanced code
+  fence would swallow a later section. `--section activity` is refused on
+  writes: the log belongs to `issue log`. Log entries themselves take any
+  markdown — headings and fences are kept inside the entry — so multi-line
+  handoffs are safe to log verbatim.
 - `issue log` / `milestone log` / `append-section` / `project note add` read
   piped stdin when the text argument is absent.
 - Milestone descriptions use the same H2 grammar, and `milestone log` owns
@@ -164,9 +167,10 @@ cliban issue log PROJ-12 "note"         # writes ## Activity Log AND the durable
   shape, one parser reads both. But the *section tools* are issue-only: no
   `--section` on `milestone edit`, no `milestone cat`, no `lint`. So read a
   milestone's log out of `milestone show --json`'s `description`, and never
-  add an entry with `milestone edit --description` — it is full-replace, there
-  is no durable record behind the section the way there is for `issue log`,
-  and the rewrite erases the only copy without saying so.
+  add an entry with `milestone edit --description` — it is full-replace, and
+  there is no durable record behind the section the way there is for
+  `issue log`. A rewrite that would drop `## Activity Log` is refused; carry
+  the section over verbatim.
 - Racy round-trips: pass `--if-updated-at <updated_at>` from a prior `show`
   or echo (exit 2 = stale; re-read and retry). `project edit` takes it too.
 
