@@ -172,7 +172,12 @@ pub fn tick_step(desc: &str, task_n: i32, step_m: i32) -> Result<TickOutcome, St
 /// inter-section blank line preserved per markdown convention).
 pub fn append_activity_log(desc: &str, msg: &str, ts: DateTime<Utc>) -> Result<String, String> {
     let stamp = ts.format(ACTIVITY_LOG_TIME_FORMAT).to_string();
-    let entry = format!("- {stamp} — {msg}\n");
+    // Sanitize by structure rather than reject: indenting every continuation
+    // line makes the whole message part of this list item, so an inner `## `
+    // is not a document-level heading and an unclosed fence closes at the
+    // item boundary. The invariant checks below stay as the backstop.
+    let msg = msg.trim_end_matches('\n');
+    let entry = format!("- {stamp} — {}\n", msg.replace('\n', "\n  "));
     let (start, end, ok) = find_section(desc, "Activity Log");
     let new_desc = if !ok {
         let sep = if desc.is_empty() {
@@ -680,14 +685,21 @@ mod tests {
     }
 
     #[test]
-    fn append_activity_log_rejects_a_top_level_h2() {
-        // The reported bug: a multi-line handoff containing `## ` headings
-        // silently split the description into phantom sections.
+    fn append_activity_log_sanitizes_a_top_level_h2_into_the_entry() {
+        // A multi-line handoff containing `## ` headings used to be refused;
+        // indentation keeps the heading inside the list item instead.
         let ts = Utc.with_ymd_and_hms(2026, 6, 19, 14, 46, 30).unwrap();
         let msg = "intro\n\n## A heading\n\nbody";
-        let err = append_activity_log("## Spec\n\nbody\n", msg, ts).unwrap_err();
-        assert!(err.contains("A heading"), "got {err}");
-        assert!(err.contains("###"), "the message names the fix: {err}");
+        let out = append_activity_log("## Spec\n\nbody\n", msg, ts).unwrap();
+        assert_eq!(
+            cliban_core::sections::h2_anchors(&out),
+            vec!["Spec".to_string(), "Activity Log".to_string()],
+            "the inner heading must not become a section: {out}"
+        );
+        let entries = activity_entries(&out);
+        assert_eq!(entries.len(), 1, "one entry: {out}");
+        let (_, body) = entries[0].parsed.as_ref().unwrap();
+        assert!(body.contains("## A heading"), "content preserved: {body}");
     }
 
     #[test]
@@ -700,38 +712,46 @@ mod tests {
     }
 
     #[test]
-    fn append_activity_log_rejects_the_fence_state_bypass() {
-        // Entry A leaves a fence open; entry B's H2 looks fenced when the
-        // entry is parsed standalone, but A's fence is closed by B's, so in
-        // the whole document the H2 is a real section boundary.
+    fn append_activity_log_contains_fences_inside_the_entry() {
+        // An unclosed fence used to leak across entries and turn a later
+        // entry's heading into a real boundary; indentation closes it at the
+        // item boundary, so both entries land and no section appears.
         let ts = Utc.with_ymd_and_hms(2026, 6, 19, 14, 46, 30).unwrap();
         let d = append_activity_log("## Spec\n\ns\n", "opening a fence\n\n```\nquoted", ts)
             .unwrap();
         let msg = "more quote\n```\n\n## Phantom\n\nsplit content";
-        let err = append_activity_log(&d, msg, ts).unwrap_err();
-        assert!(err.contains("Phantom"), "got {err}");
+        let out = append_activity_log(&d, msg, ts).unwrap();
+        assert_eq!(
+            cliban_core::sections::h2_anchors(&out),
+            vec!["Spec".to_string(), "Activity Log".to_string()],
+            "{out}"
+        );
+        assert_eq!(activity_entries(&out).len(), 2, "both entries render: {out}");
     }
 
     #[test]
-    fn append_activity_log_rejects_a_same_name_phantom_that_swallows_the_original() {
-        // Anchor counts alone cancel out here: the entry creates a phantom
-        // ## Notes and its unclosed fence swallows the real one — counts
-        // unchanged, content displaced.
+    fn append_activity_log_keeps_a_same_name_heading_inside_the_entry() {
+        // The entry mentions ## Notes and opens a fence; sanitized, the real
+        // ## Notes section stays exactly where and what it was.
         let ts = Utc.with_ymd_and_hms(2026, 6, 19, 14, 46, 30).unwrap();
         let d = "## Activity Log\n\n- 2026-01-01T00:00Z — x\n\n## Notes\n\nreal notes\n";
-        let err = append_activity_log(d, "x\n\n## Notes\n\n```\nunclosed", ts).unwrap_err();
-        assert!(err.contains("Notes"), "got {err}");
+        let out = append_activity_log(d, "x\n\n## Notes\n\n```\nunclosed", ts).unwrap();
+        let (s, e, ok) = find_section(&out, "Notes");
+        assert!(ok);
+        assert_eq!(out[s..e].trim(), "real notes", "{out}");
     }
 
     #[test]
     fn append_activity_log_refuses_to_write_an_invisible_entry() {
-        // A prior entry left a fence open at the end of ## Activity Log; a
-        // later append would land inside it, reported as written and
-        // rendered never.
+        // Pre-existing corruption (a document-level open fence inside the
+        // section, e.g. from a raw description edit) would absorb the entry:
+        // reported as written, rendered never. Still refused, with repair
+        // guidance — this is not the agent's entry needing a retry.
         let ts = Utc.with_ymd_and_hms(2026, 6, 19, 14, 46, 30).unwrap();
-        let d = append_activity_log("", "opens\n\n```\nunclosed", ts).unwrap();
-        let err = append_activity_log(&d, "hello", ts).unwrap_err();
+        let d = "## Activity Log\n\n- 2026-01-01T00:00Z — x\n\n```\nstill open\n";
+        let err = append_activity_log(d, "hello", ts).unwrap_err();
         assert!(err.contains("never render"), "got {err}");
+        assert!(err.contains("--description-file"), "repair guidance: {err}");
     }
 
     #[test]
@@ -743,12 +763,14 @@ mod tests {
     }
 
     #[test]
-    fn append_activity_log_rejects_swallowing_a_later_section() {
-        // Activity Log is not the last section; an unclosed fence in the
-        // entry would turn ## Notes into fenced content.
+    fn append_activity_log_fence_cannot_swallow_a_later_section() {
+        // Activity Log is not the last section; the entry's unclosed fence
+        // is contained by the item, so ## Notes survives untouched.
         let ts = Utc.with_ymd_and_hms(2026, 6, 19, 14, 46, 30).unwrap();
         let d = "## Activity Log\n\n- 2026-01-01T00:00Z — x\n\n## Notes\n\nn\n";
-        let err = append_activity_log(d, "opens\n\n```\nunclosed", ts).unwrap_err();
-        assert!(err.contains("Notes"), "got {err}");
+        let out = append_activity_log(d, "opens\n\n```\nunclosed", ts).unwrap();
+        let (s, e, ok) = find_section(&out, "Notes");
+        assert!(ok, "{out}");
+        assert_eq!(out[s..e].trim(), "n", "{out}");
     }
 }

@@ -45,10 +45,10 @@ independent tool calls, chain sequential shell steps, don't re-read settled
 files. When re-sent history still comes to dwarf what a turn advances (rule of
 thumb: a few hundred thousand cumulative tokens), commit what stands, write
 the handoff, and exit — a fresh agent finishes from the board at a fraction of
-the cost. The handoff is one `issue log` entry (`###` subheads; a top-level
-`##` is refused): status per open review finding, the half-applied refactor's
-exact boundary, converted call sites, sync state, dead ends, and disagreements
-with a review stated, not dropped.
+the cost. The handoff is one `issue log` entry, any markdown — the write keeps
+it inside the entry: status per open review finding, the half-applied
+refactor's exact boundary, converted call sites, sync state, dead ends, and
+disagreements with a review stated, not dropped.
 Keep this workflow porous — lifecycle invariants, not how to program. Commits
 are the durable work record; log only discoveries, dead ends, scope changes,
 and decisions. Amend the Spec when evidence disproves it; promote discovered
