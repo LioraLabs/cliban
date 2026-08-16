@@ -104,8 +104,10 @@ cannot see across the wave.
 Before ready, the implementer sends confidence, a skip/run recommendation,
 one-line evidence, and merge risk. Either side may request review; the
 orchestrator makes the final decision at every confidence level. If it skips,
-record `review waived by orchestrator: <reason>` on the ticket so ready can
-proceed. Confidence informs but never binds this decision.
+record `review waived by orchestrator: <reason>` on the ticket yourself so ready
+can proceed — ready refuses a waiver logged as `agent:<KEY>`, since asking the
+ticket's agent to write one is asking it to certify its own work. Confidence
+informs but never binds this decision.
 
 When it reviews instead, dispatch with the template in
 [review.md](../complete-issue/references/review.md) — never an improvised

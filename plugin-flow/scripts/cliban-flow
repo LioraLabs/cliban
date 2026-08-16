@@ -85,6 +85,49 @@ accepted_review() {
         ! printf '%s\n' "$review" | grep -Eqi '(Critical|Important)[ :]'
 }
 
+# waiver_state <KEY> [substring] — how this ticket's orchestrator waivers
+# stand, as an exit code: 0 one was recorded by someone other than the ticket's
+# own agent, 3 every one of them was written by that agent, 1 there are none.
+# With a substring, only waivers containing it count.
+#
+# A waiver authorizes skipping a review, so who wrote it is the whole content of
+# it — and the rendered `## Activity Log` line carries a timestamp and no author,
+# which is why matching that line's shape could never tell an orchestrator's
+# decision from a ticket certifying its own work. `cliban issue log` records the
+# actor behind every entry, so the JSON feed is asked instead of the section
+# text.
+#
+# The identity compared against is `agent:<KEY>`, which complete-issue has
+# dispatched work export as $CLIBAN_ACTOR — not the claim, which is held by
+# whichever side ran `ticket start` and is routinely the orchestrator. An agent
+# that skips that export is indistinguishable from an orchestrator session here;
+# nothing on the board authenticates a session, so this stops the ticket from
+# certifying itself under its own documented name and claims nothing more.
+waiver_state() {
+    local feed
+    feed=$(cliban activity --issue "$1" --json 2>/dev/null) || feed=""
+    printf '%s\n' "$feed" | python3 -c '
+import json, re, sys
+ticket_agent, needle = "agent:" + sys.argv[1].casefold(), sys.argv[2]
+waiver = re.compile(r"review waived by orchestrator:[^\S\n]*\S")
+found = False
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    entry = json.loads(line)
+    if entry.get("kind") != "log":
+        continue
+    message = entry.get("message") or ""
+    if not waiver.match(message) or needle not in message:
+        continue
+    found = True
+    if (entry.get("actor") or "").casefold() != ticket_agent:
+        sys.exit(0)
+sys.exit(3 if found else 1)
+' "$1" "${2:-}"
+}
+
 # instruct <line>... — the "what to do next" that follows a verdict or refusal.
 # Indented on stderr so it reads as guidance rather than as more output.
 instruct() {
@@ -1600,16 +1643,33 @@ cmd_ticket_ready() {
         "Commit the ticket work: git -C \"$TICKET_WT\" commit"
 
     activity=$(cliban issue cat "$ISSUE_KEY" --section activity 2>/dev/null) || activity=""
-    if ! printf '%s\n' "$activity" | accepted_review &&
-        { [ -z "$ISSUE_MILESTONE" ] || ! printf '%s\n' "$activity" | grep -Eq '^- [^—]+ — review waived by orchestrator: [[:space:]]*[^[:space:]].*$'; }; then
+    if ! printf '%s\n' "$activity" | accepted_review; then
+        local waived=1
+        if [ -n "$ISSUE_MILESTONE" ]; then
+            waived=0
+            waiver_state "$ISSUE_KEY" || waived=$?
+        fi
         if [ -z "$ISSUE_MILESTONE" ]; then
             refuse_ticket "$ISSUE_KEY" \
                 "$ISSUE_KEY has no accepted review verdict" \
                 "Obtain a positive review, then record it: cliban issue log $ISSUE_KEY \"review: SPEC ACCEPT; QUALITY pass\""
-        else
+        elif [ "$waived" -eq 3 ]; then
+            refuse_ticket "$ISSUE_KEY" \
+                "$ISSUE_KEY's only orchestrator waiver was written by agent:$ISSUE_KEY, this ticket's own agent" \
+                "A waiver authorizes skipping review, so it cannot come from the work it" \
+                "authorizes. Either the orchestrator records the waiver itself, or the" \
+                "review runs and its verdict is recorded — a verdict relayed from a" \
+                "reviewer counts, in the reviewer's own words:" \
+                "    cliban issue log $ISSUE_KEY \"review: SPEC ACCEPT; QUALITY pass — <findings>\""
+        elif [ "$waived" -ne 0 ]; then
             refuse_ticket "$ISSUE_KEY" \
                 "$ISSUE_KEY has neither an accepted review verdict nor an orchestrator waiver" \
-                "Record one: cliban issue log $ISSUE_KEY \"review waived by orchestrator: <reason>\""
+                "A review that came back through the orchestrator is still a review:" \
+                "record its verdict naming both axes. Waive it only when none ran, and" \
+                "only as the orchestrator — a waiver this ticket's own agent writes is" \
+                "refused:" \
+                "    cliban issue log $ISSUE_KEY \"review: SPEC ACCEPT; QUALITY pass — <findings>\"" \
+                "    cliban issue log $ISSUE_KEY \"review waived by orchestrator: <reason>\""
         fi
     fi
 
@@ -1638,12 +1698,24 @@ cmd_ticket_ready() {
             ')
         local for_tip
         for_tip=$(printf '%s\n' "$after_ready" | grep -F "$tip" || true)
-        if ! printf '%s\n' "$for_tip" | accepted_review &&
-            { [ -z "$ISSUE_MILESTONE" ] || ! printf '%s\n' "$for_tip" | grep -Eq '^- [^—]+ — review waived by orchestrator: [[:space:]]*[^[:space:]].*$'; }; then
-            refuse_ticket "$ISSUE_KEY" \
-                "$ISSUE_BRANCH moved from its recorded ready SHA" \
-                "The old review evidence applies to the old tree. Verify this HEAD and record" \
-                "new accepted review evidence naming $tip, then run ready again."
+        if ! printf '%s\n' "$for_tip" | accepted_review; then
+            local rewaived=1
+            if [ -n "$ISSUE_MILESTONE" ]; then
+                rewaived=0
+                waiver_state "$ISSUE_KEY" "$tip" || rewaived=$?
+            fi
+            if [ "$rewaived" -eq 3 ]; then
+                refuse_ticket "$ISSUE_KEY" \
+                    "$ISSUE_BRANCH moved from its recorded ready SHA, and the only waiver naming $tip is agent:$ISSUE_KEY's own" \
+                    "A ticket's agent cannot waive review of its own work. The orchestrator" \
+                    "records the waiver, or the review runs and its verdict is recorded" \
+                    "naming $tip."
+            elif [ "$rewaived" -ne 0 ]; then
+                refuse_ticket "$ISSUE_KEY" \
+                    "$ISSUE_BRANCH moved from its recorded ready SHA" \
+                    "The old review evidence applies to the old tree. Verify this HEAD and record" \
+                    "new accepted review evidence naming $tip, then run ready again."
+            fi
         fi
     fi
 

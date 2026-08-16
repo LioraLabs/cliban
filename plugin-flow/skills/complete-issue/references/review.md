@@ -30,8 +30,15 @@ and log the disposition.
 Before sync, the implementer reports confidence, a `review: skip | run`
 recommendation, one-line evidence, and merge risk. Either side may request
 review; the orchestrator makes the final decision at every confidence level.
-When it skips, it records `review waived by orchestrator: <reason>`. Standalone
+When it skips, it records `review waived by orchestrator: <reason>` itself: the
+gate refuses one logged as `agent:<KEY>`. Standalone
 work may use the same vocabulary without an orchestrator waiver.
+
+A verdict relayed by the orchestrator counts, so record it as a verdict rather
+than reaching for the waiver — a waiver logged over a review that did happen
+records the opposite of the truth on the durable board. On a re-ready after the
+branch moved, the verdict line must also carry the new tip SHA, since the old
+evidence describes a tree that no longer exists.
 
 A checkpoint-free plan gets one cumulative review. When final review is chosen,
 it always covers the complete ticket diff.

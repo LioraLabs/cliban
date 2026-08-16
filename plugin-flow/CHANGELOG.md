@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.0
+
+- Refuse a `ticket ready` review waiver written by the ticket's own agent: authorship is read from the activity feed's actor, not matched by line shape, so a ticket can no longer certify its own work as `agent:<KEY>`.
+- Name both accepted forms in the review refusal, so a genuine relayed verdict is recorded as a verdict instead of a false waiver.
+
+## 0.8.0
+
+- Carry the Skill remediation milestone: collision prediction, the pass-2 contract, the handoff shape, the integration relay, and note priming.
+
 ## 0.7.0
 
 - Make token cost an explicit lever in complete-issue: batch tool calls, chain shell steps, don't re-read settled files.

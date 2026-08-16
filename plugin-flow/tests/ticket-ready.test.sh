@@ -97,6 +97,12 @@ EOF
 run_flow ticket ready "$key"
 assert_status 2 "ready refuses a missing review verdict"
 assert_stderr_has "cliban issue log $key" "review refusal names the repair"
+# Naming only the waiver steered an agent holding a real ACCEPT toward
+# recording, permanently, that no review had happened.
+assert_stderr_has "review: SPEC ACCEPT; QUALITY pass" \
+    "the refusal names the verdict form, not only the waiver"
+assert_stderr_has "review waived by orchestrator: <reason>" \
+    "the refusal names the waiver form too"
 
 fixture_new
 fixture_milestone_worktree
@@ -204,6 +210,41 @@ EOF
 cb issue log "$key" "note — review waived by orchestrator: narrow change" >/dev/null
 run_flow ticket ready "$key"
 assert_status 2 "ready refuses an embedded waiver phrase"
+
+# A waiver is an authorization, and `cliban issue log` is a tool the ticket's
+# own agent holds. Shape alone therefore cannot tell an orchestrator's decision
+# from a ticket certifying its own work — authorship can. The identity is
+# `agent:<KEY>`, which complete-issue has dispatched work export, and not the
+# claim: `ticket start` is routinely run by the orchestrator, so the claim is
+# as often the orchestrator's as the agent's.
+
+fixture_new
+fixture_milestone_worktree
+key=$(new_issue "Self-issued review waiver")
+branch=$(branch_of "$key")
+fixture_ticket_worktree "$branch"
+commit_file_at "$(fixture_ticket_wt "$branch")" ticket-side.txt work
+cb issue edit "$key" --section plan --create-section --description-file - >/dev/null <<'EOF'
+### Task 1: fixture
+
+- [x] **Step 1: exercised**
+EOF
+CLIBAN_ACTOR="agent:$key" cb issue log "$key" \
+    "review waived by orchestrator: I am the ticket agent" >/dev/null
+run_flow ticket ready "$key"
+assert_status 2 "ready refuses a waiver the ticket's own agent wrote about its own work"
+assert_eq "$(status_of "$key")" "backlog" "the self-waived ticket did not move"
+assert_stderr_has "written by agent:$key" \
+    "the refusal names who wrote the waiver, not just that one is missing"
+assert_stderr_has "review: SPEC ACCEPT; QUALITY pass" \
+    "the self-waiver refusal names the verdict form as the way out"
+
+# the claim is not the signal: the orchestrator holds it as often as the agent.
+cb issue claim "$key" >/dev/null
+cb issue log "$key" "review waived by orchestrator: narrow, well-covered change" >/dev/null
+run_flow ticket ready "$key"
+assert_status 0 "an orchestrator waiver passes even when the orchestrator holds the claim"
+assert_eq "$(status_of "$key")" "in-review" "the orchestrator-waived ticket moved"
 
 fixture_new
 fixture_milestone_worktree

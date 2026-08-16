@@ -14,10 +14,14 @@ failed=0
 has() { grep -Fq -- "$2" "$1" || { printf 'missing %s in %s\n' "$2" "$1" >&2; failed=1; }; }
 lacks() { ! grep -Fq -- "$2" "$1" || { printf 'legacy %s in %s\n' "$2" "$1" >&2; failed=1; }; }
 
-# releases advertise the recovery protocol they install.
-has "$manifest" '"version": "0.7.0"'
+# releases advertise the recovery protocol they install. The version is read
+# from the manifest rather than pinned here: a literal goes stale at every bump,
+# which is how 0.8.0 shipped with no changelog entry at all. What must hold is
+# that whatever version is shipping says what it changed.
+version=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$manifest" | head -1)
+[ -n "$version" ] || { printf 'no version in %s\n' "$manifest" >&2; failed=1; }
+has "$ROOT/plugin-flow/CHANGELOG.md" "## $version"
 has "$manifest" 'recover interrupted milestones'
-has "$ROOT/plugin-flow/CHANGELOG.md" '## 0.7.0'
 has "$ROOT/plugin-flow/CHANGELOG.md" 'token cost an explicit lever'
 
 # the installed skill resolves its sibling dispatcher outside cliban.
