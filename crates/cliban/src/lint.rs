@@ -55,6 +55,52 @@ pub fn lint_description(desc: &str) -> Vec<Finding> {
         warn(&mut findings, "no ## Spec section".to_string());
     }
 
+    // Duplicate anchors: every section tool resolves the first, so the rest
+    // are unaddressable — the residue of an entry that split the description.
+    // Exact match, because find_section resolves anchors case-sensitively.
+    let mut seen: Vec<String> = Vec::new();
+    for anchor in cliban_core::sections::h2_anchors(desc) {
+        if seen.contains(&anchor) {
+            err(
+                &mut findings,
+                format!(
+                    "duplicate \"## {anchor}\" section — only the first is addressable; \
+                     repair by rewriting the whole description with \
+                     issue edit --description-file"
+                ),
+            );
+        } else {
+            seen.push(anchor);
+        }
+    }
+
+    // Timestamped activity entries outside ## Activity Log are the residue of
+    // an entry that split the section: a phantom H2 landed between them and
+    // their section. Nothing else writes `- <ts> — <msg>` items elsewhere.
+    let (a_start, a_end, a_ok) = find_section(desc, "Activity Log");
+    let mut stranded = 0usize;
+    for item in cliban_core::sections::top_level_list_items(desc) {
+        if a_ok && item.start >= a_start && item.end <= a_end {
+            continue;
+        }
+        let body = cliban_core::sections::list_item_body(&desc[item]);
+        let head = body.split_once('\n').map_or(body.as_str(), |(h, _)| h);
+        if crate::descmd::parse_entry_head(head).is_some() {
+            stranded += 1;
+        }
+    }
+    if stranded > 0 {
+        err(
+            &mut findings,
+            format!(
+                "{stranded} timestamped activity entr{} outside ## Activity Log — the \
+                 residue of a split section; repair by rewriting the whole description \
+                 with issue edit --description-file",
+                if stranded == 1 { "y" } else { "ies" }
+            ),
+        );
+    }
+
     let (plan_start, plan_end, has_plan) = find_section(desc, "Plan");
     if has_plan {
         lint_plan(&desc[plan_start..plan_end], &mut findings);
@@ -180,6 +226,46 @@ mod tests {
             .iter()
             .filter(|f| f.severity == Severity::Error)
             .count()
+    }
+
+    #[test]
+    fn duplicate_section_anchors_are_an_error() {
+        // The compounded phantom-section state: a re-logged entry recreated
+        // sections that already existed. Only the first of each is addressable.
+        let d = "## Spec\n\ns\n\n## Plan\n\nplan\n\n## Spec\n\nagain\n";
+        let f = lint_description(d);
+        assert!(
+            f.iter().any(|f| f.severity == Severity::Error
+                && f.message.contains("Spec")
+                && f.message.contains("--description-file")),
+            "duplicate anchor must be an error naming the repair: {f:?}"
+        );
+    }
+
+    #[test]
+    fn a_custom_h2_is_not_an_error() {
+        let d = "## Spec\n\ns\n\n## Rollout\n\ncustom section\n";
+        assert_eq!(errors(d), 0);
+    }
+
+    #[test]
+    fn a_stranded_timestamped_entry_is_an_error() {
+        // The single-phantom state: a log entry's H2 split ## Activity Log,
+        // leaving timestamped entries under a foreign section.
+        let d = "## Spec\n\ns\n\n## Activity Log\n\n- 2026-08-08T10:00Z — ok\n\n\
+                 ## Phantom\n\n- 2026-08-08T10:01Z — stranded tail\n";
+        let f = lint_description(d);
+        assert!(
+            f.iter().any(|f| f.severity == Severity::Error
+                && f.message.contains("--description-file")),
+            "stranded entry must be an error naming the repair: {f:?}"
+        );
+    }
+
+    #[test]
+    fn plain_bullets_in_a_custom_section_are_clean() {
+        let d = "## Spec\n\ns\n\n## Rollout\n\n- step one\n- step two\n";
+        assert_eq!(errors(d), 0);
     }
 
     #[test]

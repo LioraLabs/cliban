@@ -170,11 +170,11 @@ pub fn tick_step(desc: &str, task_n: i32, step_m: i32) -> Result<TickOutcome, St
 /// newline when Activity Log is the last section in desc, or two trailing
 /// newlines when followed by another section (the second newline being the
 /// inter-section blank line preserved per markdown convention).
-pub fn append_activity_log(desc: &str, msg: &str, ts: DateTime<Utc>) -> String {
+pub fn append_activity_log(desc: &str, msg: &str, ts: DateTime<Utc>) -> Result<String, String> {
     let stamp = ts.format(ACTIVITY_LOG_TIME_FORMAT).to_string();
     let entry = format!("- {stamp} — {msg}\n");
     let (start, end, ok) = find_section(desc, "Activity Log");
-    if !ok {
+    let new_desc = if !ok {
         let sep = if desc.is_empty() {
             ""
         } else if !desc.ends_with('\n') {
@@ -182,20 +182,86 @@ pub fn append_activity_log(desc: &str, msg: &str, ts: DateTime<Utc>) -> String {
         } else {
             "\n"
         };
-        return format!("{desc}{sep}## Activity Log\n\n{entry}");
+        format!("{desc}{sep}## Activity Log\n\n{entry}")
+    } else {
+        // Insert the entry at the end of the section body. Strip trailing
+        // newlines, append the new entry (which ends with \n), then restore
+        // the blank-line separator if not the last section.
+        let body = &desc[start..end];
+        let trimmed = body.trim_end_matches('\n');
+        let mut rebuilt = format!("{trimmed}\n{entry}");
+        if end < desc.len() {
+            rebuilt.push('\n');
+        }
+        format!("{}{}{}", &desc[..start], rebuilt, &desc[end..])
+    };
+
+    // Validate the artifact, not the fragment: whether a line is a heading
+    // depends on the whole document's fence state — an unclosed fence in an
+    // earlier entry can make this entry's fenced-looking H2 real, and this
+    // entry's unclosed fence can swallow a later section. So the guard is a
+    // before/after comparison of the description's H2 anchors; the only
+    // change an append may make is creating ## Activity Log itself.
+    let mut expected = cliban_core::sections::h2_anchors(desc);
+    if !ok {
+        expected.push("Activity Log".to_string());
     }
-    // Insert the entry at the end of the section body. Strip trailing newlines,
-    // append the new entry (which ends with \n), then restore the blank-line
-    // separator if not the last section.
-    let body = &desc[start..end];
-    let trimmed = body.trim_end_matches('\n');
-    let mut rebuilt = format!("{trimmed}\n{entry}");
-    if end < desc.len() {
-        // Not the last section: restore the blank-line separator before the
-        // following ## heading.
-        rebuilt.push('\n');
+    let after = cliban_core::sections::h2_anchors(&new_desc);
+    let count = |v: &[String], s: &str| v.iter().filter(|x| x.as_str() == s).count();
+    if let Some(new_anchor) = after.iter().find(|a| count(&after, a) > count(&expected, a)) {
+        return Err(format!(
+            "log entry would create a top-level \"## {new_anchor}\" section boundary, \
+             splitting ## Activity Log; demote the heading to ### or deeper, or quote \
+             it in a fenced code block"
+        ));
     }
-    format!("{}{}{}", &desc[..start], rebuilt, &desc[end..])
+    if let Some(lost) = expected.iter().find(|e| count(&expected, e) > count(&after, e)) {
+        return Err(format!(
+            "log entry would leave the \"## {lost}\" section unreachable behind an \
+             unclosed code fence; close the fence — if the description already \
+             carries the open fence, repair it first with issue edit \
+             --description-file"
+        ));
+    }
+    // A same-named phantom plus a swallow cancel out in the counts above, so
+    // also require every pre-existing section to resolve to the same bytes.
+    for anchor in expected.iter().filter(|a| a.as_str() != "Activity Log") {
+        let (s1, e1, ok1) = find_section(desc, anchor);
+        let (s2, e2, ok2) = find_section(&new_desc, anchor);
+        if ok1
+            && (!ok2
+                || desc[s1..e1].trim_end_matches('\n') != new_desc[s2..e2].trim_end_matches('\n'))
+        {
+            return Err(format!(
+                "log entry would displace the \"## {anchor}\" section — after the \
+                 write it would no longer resolve to its current content; demote \
+                 any heading in the entry and close any code fence"
+            ));
+        }
+    }
+    // And the entry itself must be readable: appended after an unclosed fence
+    // already in ## Activity Log it would be fenced content, reported as
+    // written and visible to no reader.
+    let first_line = msg.lines().next().unwrap_or("");
+    // Compare modulo trailing whitespace: list_item_body trims a single-line
+    // item's tail, so a message with a trailing space would never match.
+    let head = format!("{stamp} — {first_line}");
+    let head = head.trim_end();
+    let visible = |d: &str| {
+        activity_entries(d)
+            .iter()
+            .filter(|e| e.head.trim_end() == head)
+            .count()
+    };
+    if visible(&new_desc) <= visible(desc) {
+        return Err(
+            "log entry would never render — an unclosed code fence or unterminated \
+             block already inside ## Activity Log would absorb it; repair the \
+             description first with issue edit --description-file"
+                .to_string(),
+        );
+    }
+    Ok(new_desc)
 }
 
 /// One entry in the `## Activity Log` section — one markdown list item.
@@ -247,7 +313,7 @@ pub fn activity_entries(desc: &str) -> Vec<ActivityEntry> {
 }
 
 /// `2026-08-08T10:00Z — did a thing` → its timestamp and message.
-fn parse_entry_head(head: &str) -> Option<(DateTime<Utc>, String)> {
+pub(crate) fn parse_entry_head(head: &str) -> Option<(DateTime<Utc>, String)> {
     // The separator is an em dash surrounded by spaces; the timestamp may not
     // contain one, so the first occurrence is the split point.
     let (stamp, msg) = head.split_once(" — ")?;
@@ -606,10 +672,83 @@ mod tests {
     #[test]
     fn append_activity_log_minute_precision() {
         let ts = Utc.with_ymd_and_hms(2026, 6, 19, 14, 46, 30).unwrap();
-        let out = append_activity_log("## Spec\n\nbody\n", "hello", ts);
+        let out = append_activity_log("## Spec\n\nbody\n", "hello", ts).unwrap();
         assert!(
             out.contains("## Activity Log\n\n- 2026-06-19T14:46Z — hello\n"),
             "got {out}"
         );
+    }
+
+    #[test]
+    fn append_activity_log_rejects_a_top_level_h2() {
+        // The reported bug: a multi-line handoff containing `## ` headings
+        // silently split the description into phantom sections.
+        let ts = Utc.with_ymd_and_hms(2026, 6, 19, 14, 46, 30).unwrap();
+        let msg = "intro\n\n## A heading\n\nbody";
+        let err = append_activity_log("## Spec\n\nbody\n", msg, ts).unwrap_err();
+        assert!(err.contains("A heading"), "got {err}");
+        assert!(err.contains("###"), "the message names the fix: {err}");
+    }
+
+    #[test]
+    fn append_activity_log_allows_fenced_and_deeper_headings() {
+        let ts = Utc.with_ymd_and_hms(2026, 6, 19, 14, 46, 30).unwrap();
+        let fenced = "quoting the grammar:\n\n```\n## Spec\n```";
+        assert!(append_activity_log("", fenced, ts).is_ok());
+        let h3 = "handoff\n\n### converted call sites\n\n- a\n- b";
+        assert!(append_activity_log("", h3, ts).is_ok());
+    }
+
+    #[test]
+    fn append_activity_log_rejects_the_fence_state_bypass() {
+        // Entry A leaves a fence open; entry B's H2 looks fenced when the
+        // entry is parsed standalone, but A's fence is closed by B's, so in
+        // the whole document the H2 is a real section boundary.
+        let ts = Utc.with_ymd_and_hms(2026, 6, 19, 14, 46, 30).unwrap();
+        let d = append_activity_log("## Spec\n\ns\n", "opening a fence\n\n```\nquoted", ts)
+            .unwrap();
+        let msg = "more quote\n```\n\n## Phantom\n\nsplit content";
+        let err = append_activity_log(&d, msg, ts).unwrap_err();
+        assert!(err.contains("Phantom"), "got {err}");
+    }
+
+    #[test]
+    fn append_activity_log_rejects_a_same_name_phantom_that_swallows_the_original() {
+        // Anchor counts alone cancel out here: the entry creates a phantom
+        // ## Notes and its unclosed fence swallows the real one — counts
+        // unchanged, content displaced.
+        let ts = Utc.with_ymd_and_hms(2026, 6, 19, 14, 46, 30).unwrap();
+        let d = "## Activity Log\n\n- 2026-01-01T00:00Z — x\n\n## Notes\n\nreal notes\n";
+        let err = append_activity_log(d, "x\n\n## Notes\n\n```\nunclosed", ts).unwrap_err();
+        assert!(err.contains("Notes"), "got {err}");
+    }
+
+    #[test]
+    fn append_activity_log_refuses_to_write_an_invisible_entry() {
+        // A prior entry left a fence open at the end of ## Activity Log; a
+        // later append would land inside it, reported as written and
+        // rendered never.
+        let ts = Utc.with_ymd_and_hms(2026, 6, 19, 14, 46, 30).unwrap();
+        let d = append_activity_log("", "opens\n\n```\nunclosed", ts).unwrap();
+        let err = append_activity_log(&d, "hello", ts).unwrap_err();
+        assert!(err.contains("never render"), "got {err}");
+    }
+
+    #[test]
+    fn append_activity_log_accepts_a_trailing_whitespace_message() {
+        // list_item_body trims a single-line entry's tail; the visibility
+        // check must compare modulo that or reject an innocent message.
+        let ts = Utc.with_ymd_and_hms(2026, 6, 19, 14, 46, 30).unwrap();
+        assert!(append_activity_log("", "oops trailing space ", ts).is_ok());
+    }
+
+    #[test]
+    fn append_activity_log_rejects_swallowing_a_later_section() {
+        // Activity Log is not the last section; an unclosed fence in the
+        // entry would turn ## Notes into fenced content.
+        let ts = Utc.with_ymd_and_hms(2026, 6, 19, 14, 46, 30).unwrap();
+        let d = "## Activity Log\n\n- 2026-01-01T00:00Z — x\n\n## Notes\n\nn\n";
+        let err = append_activity_log(d, "opens\n\n```\nunclosed", ts).unwrap_err();
+        assert!(err.contains("Notes"), "got {err}");
     }
 }

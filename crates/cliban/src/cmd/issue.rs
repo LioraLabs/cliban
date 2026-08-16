@@ -1893,7 +1893,8 @@ async fn log(db: &Option<String>, a: LogArgs, teach: Option<Teach>) -> CliResult
             let tx = conn.unchecked_transaction()?;
             let issue = issues::get_by_key(&tx, &lookup)?
                 .ok_or_else(|| cliban_core::Error::NamedNotFound(lookup.clone()))?;
-            let new_desc = descmd::append_activity_log(&issue.description, &entry, now);
+            let new_desc = descmd::append_activity_log(&issue.description, &entry, now)
+                .map_err(|m| cliban_core::Error::Validation(vec![("message".into(), m)]))?;
             let updated = format_usec(now);
             tx.execute(
                 "UPDATE issues SET description = ?1, updated_at = ?2 WHERE id = ?3",

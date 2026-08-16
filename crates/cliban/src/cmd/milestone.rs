@@ -774,7 +774,8 @@ async fn log(
             let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
             let cur = milestones::get(&tx, &call_key, &call_name)?
                 .ok_or_else(|| cliban_core::Error::NamedNotFound(call_name.clone()))?;
-            let new_desc = crate::descmd::append_activity_log(&cur.description, &entry, now);
+            let new_desc = crate::descmd::append_activity_log(&cur.description, &entry, now)
+                .map_err(|m| cliban_core::Error::Validation(vec![("message".into(), m)]))?;
             milestones::update(
                 &tx,
                 &cur,
