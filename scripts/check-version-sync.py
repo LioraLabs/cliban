@@ -9,12 +9,51 @@ reports the wrong version, which is exactly what happened to v0.1.0.
 Run by `cook version-sync`; gates `cook release`.
 """
 
+import json
 import pathlib
 import re
+import subprocess
 import sys
 import tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+# The two Claude plugins version independently of the crate. The invariant is
+# not that their numbers match Cargo.toml — it is that a plugin whose tree
+# changed since the last release also changed its version claim, so installed
+# copies get a signal they are behind.
+PLUGINS = ["plugin", "plugin-flow"]
+
+
+def git(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(ROOT), *args], capture_output=True, text=True, check=False
+    )
+
+
+def plugin_drift() -> list[str]:
+    tag = git("describe", "--tags", "--abbrev=0", "--match", "v*").stdout.strip()
+    if not tag:
+        return []  # no release yet, nothing to drift from
+    problems = []
+    for plugin in PLUGINS:
+        manifest = f"{plugin}/.claude-plugin/plugin.json"
+        released = git("show", f"{tag}:{manifest}")
+        if released.returncode != 0:
+            continue  # plugin did not exist at the last release
+        old_version = json.loads(released.stdout).get("version")
+        current_path = ROOT / manifest
+        if not current_path.exists():
+            problems.append(f"{manifest} is missing but existed at {tag}")
+            continue
+        new_version = json.loads(current_path.read_text()).get("version")
+        changed = git("diff", "--quiet", f"{tag}..HEAD", "--", plugin).returncode != 0
+        if changed and new_version == old_version:
+            problems.append(
+                f"{plugin}/ changed since {tag} but {manifest} still claims "
+                f"{new_version!r} — bump the plugin version"
+            )
+    return problems
 
 
 def main() -> int:
@@ -60,6 +99,8 @@ def main() -> int:
             f"packaging/aur/PKGBUILD pkgver={found.group(1).strip()}, "
             f"expected {canonical}"
         )
+
+    problems += plugin_drift()
 
     if problems:
         print(f"version drift — Cargo.toml says {canonical}:", file=sys.stderr)
