@@ -16,6 +16,15 @@ skill schedules that and integrates the results; it does not restate the rhythm.
 
 **Not this skill:** a single issue (`complete-issue`); work not yet sliced into tickets (`scope-milestone`); issues with no shared integration target.
 
+**What the repo must offer:** a ticket's claims must be checkable at a seam
+without a human — a pure function a test calls, a CLI a fixture repo runs,
+refs a script asserts — and its blast radius must be separable from its
+siblings'. Functional-core/imperative-shell is the most reliable way to get
+both in a UI codebase, not the only way. Where a shared surface offers no such
+seam, don't abandon the workflow: serialize the wave there and expect review
+to be the only gate, priced accordingly — untestable shared surface is exactly
+where parallel tickets collide (step 1's check).
+
 ## The integration branch rule
 
 Ticket branches merge into a milestone integration branch, never `main`. Merging half-finished phases into `main` breaks whatever builds from it — often the very tool you're tracking the work with. `main` stays shippable; the milestone branch absorbs the in-progress phases; the user lands it as one atomic switch at the end.

@@ -78,6 +78,8 @@ unblocked siblings is a slicing smell. Two signals are free: the surface each
 draft names, and the repo's own history of which files change together
 (`git log --format= --name-only`). Overlapping slices merge, re-slice along
 the boundary, or take an explicit blocking edge so they never share a wave.
+A shared surface no test can observe fails both ways at once — slices touching
+it always take edges, never a shared wave.
 
 **Wide refactors are the exception.** A mechanical change whose blast radius fans across the codebase can't land green as a tracer bullet. Sequence it **expand → migrate → contract**: add the new form beside the old, migrate call sites in batches sized by blast radius (one ticket each, blocked by the expand, green throughout because the old form still exists), then delete the old form in a ticket blocked by every batch.
 
