@@ -20,6 +20,16 @@
 probe version:sites
     files { "Cargo.toml" "Cargo.lock" "crates/*/Cargo.toml" "packaging/aur/PKGBUILD" }
 
+# version-sync also asks whether each plugin tree moved since the last release,
+# so every plugin source is an input to it, not just the manifest that claims a
+# version. Sealed separately because these answer the other half of the
+# question: not "what version is claimed" but "did this tree change at all".
+#
+# Found the hard way. With only version:sites sealed, editing a skill left the
+# check cached green while it was really red, and `release` hangs off `check`.
+probe version:plugins
+    files { "plugin/**" "plugin-flow/**" }
+
 # What the cargo suite actually depends on besides the sources. PKGBUILD is
 # deliberately absent — an AUR edit should not invalidate the test suite.
 probe rust:manifests
@@ -55,7 +65,7 @@ probe vscode:config
 # nothing checked; this is that check.
 recipe version-sync
     ingredients "scripts/check-version-sync.py"
-    seal version:sites
+    seal version:sites version:plugins
     test { python3 $<in> }
 
 # install.sh is piped into `sh` by strangers, so it gets parsed and linted.
