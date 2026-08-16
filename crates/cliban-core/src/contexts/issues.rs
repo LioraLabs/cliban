@@ -229,17 +229,28 @@ impl UpdateIssue {
 /// `completed_at`) and non-status attrs through [`do_update`], both inside one
 /// transaction.
 pub fn update(conn: &Connection, issue: &Issue, attrs: UpdateIssue) -> Result<Issue> {
+    // A caller that already opened a transaction (e.g. an IMMEDIATE one to
+    // serialize a read-modify-write, CLI-88) owns atomicity; BEGIN would nest
+    // and fail. Only open our own when the connection is in autocommit.
+    if !conn.is_autocommit() {
+        return update_in_tx(conn, issue, attrs);
+    }
     let tx = conn.unchecked_transaction()?;
+    let current = update_in_tx(&tx, issue, attrs)?;
+    tx.commit()?;
+    Ok(current)
+}
+
+fn update_in_tx(conn: &Connection, issue: &Issue, attrs: UpdateIssue) -> Result<Issue> {
     let mut current = issue.clone();
     if let Some(status) = attrs.status.clone() {
-        current = move_issue(&tx, &current, &status)?;
+        current = move_issue(conn, &current, &status)?;
     }
     let mut rest = attrs;
     rest.status = None;
     if rest.has_non_status() {
-        current = do_update(&tx, &current, rest)?;
+        current = do_update(conn, &current, rest)?;
     }
-    tx.commit()?;
     Ok(current)
 }
 

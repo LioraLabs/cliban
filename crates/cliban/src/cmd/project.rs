@@ -759,7 +759,14 @@ async fn note_add(
     let k = key.clone();
     store
         .call(move |conn| {
-            let cur = projects::fetch_by_key(conn, &k)?;
+            // BEGIN IMMEDIATE: this is a read-modify-write with no CAS, so
+            // without the up-front write lock a concurrent note is silently
+            // lost rather than serialized (CLI-88).
+            let tx = rusqlite::Transaction::new_unchecked(
+                conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            let cur = projects::fetch_by_key(&tx, &k)?;
             let (start, end, found) =
                 cliban_core::sections::find_section(&cur.description, "Notes");
             let new_body = if found {
@@ -775,13 +782,14 @@ async fn note_add(
             let new_desc =
                 cliban_core::sections::replace_section(&cur.description, "Notes", &new_body);
             projects::update(
-                conn,
+                &tx,
                 &cur,
                 UpdateProject {
                     description: Some(new_desc),
                     ..Default::default()
                 },
             )?;
+            tx.commit()?;
             Ok(())
         })
         .await?;
