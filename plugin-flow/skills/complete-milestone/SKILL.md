@@ -153,6 +153,10 @@ If the human chooses discard instead, run `cliban-flow milestone abandon "<miles
 
 Wave tickets are written against the *same* base in parallel, so they collide on whatever is shared. The orchestrator is the serialization point for every shared resource — and the conflicts that matter most are the ones git does **not** mark.
 
+**1. Shared function signatures.** Two tickets extending the same function make incompatible shape decisions — one adds a sixth positional parameter while the other collapses the tail into an options object. The type checker flags it loudly, but the resolution is a design decision spanning both tickets that no single merge resolver can make; the orchestrator decides the shape and relays it.
+
+**2. The same helper invented twice.** Two tickets independently write the same wrapper with different shapes. Neither diff conflicts; the duplication is only visible with both in one tree. At integration, scan the incoming diff for new helpers that duplicate what a sibling already landed.
+
 **3. Serialized shared sequences** (changelog IDs, shared enums, registries). Merge order decides their final order, so put any renumbering through a dispatched ticket and its normal verification gate. Tell agents not to bump a shared version file; the milestone is one unreleased version until finalize.
 
 **4. Path-based pre-commit hooks don't enforce completeness.** A hook firing on "any file under X changed" passes when an agent does *half* a paired change — the section but not the changelog entry, the keyword but not the grammar. Check the both-halves invariant at integration.
