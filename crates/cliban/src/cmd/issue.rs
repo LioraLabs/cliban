@@ -1719,7 +1719,15 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
                         require_section(&issue, anchor, create_section)?;
                         let body = cliban_core::sections::sanitize_section_body(anchor, &body)
                             .map_err(|m| cliban_core::Error::validation("section", &m))?;
-                        upd.description = Some(replace_section(&issue.description, anchor, &body));
+                        let new_desc = replace_section(&issue.description, anchor, &body);
+                        descmd::check_section_structure(
+                            &issue.description,
+                            &new_desc,
+                            anchor,
+                            create_section,
+                        )
+                        .map_err(|m| cliban_core::Error::validation("section", &m))?;
+                        upd.description = Some(new_desc);
                     }
                 }
                 issues::update(&tx, &issue, upd)?;
@@ -3084,6 +3092,8 @@ async fn append_section_cmd(db: &Option<String>, a: AppendSectionArgs) -> CliRes
                 .map_err(|m| cliban_core::Error::validation("section", &m))?;
             let new_desc =
                 cliban_core::sections::append_section(&issue.description, &anchor_job, &text);
+            descmd::check_section_structure(&issue.description, &new_desc, &anchor_job, create)
+                .map_err(|m| cliban_core::Error::validation("section", &m))?;
             let updated = issues::update(
                 &tx,
                 &issue,

@@ -161,6 +161,59 @@ pub fn tick_step(desc: &str, task_n: i32, step_m: i32) -> Result<TickOutcome, St
     )))
 }
 
+/// After a description splice, assert the section structure changed only as
+/// intended: no H2 anchor appears or disappears (except `writing` itself,
+/// when `may_create`), and every section other than `writing` still resolves
+/// to byte-identical content. The whole-document check that catches what
+/// payload sanitization cannot: an unclosed fence swallowing later sections,
+/// and fence-state interactions between the payload and what the description
+/// already holds.
+pub fn check_section_structure(
+    before: &str,
+    after: &str,
+    writing: &str,
+    may_create: bool,
+) -> Result<(), String> {
+    let mut expected = cliban_core::sections::h2_anchors(before);
+    if may_create && !expected.iter().any(|a| a == writing) {
+        expected.push(writing.to_string());
+    }
+    let got = cliban_core::sections::h2_anchors(after);
+    let count = |v: &[String], s: &str| v.iter().filter(|x| x.as_str() == s).count();
+    if let Some(new_anchor) = got.iter().find(|a| count(&got, a) > count(&expected, a)) {
+        return Err(format!(
+            "the write would create a top-level \"## {new_anchor}\" section boundary, \
+             splitting ## {writing}; demote the heading to ### or deeper, or quote \
+             it in a fenced code block"
+        ));
+    }
+    if let Some(lost) = expected.iter().find(|e| count(&expected, e) > count(&got, e)) {
+        return Err(format!(
+            "the write would leave the \"## {lost}\" section unreachable behind an \
+             unclosed code fence; close the fence — if the description already \
+             carries the open fence, repair it first with issue edit \
+             --description-file"
+        ));
+    }
+    // A same-named phantom plus a swallow cancel out in the counts above, so
+    // also require every other section to resolve to the same bytes.
+    for anchor in expected.iter().filter(|a| a.as_str() != writing) {
+        let (s1, e1, ok1) = find_section(before, anchor);
+        let (s2, e2, ok2) = find_section(after, anchor);
+        if ok1
+            && (!ok2
+                || before[s1..e1].trim_end_matches('\n') != after[s2..e2].trim_end_matches('\n'))
+        {
+            return Err(format!(
+                "the write would displace the \"## {anchor}\" section — afterwards it \
+                 would no longer resolve to its current content; demote any heading \
+                 in the payload and close any code fence"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Appends a chronological entry to the "## Activity Log" section. The entry is
 /// formatted as "- <UTC-ts> — <msg>" with the timestamp rendered as minute
 /// precision RFC-3339 UTC. If the section does not exist, one is created at the
@@ -202,48 +255,10 @@ pub fn append_activity_log(desc: &str, msg: &str, ts: DateTime<Utc>) -> Result<S
     };
 
     // Validate the artifact, not the fragment: whether a line is a heading
-    // depends on the whole document's fence state — an unclosed fence in an
-    // earlier entry can make this entry's fenced-looking H2 real, and this
-    // entry's unclosed fence can swallow a later section. So the guard is a
-    // before/after comparison of the description's H2 anchors; the only
-    // change an append may make is creating ## Activity Log itself.
-    let mut expected = cliban_core::sections::h2_anchors(desc);
-    if !ok {
-        expected.push("Activity Log".to_string());
-    }
-    let after = cliban_core::sections::h2_anchors(&new_desc);
-    let count = |v: &[String], s: &str| v.iter().filter(|x| x.as_str() == s).count();
-    if let Some(new_anchor) = after.iter().find(|a| count(&after, a) > count(&expected, a)) {
-        return Err(format!(
-            "log entry would create a top-level \"## {new_anchor}\" section boundary, \
-             splitting ## Activity Log; demote the heading to ### or deeper, or quote \
-             it in a fenced code block"
-        ));
-    }
-    if let Some(lost) = expected.iter().find(|e| count(&expected, e) > count(&after, e)) {
-        return Err(format!(
-            "log entry would leave the \"## {lost}\" section unreachable behind an \
-             unclosed code fence; close the fence — if the description already \
-             carries the open fence, repair it first with issue edit \
-             --description-file"
-        ));
-    }
-    // A same-named phantom plus a swallow cancel out in the counts above, so
-    // also require every pre-existing section to resolve to the same bytes.
-    for anchor in expected.iter().filter(|a| a.as_str() != "Activity Log") {
-        let (s1, e1, ok1) = find_section(desc, anchor);
-        let (s2, e2, ok2) = find_section(&new_desc, anchor);
-        if ok1
-            && (!ok2
-                || desc[s1..e1].trim_end_matches('\n') != new_desc[s2..e2].trim_end_matches('\n'))
-        {
-            return Err(format!(
-                "log entry would displace the \"## {anchor}\" section — after the \
-                 write it would no longer resolve to its current content; demote \
-                 any heading in the entry and close any code fence"
-            ));
-        }
-    }
+    // depends on the whole document's fence state. Structure may change only
+    // by creating ## Activity Log itself; the entry must also be readable
+    // where readers look (checked below).
+    check_section_structure(desc, &new_desc, "Activity Log", true)?;
     // And the entry itself must be readable: appended after an unclosed fence
     // already in ## Activity Log it would be fenced content, reported as
     // written and visible to no reader.

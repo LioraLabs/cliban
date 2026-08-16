@@ -795,6 +795,8 @@ async fn note_add(
             };
             let new_desc =
                 cliban_core::sections::replace_section(&cur.description, "Notes", &new_body);
+            crate::descmd::check_section_structure(&cur.description, &new_desc, "Notes", true)
+                .map_err(|m| cliban_core::Error::validation("note", &m))?;
             projects::update(
                 &tx,
                 &cur,
