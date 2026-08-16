@@ -438,9 +438,124 @@ fn collapse_blank_runs(s: &str) -> String {
     out
 }
 
+/// One entry of a `## Files` section: a ticket's prediction that it will add,
+/// modify, or delete `path`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PredictedChange {
+    /// `A` add, `M` modify, `D` delete — git's own vocabulary.
+    pub status: char,
+    pub path: String,
+}
+
+/// A list item in a `## Files` section: either a parsed prediction or the raw
+/// text of one that does not parse.
+///
+/// Readers skip `Invalid`; `lint` reports it. They are one enum because a
+/// dropped entry and a reported entry must be the same set: an entry silently
+/// ignored by the reader but accepted by the linter is a collision nobody
+/// sees, which is the failure this section exists to prevent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileLine {
+    Change(PredictedChange),
+    Invalid(String),
+}
+
+/// Parse the `## Files` section. Prose lines are ignored, so the section can
+/// carry a sentence of context; only list items are entries, and every list
+/// item must parse. An absent section yields an empty vector.
+pub fn file_lines(desc: &str) -> Vec<FileLine> {
+    let (start, end, found) = find_section(desc, "Files");
+    if !found {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for line in desc[start..end].lines() {
+        let trimmed = line.trim();
+        let Some(item) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+        else {
+            continue;
+        };
+        let item = item.trim();
+        let (status, path) = match item.split_once(char::is_whitespace) {
+            Some((s, p)) => (s, p.trim()),
+            None => (item, ""),
+        };
+        let mut chars = status.chars();
+        match (chars.next(), chars.next(), path.is_empty()) {
+            (Some(s @ ('A' | 'M' | 'D')), None, false) => {
+                out.push(FileLine::Change(PredictedChange {
+                    status: s,
+                    path: path.to_string(),
+                }));
+            }
+            _ => out.push(FileLine::Invalid(item.to_string())),
+        }
+    }
+    out
+}
+
+/// The parseable entries of a `## Files` section, for readers that only care
+/// about what the ticket claims it will touch.
+pub fn predicted_changes(desc: &str) -> Vec<PredictedChange> {
+    file_lines(desc)
+        .into_iter()
+        .filter_map(|l| match l {
+            FileLine::Change(c) => Some(c),
+            FileLine::Invalid(_) => None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_lines_parses_entries_and_ignores_prose() {
+        let desc = "## Spec\n\nwords\n\n## Files\n\nPredicted, not a contract.\n\n\
+                    - M crates/core/src/lib.rs\n- A crates/core/tests/new.rs\n\
+                    - D old/gone.rs\n\n## Notes\n\n- M not/in/files.rs\n";
+        assert_eq!(
+            predicted_changes(desc),
+            vec![
+                PredictedChange {
+                    status: 'M',
+                    path: "crates/core/src/lib.rs".into()
+                },
+                PredictedChange {
+                    status: 'A',
+                    path: "crates/core/tests/new.rs".into()
+                },
+                PredictedChange {
+                    status: 'D',
+                    path: "old/gone.rs".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn file_lines_flag_unparseable_items_rather_than_dropping_them() {
+        let desc = "## Files\n\n- X bad/status.rs\n- M \n- justapath.rs\n- m lower/case.rs\n";
+        let lines = file_lines(desc);
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        assert!(lines.iter().all(|l| matches!(l, FileLine::Invalid(_))));
+        // A path containing spaces is kept verbatim: paths may contain them.
+        assert_eq!(
+            predicted_changes("## Files\n\n- M a path/with spaces.rs\n"),
+            vec![PredictedChange {
+                status: 'M',
+                path: "a path/with spaces.rs".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn no_files_section_is_not_an_error() {
+        assert!(file_lines("## Spec\n\nnothing here\n").is_empty());
+    }
 
     #[test]
     fn find_section_returns_the_content_range() {

@@ -55,6 +55,22 @@ pub fn lint_description(desc: &str) -> Vec<Finding> {
         warn(&mut findings, "no ## Spec section".to_string());
     }
 
+    // A `## Files` entry that does not parse is dropped by every reader, so one
+    // typo silently removes the ticket from wave collision detection and two
+    // agents land on the same file. That is the failure the section exists to
+    // prevent, so a malformed entry is an error rather than a warning.
+    for line in cliban_core::sections::file_lines(desc) {
+        if let cliban_core::sections::FileLine::Invalid(text) = line {
+            err(
+                &mut findings,
+                format!(
+                    "## Files entry \"{text}\" is not \"<A|M|D> <path>\" — \
+                     collision detection will not see it"
+                ),
+            );
+        }
+    }
+
     // Duplicate anchors: every section tool resolves the first, so the rest
     // are unaddressable — the residue of an entry that split the description.
     // Exact match, because find_section resolves anchors case-sensitively.

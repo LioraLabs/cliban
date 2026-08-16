@@ -58,6 +58,80 @@ fn waves_add_advisory_open_milestone_chains() {
     assert!(table.contains("chains: [CLI-1, CLI-2, CLI-3]"), "{table}");
 }
 
+fn files(paths: &[&str]) -> String {
+    let mut s = String::from("## Spec\n\nwhat it does\n\n## Files\n\n");
+    for p in paths {
+        s.push_str(&format!("- M {p}\n"));
+    }
+    s
+}
+
+// Two tickets that would run at the same time and predict touching one path
+// are joined, so one implementer takes them in sequence.
+#[test]
+fn waves_chain_same_wave_tickets_that_predict_one_path() {
+    let db = std::env::temp_dir().join(format!("cliban_waves_collide_{}.db", std::process::id()));
+    let db = db.to_str().unwrap();
+    run(db, &["project", "add", "CLI", "Cliban"]);
+    run(db, &["milestone", "add", "M", "-p", "CLI"]);
+    let a = files(&["src/shared.rs", "src/only_a.rs"]);
+    let b = files(&["src/shared.rs"]);
+    let c = files(&["src/only_c.rs"]);
+    run(db, &["issue", "add", "a", "-p", "CLI", "-m", "M", "--description", &a]);
+    run(db, &["issue", "add", "b", "-p", "CLI", "-m", "M", "--description", &b]);
+    run(db, &["issue", "add", "c", "-p", "CLI", "-m", "M", "--description", &c]);
+
+    let raw = run(db, &["milestone", "waves", "M", "-p", "CLI", "--json"]);
+    let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(
+        json["waves"],
+        serde_json::json!([["CLI-1", "CLI-2", "CLI-3"]]),
+        "{raw}"
+    );
+    assert_eq!(
+        json["chains"],
+        serde_json::json!([["CLI-1", "CLI-2"]]),
+        "{raw}"
+    );
+    assert_eq!(
+        json["collisions"],
+        serde_json::json!([{"keys": ["CLI-1", "CLI-2"], "path": "src/shared.rs"}]),
+        "{raw}"
+    );
+
+    let table = run(db, &["milestone", "waves", "M", "-p", "CLI", "--table"]);
+    assert!(
+        table.contains("collision: src/shared.rs predicted by CLI-1, CLI-2"),
+        "{table}"
+    );
+}
+
+// The discriminator: tickets in DIFFERENT waves are already serialised by the
+// dependency graph, so a shared path is not a collision. An implementation
+// that intersected predictions across the whole milestone rather than within
+// one wave would chain these two, and this fixture is what catches it.
+#[test]
+fn waves_do_not_collide_tickets_the_graph_already_serialises() {
+    let db = std::env::temp_dir().join(format!("cliban_waves_nocollide_{}.db", std::process::id()));
+    let db = db.to_str().unwrap();
+    run(db, &["project", "add", "CLI", "Cliban"]);
+    run(db, &["milestone", "add", "M", "-p", "CLI"]);
+    let shared = files(&["src/shared.rs"]);
+    run(db, &["issue", "add", "first", "-p", "CLI", "-m", "M", "--description", &shared]);
+    run(db, &["issue", "add", "second", "-p", "CLI", "-m", "M", "--description", &shared]);
+    run(db, &["issue", "edit", "CLI-2", "--blocked-by", "CLI-1"]);
+
+    let raw = run(db, &["milestone", "waves", "M", "-p", "CLI", "--json"]);
+    let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(json["collisions"], serde_json::json!([]), "{raw}");
+    // Still chained, but by the blocking run and in dependency order.
+    assert_eq!(
+        json["chains"],
+        serde_json::json!([["CLI-1", "CLI-2"]]),
+        "{raw}"
+    );
+}
+
 // A serialised spine is where one implementer saves the most: same surface,
 // one wave after another. Fan-out is where the work genuinely splits.
 #[test]

@@ -296,6 +296,14 @@ fn get_row(conn: &Connection, project_id: i64, name: &str) -> Result<Option<Mile
 /// safe to start once waves 0..N have finished. Derived from the `blocks`
 /// edges among the milestone's own open issues; done issues count as satisfied
 /// dependencies and are listed separately.
+/// One path that more than one ticket in the same wave predicts touching.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Collision {
+    pub path: String,
+    /// The colliding tickets, sorted.
+    pub keys: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Waves {
     /// Layers of issue keys: everything in `waves[n]` has all its blockers in
@@ -307,10 +315,14 @@ pub struct Waves {
     /// this milestone. They cannot be scheduled by finishing the milestone's
     /// own waves.
     pub external_blocked: Vec<String>,
-    /// Advisory same-implementer groups: `related_to` components (sorted) and
-    /// linear runs of the intra-milestone blocking graph (in dependency order).
+    /// Advisory same-implementer groups: `related_to` components (sorted),
+    /// linear runs of the intra-milestone blocking graph (in dependency order),
+    /// and same-wave tickets predicted to touch one path (sorted).
     /// Never scheduling edges; `waves` alone decides what may start.
     pub chains: Vec<Vec<String>>,
+    /// Why some tickets were joined: one entry per path that more than one
+    /// ticket in a single wave predicts touching, in its `## Files` section.
+    pub collisions: Vec<Collision>,
 }
 
 /// Partition the milestone's open, non-archived issues into dependency waves
@@ -326,17 +338,25 @@ pub fn waves(conn: &Connection, project_key: &str, name: &str) -> Result<Waves> 
     struct Node {
         key: String,
         done: bool,
+        /// Paths this ticket predicts it will touch, from its `## Files`
+        /// section. Empty when it has none, which is the pre-feature default.
+        predicted: Vec<String>,
     }
-    let sql = "SELECT id, key, status FROM issues \
+    let sql = "SELECT id, key, status, description FROM issues \
                WHERE milestone_id = ?1 AND archived = 0 ORDER BY position, key";
     let mut stmt = conn.prepare(sql)?;
     let nodes: HashMap<i64, Node> = stmt
         .query_map(params![milestone.id], |r| {
+            let description: String = r.get::<_, Option<String>>(3)?.unwrap_or_default();
             Ok((
                 r.get::<_, i64>(0)?,
                 Node {
                     key: r.get(1)?,
                     done: r.get::<_, String>(2)? == crate::schema::DONE_STATUS,
+                    predicted: crate::sections::predicted_changes(&description)
+                        .into_iter()
+                        .map(|c| c.path)
+                        .collect(),
                 },
             ))
         })?
@@ -468,6 +488,49 @@ pub fn waves(conn: &Connection, project_key: &str, name: &str) -> Result<Waves> 
             }
         }
     }
+    // Tickets in one wave are the ones that would run at the same time, so a
+    // path two of them both predict touching is the collision worth catching.
+    // git marks only some of these, and the ones it does not mark — a helper
+    // invented twice, a signature changed two ways — are the expensive ones.
+    // Joining them is an edge in the same component walk that serves
+    // `related_to`, so one implementer takes them in sequence and the second
+    // starts from a tree that already contains the first.
+    let mut collisions: Vec<Collision> = Vec::new();
+    let by_key: HashMap<&str, i64> = nodes.iter().map(|(id, n)| (n.key.as_str(), *id)).collect();
+    for layer in &waves_out {
+        let mut by_path: HashMap<&str, Vec<i64>> = HashMap::new();
+        for key in layer {
+            let Some(id) = by_key.get(key.as_str()) else {
+                continue;
+            };
+            for path in &nodes[id].predicted {
+                let sharers = by_path.entry(path.as_str()).or_default();
+                if !sharers.contains(id) {
+                    sharers.push(*id);
+                }
+            }
+        }
+        let mut paths: Vec<&str> = by_path
+            .iter()
+            .filter(|(_, ids)| ids.len() > 1)
+            .map(|(path, _)| *path)
+            .collect();
+        paths.sort_unstable();
+        for path in paths {
+            let ids = &by_path[path];
+            for pair in ids.windows(2) {
+                related.entry(pair[0]).or_default().push(pair[1]);
+                related.entry(pair[1]).or_default().push(pair[0]);
+            }
+            let mut keys: Vec<String> = ids.iter().map(|id| nodes[id].key.clone()).collect();
+            keys.sort();
+            collisions.push(Collision {
+                path: path.to_string(),
+                keys,
+            });
+        }
+    }
+
     let mut open: Vec<i64> = nodes.keys().copied().filter(schedulable).collect();
     open.sort_by(|a, b| nodes[a].key.cmp(&nodes[b].key));
     let mut seen = HashSet::new();
@@ -559,5 +622,6 @@ pub fn waves(conn: &Connection, project_key: &str, name: &str) -> Result<Waves> 
         done: done_sorted,
         external_blocked: external_keys,
         chains,
+        collisions,
     })
 }
