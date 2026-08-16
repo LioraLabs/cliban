@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# related tickets are advisory same-implementer chains.
+# a chain staffs one implementer; it never schedules.
 set -uo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -12,10 +12,12 @@ has() { grep -Fiq -- "$2" "$1" || { printf 'missing %s in %s\n' "$2" "$1" >&2; f
 has "$scope" 'related_to'
 has "$scope" 'shared context'
 has "$scope" 'user approves'
-has "$complete" 'same implementer'
-has "$complete" 'sequentially'
+has "$complete" 'never schedule'
+has "$complete" 'one implementer'
+has "$complete" 'order printed'
+has "$complete" 'linear run'
 has "$complete" 'current milestone tip'
-has "$complete" 'split or extend'
+has "$complete" 'Split a chain only when'
 has "$complete" 'worktrees or branches'
 
 exit "$failed"

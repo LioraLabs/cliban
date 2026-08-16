@@ -307,7 +307,9 @@ pub struct Waves {
     /// this milestone. They cannot be scheduled by finishing the milestone's
     /// own waves.
     pub external_blocked: Vec<String>,
-    /// Advisory same-implementer groups from `related_to`; never scheduling edges.
+    /// Advisory same-implementer groups: `related_to` components (sorted) and
+    /// linear runs of the intra-milestone blocking graph (in dependency order).
+    /// Never scheduling edges; `waves` alone decides what may start.
     pub chains: Vec<Vec<String>>,
 }
 
@@ -345,47 +347,6 @@ pub fn waves(conn: &Connection, project_key: &str, name: &str) -> Result<Waves> 
         .filter(|n| n.done)
         .map(|n| n.key.clone())
         .collect();
-
-    let mut related: HashMap<i64, Vec<i64>> = HashMap::new();
-    {
-        let mut stmt = conn.prepare(
-            "SELECT from_issue_id, to_issue_id FROM issue_relation WHERE type = 'related_to'",
-        )?;
-        for edge in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))? {
-            let (a, b) = edge?;
-            if nodes.get(&a).is_some_and(|n| !n.done) && nodes.get(&b).is_some_and(|n| !n.done) {
-                related.entry(a).or_default().push(b);
-                related.entry(b).or_default().push(a);
-            }
-        }
-    }
-    let mut open: Vec<i64> = nodes
-        .iter()
-        .filter(|(_, n)| !n.done)
-        .map(|(id, _)| *id)
-        .collect();
-    open.sort_by(|a, b| nodes[a].key.cmp(&nodes[b].key));
-    let mut seen = HashSet::new();
-    let mut chains = Vec::new();
-    for id in open {
-        if !seen.insert(id) || !related.contains_key(&id) {
-            continue;
-        }
-        let mut stack = vec![id];
-        let mut chain = Vec::new();
-        while let Some(next) = stack.pop() {
-            chain.push(nodes[&next].key.clone());
-            for neighbor in related.get(&next).into_iter().flatten() {
-                if seen.insert(*neighbor) {
-                    stack.push(*neighbor);
-                }
-            }
-        }
-        chain.sort();
-        if chain.len() > 1 {
-            chains.push(chain);
-        }
-    }
 
     // Open blockers of every open node, split into edges inside the milestone
     // and gates from outside it.
@@ -484,6 +445,105 @@ pub fn waves(conn: &Connection, project_key: &str, name: &str) -> Result<Waves> 
             "milestone",
             &format!("dependency cycle among: {}", keys.join(", ")),
         ));
+    }
+
+    // Chains staff the schedulable work, so they are derived last, over the
+    // nodes that survived: done, archived, and externally gated issues are all
+    // out. Pairing a real ticket with one this milestone can never start is
+    // advice nobody can take.
+    let schedulable = |id: &i64| {
+        nodes.get(id).is_some_and(|n| !n.done) && !external_blocked.contains(id)
+    };
+
+    let mut related: HashMap<i64, Vec<i64>> = HashMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT from_issue_id, to_issue_id FROM issue_relation WHERE type = 'related_to'",
+        )?;
+        for edge in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))? {
+            let (a, b) = edge?;
+            if schedulable(&a) && schedulable(&b) {
+                related.entry(a).or_default().push(b);
+                related.entry(b).or_default().push(a);
+            }
+        }
+    }
+    let mut open: Vec<i64> = nodes.keys().copied().filter(schedulable).collect();
+    open.sort_by(|a, b| nodes[a].key.cmp(&nodes[b].key));
+    let mut seen = HashSet::new();
+    let mut chains = Vec::new();
+    let mut chained: HashSet<i64> = HashSet::new();
+    for id in open {
+        if !seen.insert(id) || !related.contains_key(&id) {
+            continue;
+        }
+        let mut stack = vec![id];
+        let mut members = Vec::new();
+        while let Some(next) = stack.pop() {
+            members.push(next);
+            for neighbor in related.get(&next).into_iter().flatten() {
+                if seen.insert(*neighbor) {
+                    stack.push(*neighbor);
+                }
+            }
+        }
+        if members.len() > 1 {
+            chained.extend(members.iter().copied());
+            let mut chain: Vec<String> = members.iter().map(|id| nodes[id].key.clone()).collect();
+            chain.sort();
+            chains.push(chain);
+        }
+    }
+
+    // A linear run of blocking edges is the strongest evidence for
+    // same-implementer work: those tickets are serialised by construction and
+    // land on one surface, so one implementer pays comprehension once instead
+    // of once per wave. Fan-in or fan-out ends a run — that is where the work
+    // genuinely parallelises. An explicit `related_to` group already claimed
+    // its members, so a run splits around them rather than restating them.
+    let mut dependents: HashMap<i64, Vec<i64>> = HashMap::new();
+    for (to, blockers) in &intra {
+        for blocker in blockers {
+            dependents.entry(*blocker).or_default().push(*to);
+        }
+    }
+    let mut next: HashMap<i64, i64> = HashMap::new();
+    let mut has_prev: HashSet<i64> = HashSet::new();
+    for (blocker, deps) in &dependents {
+        if deps.len() != 1 || chained.contains(blocker) || !schedulable(blocker) {
+            continue;
+        }
+        let to = deps[0];
+        if chained.contains(&to)
+            || !schedulable(&to)
+            || intra.get(&to).is_none_or(|b| b.len() != 1)
+        {
+            continue;
+        }
+        next.insert(*blocker, to);
+        has_prev.insert(to);
+    }
+    let mut starts: Vec<i64> = next
+        .keys()
+        .copied()
+        .filter(|id| !has_prev.contains(id))
+        .collect();
+    starts.sort_by(|a, b| nodes[a].key.cmp(&nodes[b].key));
+    for start in starts {
+        // Dependency order, not sorted: the run is also the order to work it.
+        let mut chain = vec![nodes[&start].key.clone()];
+        let mut walked: HashSet<i64> = HashSet::from([start]);
+        let mut cur = start;
+        // Unreachable today: a cycle already returned Err above. Cheap
+        // insurance so a future reordering cannot turn this into a hang.
+        while let Some(step) = next.get(&cur) {
+            if !walked.insert(*step) {
+                break;
+            }
+            chain.push(nodes[step].key.clone());
+            cur = *step;
+        }
+        chains.push(chain);
     }
 
     let mut external_keys: Vec<String> = external_blocked
