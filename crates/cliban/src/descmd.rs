@@ -191,8 +191,8 @@ pub fn check_section_structure(
         return Err(format!(
             "the write would leave the \"## {lost}\" section unreachable behind an \
              unclosed code fence; close the fence — if the description already \
-             carries the open fence, repair it first with issue edit \
-             --description-file"
+             carries the open fence, repair it first with a full-description \
+             edit (--description-file)"
         ));
     }
     // A same-named phantom plus a swallow cancel out in the counts above, so
