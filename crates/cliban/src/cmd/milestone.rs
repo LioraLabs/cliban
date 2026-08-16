@@ -725,6 +725,23 @@ async fn apply_edit(
         .call(move |conn| {
             let cur = milestones::get(conn, &call_key, &name)?
                 .ok_or_else(|| cliban_core::Error::NamedNotFound(name.clone()))?;
+            // Unlike an issue, a milestone has no durable rows behind its
+            // ## Activity Log — the section is the only copy of the record,
+            // including the INTEGRATED ledger. A full-replace that loses it
+            // is refused; deliberate deletion means writing the anchor
+            // explicitly in the replacement.
+            if let Some(new_desc) = params.description.as_ref() {
+                if cliban_core::sections::find_section(&cur.description, "Activity Log").2
+                    && !cliban_core::sections::find_section(new_desc, "Activity Log").2
+                {
+                    return Err(cliban_core::Error::validation(
+                        "description",
+                        "the replacement drops ## Activity Log — the milestone's only record; \
+                         carry the section over in the new description (append entries with \
+                         `milestone log`, never a rewrite)",
+                    ));
+                }
+            }
             milestones::update(conn, &cur, params)
         })
         .await?;

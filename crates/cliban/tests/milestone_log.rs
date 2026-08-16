@@ -658,3 +658,88 @@ fn the_message_can_come_from_a_pipe_or_a_file() {
     assert_ne!(r.code, 0);
     assert_eq!(entries(&db).len(), 3, "the refusal must not have written");
 }
+
+#[test]
+fn edit_refuses_to_drop_the_activity_log() {
+    // The section is the milestone's only record — including the INTEGRATED
+    // ledger — so a full-replace that loses it is refused, not recorded.
+    let db = seeded("edit_drop", "## Spec\n\nbody\n");
+    ok(
+        &db,
+        &[
+            "milestone",
+            "log",
+            "Deterministic integration",
+            "-p",
+            "CLI",
+            "an entry worth keeping",
+        ],
+    );
+    let before = description(&db);
+    let r = run(
+        &db,
+        &[
+            "milestone",
+            "edit",
+            "Deterministic integration",
+            "-p",
+            "CLI",
+            "--description",
+            "## Spec\n\nrewritten\n",
+        ],
+    );
+    assert_eq!(r.code, 2, "dropping ## Activity Log must refuse: {}", r.stderr);
+    assert!(
+        r.stderr.contains("Activity Log"),
+        "the refusal names the section: {}",
+        r.stderr
+    );
+    assert_eq!(description(&db), before, "a refused edit changes nothing");
+}
+
+#[test]
+fn edit_that_keeps_the_activity_log_passes() {
+    let db = seeded("edit_keep", "## Spec\n\nbody\n");
+    ok(
+        &db,
+        &[
+            "milestone",
+            "log",
+            "Deterministic integration",
+            "-p",
+            "CLI",
+            "keep me",
+        ],
+    );
+    ok(
+        &db,
+        &[
+            "milestone",
+            "edit",
+            "Deterministic integration",
+            "-p",
+            "CLI",
+            "--description",
+            "## Spec\n\nrewritten\n\n## Activity Log\n\n- 2026-01-01T00:00Z — keep me\n",
+        ],
+    );
+    assert!(description(&db).contains("rewritten"));
+}
+
+#[test]
+fn edit_without_a_log_present_is_unguarded() {
+    let db = seeded("edit_free", "## Spec\n\nbody\n");
+    ok(
+        &db,
+        &[
+            "milestone",
+            "edit",
+            "Deterministic integration",
+            "-p",
+            "CLI",
+            "--description",
+            "totally new\n",
+        ],
+    );
+    assert!(description(&db).contains("totally new"));
+}
