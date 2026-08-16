@@ -469,16 +469,19 @@ pub fn file_lines(desc: &str) -> Vec<FileLine> {
     if !found {
         return Vec::new();
     }
+    let body = &desc[start..end];
     let mut out = Vec::new();
-    for line in desc[start..end].lines() {
-        let trimmed = line.trim();
-        let Some(item) = trimmed
-            .strip_prefix("- ")
-            .or_else(|| trimmed.strip_prefix("* "))
-        else {
-            continue;
-        };
+    // The list parser, not a line scan: it is fence-aware and nesting-aware,
+    // so an entry-shaped line quoted inside a code fence is content rather
+    // than a prediction, and an item written with any valid bullet still
+    // reaches the reader instead of vanishing before it can be reported.
+    for range in top_level_list_items(body) {
+        let item = list_item_body(&body[range]);
         let item = item.trim();
+        if item.is_empty() {
+            out.push(FileLine::Invalid(String::new()));
+            continue;
+        }
         let (status, path) = match item.split_once(char::is_whitespace) {
             Some((s, p)) => (s, p.trim()),
             None => (item, ""),
@@ -556,6 +559,43 @@ mod tests {
     #[test]
     fn no_files_section_is_not_an_error() {
         assert!(file_lines("## Spec\n\nnothing here\n").is_empty());
+    }
+
+    #[test]
+    fn an_entry_quoted_in_a_fence_is_content_not_a_prediction() {
+        // Same bug class this module documents fixing for `##` headings: a
+        // fenced example of the format must not become a real entry.
+        let desc = "## Files\n\nThe format is:\n\n```markdown\n- M example/only.rs\n```\n\n\
+                    - M real/entry.rs\n";
+        assert_eq!(
+            predicted_changes(desc),
+            vec![PredictedChange {
+                status: 'M',
+                path: "real/entry.rs".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn every_valid_bullet_reaches_the_reader() {
+        // A dropped entry is invisible to lint AND to collision detection, so
+        // an entry written with a tab or a `+` must still be seen, and seen as
+        // whatever it is: a change if it parses, an Invalid if it does not.
+        let lines = file_lines("## Files\n\n-\tM tab/bullet.rs\n+ M plus/bullet.rs\n- X bad.rs\n");
+        assert_eq!(
+            lines,
+            vec![
+                FileLine::Change(PredictedChange {
+                    status: 'M',
+                    path: "tab/bullet.rs".into()
+                }),
+                FileLine::Change(PredictedChange {
+                    status: 'M',
+                    path: "plus/bullet.rs".into()
+                }),
+                FileLine::Invalid("X bad.rs".into()),
+            ]
+        );
     }
 
     #[test]

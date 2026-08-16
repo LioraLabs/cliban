@@ -132,6 +132,39 @@ fn waves_do_not_collide_tickets_the_graph_already_serialises() {
     );
 }
 
+// A collision claims its members, so a run passing through one splits around
+// it, exactly as it does around an author-approved `related_to` group. The
+// head is staffed with the ticket it clashes with; the rest of the run stays a
+// run. Nobody appears in two chains.
+#[test]
+fn a_collision_splits_a_run_the_way_a_related_group_does() {
+    let db = std::env::temp_dir().join(format!("cliban_waves_frag_{}.db", std::process::id()));
+    let db = db.to_str().unwrap();
+    run(db, &["project", "add", "CLI", "Cliban"]);
+    run(db, &["milestone", "add", "M", "-p", "CLI"]);
+    let shared = files(&["src/shared.rs"]);
+    run(db, &["issue", "add", "head", "-p", "CLI", "-m", "M", "--description", &shared]);
+    for title in ["mid", "tail"] {
+        run(db, &["issue", "add", title, "-p", "CLI", "-m", "M"]);
+    }
+    run(db, &["issue", "add", "sibling", "-p", "CLI", "-m", "M", "--description", &shared]);
+    run(db, &["issue", "edit", "CLI-2", "--blocked-by", "CLI-1"]);
+    run(db, &["issue", "edit", "CLI-3", "--blocked-by", "CLI-2"]);
+
+    let raw = run(db, &["milestone", "waves", "M", "-p", "CLI", "--json"]);
+    let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(
+        json["chains"],
+        serde_json::json!([["CLI-1", "CLI-4"], ["CLI-2", "CLI-3"]]),
+        "{raw}"
+    );
+    assert_eq!(
+        json["collisions"],
+        serde_json::json!([{"keys": ["CLI-1", "CLI-4"], "path": "src/shared.rs"}]),
+        "{raw}"
+    );
+}
+
 // A serialised spine is where one implementer saves the most: same surface,
 // one wave after another. Fan-out is where the work genuinely splits.
 #[test]
