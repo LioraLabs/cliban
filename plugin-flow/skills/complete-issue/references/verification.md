@@ -21,7 +21,11 @@ missing behavior.
 Keep checks outcome-focused. Avoid mocks of code you own, expectations derived
 by repeating the production algorithm, and assertions that only prove a helper
 was called. Substitute only true system boundaries such as time, randomness,
-external APIs, or impractical storage.
+external APIs, or impractical storage. An assertion inside a callback handed to
+code that catches exceptions is swallowed and proves nothing; assert on state
+observed after the call returns. When no executable seam exists, a manual check
+is acceptable only when disclosed as one — state what was done by hand and what
+it could not observe.
 
 When the Spec and executable evidence disagree, amend the Spec and log the
 decision. Do not quietly reshape the evidence around the implementation.
