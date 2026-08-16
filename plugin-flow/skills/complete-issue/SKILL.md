@@ -46,7 +46,17 @@ whole conversation, so cost grows with the square of your turn count: batch
 independent tool calls in one message, chain sequential shell steps into one
 Bash call, and don't re-read files a prior turn settled. Keep this workflow
 porous: it defines lifecycle invariants, not how to program. Commits are the
-durable work record; choose their cadence. Log only discoveries, dead ends, scope changes,
+durable work record; choose their cadence.
+
+A ticket can outgrow its agent. When re-sent history dwarfs the work each turn
+advances (rule of thumb: past a few hundred thousand cumulative tokens), stop:
+commit what stands, write the handoff, and exit — a fresh agent finishes from
+the board at a fraction of the cost. The handoff is one `issue log` entry
+carrying per-item status against any open review findings, the exact boundary
+of a half-applied refactor, which call sites are already converted, sync
+state, dead ends tried, and any disagreement with a review stated rather than
+dropped. Structure it with `###` subheadings — a top-level `##` is refused at
+write time. Log only discoveries, dead ends, scope changes,
 and decisions. Amend the Spec when evidence disproves it. Promote discovered
 scope instead of absorbing it.
 

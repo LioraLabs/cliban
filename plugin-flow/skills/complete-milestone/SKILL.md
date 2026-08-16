@@ -104,6 +104,13 @@ Activity Log for either the waiver line above or one line carrying `review`,
 The template's verdict satisfies the gate by construction; a reworded one is
 refused with the ticket genuinely reviewed.
 
+After a rejected review, never resume the author — by then the findings are
+the brief, and a fresh implementer starts from them plus any handoff. One
+exception: a fix the orchestrator can name from the finding alone (exact file,
+function, and edit, no re-exploration) it may apply itself in the ticket
+worktree, logged on the ticket and gated by the same fresh re-review as any
+fix; the first re-review bounce sends it to a fresh agent.
+
 ## 4. Sweep running work
 
 Periodically run a cheap, read-only liveness sweep over running and dead agents:
@@ -120,6 +127,12 @@ commits. Structured plans may also have ticked steps. The status output exposes 
 a working agent to perform the sweep. If all signals are empty or
 stale, ask the agent for its current phase and blocker before concluding it is
 stuck; a hard ticket can legitimately stay silent for a long stretch.
+
+Cost is a sweep signal alongside liveness: an agent whose cumulative spend
+dwarfs its remaining work gets ordered to commit, write the handoff
+(shape: `complete-issue`'s Work step), and exit — the observed fresh restart
+finished the same merge at 15% of the runaway's cost, because the handoff had
+externalized the comprehension.
 
 Ask through the agent runtime's `send_message` operation using the agent ID saved at dispatch. If that address is unreachable, apply `complete-issue`'s **Resume exception** before declaring the claimant gone, then use `recover-milestone`'s ticket interpretations: respawn work-bearing tickets in their worktree; for an empty ticket run `cliban issue release <KEY>` and redispatch through `ticket start <KEY>`; for an external blocker run `cliban issue mv <KEY> blocked --note "<why>"` and surface it to the user.
 
