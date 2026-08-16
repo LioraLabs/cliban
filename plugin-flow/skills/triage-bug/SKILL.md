@@ -1,50 +1,51 @@
 ---
 name: triage-bug
-description: "Turn a bug report into a board ticket that someone can actually act on — search for duplicates, try to reproduce, decide whether it's real, then file it with a reproduction, label, and priority. Use when something is reported broken, throwing, failing, or slow and there is no ticket for it yet."
+description: "Turn a bug report into an actionable board ticket: search duplicates, try to reproduce, decide whether it's real, file with reproduction, label, and priority. Use when something is reported broken, throwing, failing, or slow and no ticket exists yet."
 requires_skills: [cliban-workflow]
 ---
 
 # Triage Bug
 
-A report arrives. Decide whether it is real, then leave the board holding something the next person can act on without re-asking the reporter anything.
+Decide whether the report is real, then leave the board holding something the
+next person can act on without re-asking the reporter. Not this skill: an
+existing ticket needing a root cause (`diagnose-issue`); feature work
+(`explore-feature`).
 
-**Load first:** invoke `cliban-flow:cliban-workflow` for the contract (status mapping, where each artifact lands) and `cliban:cliban` for CLI mechanics. Neither loads on its own — reach for them with the Skill tool before the first board action.
+**Load first:** `cliban-flow:cliban-workflow` and `cliban:cliban` — neither
+loads on its own.
 
-**Not this skill:** a ticket that already exists and needs a root cause — that's `diagnose-issue`. Feature work — that's `explore-feature`.
-
-## 1. Search the board before anything else
+## 1. Search the board first
 
 ```bash
-cliban issue ls --search "<symptom terms>" --json    # fuzzy: title, key, labels, description
+cliban issue ls --search "<symptom terms>" --json
 cliban issue ls --search "<the error string>" --json
 ```
 
-Search twice — once for how the *user* described it, once for the literal error text. They rarely match the same tickets.
-
-- **A ticket already covers it** → don't file a second. Add what's new to the existing one (`issue log`, or `append-section` for a new reproduction) and say which key it landed on.
-- **Something adjacent** → note the key; you will link it with `--related-to` when you file.
-
-Duplicate bug tickets are worse than duplicate feature tickets: two people debug the same thing from different halves of the evidence.
+Search twice — the user's words and the literal error text rarely match the
+same tickets. A ticket already covers it → add what's new there (`issue log`,
+or `append-section` for a new reproduction) and say which key. Something
+adjacent → note the key for `--related-to`. A duplicate bug ticket makes two
+people debug the same thing from different halves of the evidence.
 
 ## 2. Try to reproduce
 
-Get the exact invocation, input, environment, and expected-vs-actual from the report. What's missing, go find — the reporter is the last resort, not the first.
-
-The bar is **one command someone else can run**. Not "click around the settings page"; a command, a script, a test invocation, a curl. If the report only supports a manual sequence, write the sequence down as numbered steps and say plainly that it isn't automated yet.
-
-Reproducing is not diagnosing. Stop when the symptom appears — do not start forming theories about why. That's the next skill, and doing it here is how triage turns into an afternoon.
+Get the exact invocation, input, environment, and expected-vs-actual. What's
+missing, go find — the reporter is the last resort. The bar is one command
+someone else can run; when only a manual sequence works, write it as numbered
+steps and say plainly it isn't automated yet. Stop when the symptom appears —
+theories about why are `diagnose-issue`'s job, and forming them here is how
+triage becomes an afternoon.
 
 ## 3. Decide
 
 Exactly one of:
 
-**Real, reproduced.** File it (step 4) with the reproduction.
-
-**Real, not yet reproducible.** File it anyway — a bug you can't yet trigger is still a bug, and losing it is worse than holding it. Record precisely what you tried and what you'd need (environment access, a captured trace, their exact version). Put `**Cannot reproduce yet:**` at the top of the spec so nobody assumes the repro line works.
-
-**Not a bug.** Say so and don't file. Expected behavior, a usage error, a duplicate, or something already fixed on `main`. Explain which, and where the behavior is specified. Filing "just in case" spends someone else's triage time twice.
-
-Genuinely can't tell? That is *Real, not yet reproducible* with a note on what would settle it — not a fourth category, and not a reason to stall.
+- **Real, reproduced** — file it (step 4) with the reproduction.
+- **Real, not yet reproducible** — file it anyway, `**Cannot reproduce
+  yet:**` atop the spec, with what you tried and what would settle it.
+  "Genuinely can't tell" is this category, not a reason to stall.
+- **Not a bug** — expected behavior, a usage error, a duplicate, or already
+  fixed; say which and where the behavior is specified, and don't file.
 
 ## 4. File it
 
@@ -65,20 +66,25 @@ cliban issue add "<symptom, not guessed cause>" --project <KEY> \
 **Expected:** …
 **Actual:** …
 
-**Environment:** version, OS, config that matters. Omit what doesn't.
+**Environment:** version, OS, config that matters.
 
-**First seen / last known good:** a commit, release, or date, when known —
-this is what makes a bisect possible later.
+**First seen / last known good:** commit, release, or date — what makes a
+bisect possible later.
 EOF
 ````
 
-- **Title the symptom, never the cause.** "Ordering collapses after ~50 reorders" survives being wrong; "Fix f64 position drift" becomes a lie the moment the cause turns out to be elsewhere, and it's the first thing the next search matches on.
-- **Priority is impact, not annoyance.** `urgent` = data loss, corruption, or everyone blocked. `high` = a core path broken with no workaround. `medium` = the default, and most bugs. Reach past `medium` only when you can name who is blocked.
-- **Redact secrets** from anything you paste — tokens, keys, customer data. `<REDACTED>` in their place. A pasted log with a live credential is a second incident.
-- No hypotheses in the spec. If you formed one anyway, `issue log` it as a lead — it belongs in the timeline where it's marked as a guess, not in the spec where it reads as a finding.
+- **Title the symptom, never the cause** — a cause-title becomes a lie the
+  moment the cause moves, and the title is what the next search matches.
+- **Priority is impact:** `urgent` = data loss, corruption, or everyone
+  blocked; `high` = a core path with no workaround; `medium` = the default and
+  most bugs. Reach higher only when you can name who is blocked.
+- **Redact secrets** from anything pasted — a log with a live credential is a
+  second incident.
+- Hypotheses go to `issue log` as marked guesses, never into the spec where
+  they read as findings.
 
 ## 5. Hand off
 
-Report the key, the priority, and which it was — reproduced, or not yet.
-
-Then offer the next step: `diagnose-issue` to find the root cause, or `complete-issue` directly when the cause is already obvious from the reproduction and the fix is small. Filing is where this skill ends; starting the work is the user's call.
+Report the key, the priority, and reproduced-or-not. Offer `diagnose-issue`,
+or `complete-issue` directly when the cause is obvious from the reproduction
+and the fix is small. Starting the work is the user's call.

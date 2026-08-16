@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.0
+
+- Rewrite every workflow skill around its happy path: the decided rules stay (the test suite pins them), the battle-story rationale moves to git history. 30% fewer words across the set.
+- Name complete-issue's dead-claimant takeover the **Resume exception** — the name complete-milestone and recover-milestone were already citing without a referent.
+- Lower the prose-diet cap to 1000 lines and complete-issue's cap to 86 to lock the diet in.
+- Replace unobservable spin guards with countable stop conditions: three strikes on the same failing check, acceptance criteria as the finish line, `## Files` as the executor's exploration leash, a two-bounce cap on review ping-pong with re-reviews verdicting only the recorded findings, and the liveness sweep tied to every orchestrator wake instead of "periodically". Drop the self-measured ~200k context exit an agent can't observe; the orchestrator's cost probe orders that exit.
+
 ## 0.10.0
 
 - Staff a chain with one implementer by default, and say why: a linear run of blocking edges is serialised anyway, so dispatching each ticket cold buys no parallelism and re-learns the same surface every wave.

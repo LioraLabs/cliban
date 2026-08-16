@@ -7,74 +7,76 @@ requires_skills: [cliban-workflow]
 # Complete Issue
 
 One ticket, end to end. Load `cliban-flow:cliban-workflow` and `cliban:cliban`
-before the first board action; the dispatcher from the workflow contract owns
-the git and board transitions in both modes.
-The session-start hook surfaces `in-review` candidates: when git or the PR
-proves one merged, run `mv <KEY> done --note "merged as <sha>"`. Linear bridge
-sync is a separate explicit action after lifecycle moves.
+first; the dispatcher owns git and board transitions in both modes. The
+session-start hook surfaces `in-review` candidates: when git or the PR proves
+one merged, run `mv <KEY> done --note "merged as <sha>"`.
 
 ## Start
 
 Run `cliban-flow ticket start <KEY>`. Standalone work starts from `main`;
-milestone-dispatched work starts from the current milestone tip. In dispatched
-mode first export `CLIBAN_ACTOR=agent:<KEY>`, use the supplied worktree, and never
-integrate, move the issue to done, or touch `main` or the milestone branch.
+dispatched work starts from the current milestone tip — first export
+`CLIBAN_ACTOR=agent:<KEY>`, use the supplied worktree, and leave `main`, the
+milestone branch, integration, and the move to done to the orchestrator.
 
-If a claimed in-progress ticket may belong to a dead session, read its `## Plan`,
-`## Activity Log`, and worktree, then ask the claimant; take over only when it
-cannot continue or the orchestrator confirms it ended (`issue release <KEY>` or
-`claim <KEY> --force`) and resume the existing artifacts. Read the issue, its
-Spec and activity, the milestone description, the adapter, the project notes
-`ticket start` printed on stderr (the repo's paid-for lessons;
-`cliban project search` reaches the rest), and the code.
+**Resume exception** — a claimed in-progress ticket that may belong to a dead
+session: read its `## Plan`, `## Activity Log`, and worktree, then
+ask the claimant. Take over only when it cannot continue or the orchestrator confirms
+it ended (`issue release <KEY>` or `claim <KEY> --force`), and resume the
+existing artifacts.
+
+Read the issue, its Spec and activity, the milestone description, the adapter,
+the project notes `ticket start` printed on stderr, and the code.
 
 ## Plan
 
 Write a proportional `## Plan` before implementation and confirm it with
-`issue cat` before execution begins: a sentence suffices; larger work
-may use ordered `### Task N:` headings and checkboxes. Add a mid-ticket review
-checkpoint only where a wrong foundation compounds expensively. Never replace
-the whole description — the board-visible plan is the recoverability guarantee.
+`issue cat` before execution begins — a sentence for small work, `### Task N:`
+headings with checkboxes for large. Add a mid-ticket review checkpoint only
+where a wrong foundation compounds expensively. Never replace the whole
+description: the board-visible plan is the recoverability guarantee.
 
 ## Work
 
-Inspect the installed skills and apply the implementation, debugging, language,
-and review disciplines relevant to this ticket. Every API turn re-reads the
-whole conversation, so cost grows with the square of your turn count: batch
-independent tool calls, chain sequential shell steps, don't re-read settled
-files. When re-sent history still comes to dwarf what a turn advances (rule of
-thumb: past ~200k of accumulated context, or when an orchestrator orders it),
-commit what stands, write the handoff, and exit — a fresh agent finishes from
-the board at a fraction of the cost. The handoff is one `issue log` entry, any markdown — the write keeps
-it inside the entry: status per open review finding, the half-applied
-refactor's exact boundary, converted call sites, sync state, dead ends, and
-disagreements with a review stated, not dropped.
-Keep this workflow porous — lifecycle invariants, not how to program. Commits
-are the durable work record; log only discoveries, dead ends, scope changes,
-and decisions. Amend the Spec when evidence disproves it; promote discovered
-scope instead of absorbing it.
+Inspect the installed skills and apply the disciplines relevant to this
+ticket. The Spec's acceptance criteria are the finish line — work past them is
+gold-plating; promote discovered scope instead of absorbing it, and amend the
+Spec when evidence disproves it. `## Files` is your leash as well as a
+prediction: an edit outside it means stop — amend the section with why and
+re-check that the plan still fits one ticket; reading far beyond it and its
+direct callers is the plan failing, not diligence. **Three strikes:** the same
+check still failing after three materially different attempts is a finding,
+not a loop — log what you learned, then block with the reason or report to
+your orchestrator.
+
+Every turn re-sends the whole conversation: batch independent tool calls,
+chain sequential shell steps, don't re-read settled files. Your orchestrator
+measures your cost and may order an exit; on that order, or when you strike
+out, commit what stands, write the handoff, and exit — a fresh agent finishes
+from the board at a fraction of the cost. The handoff is one `issue log`
+entry: status per open review finding, the half-applied change's exact
+boundary, sync state, dead ends, and disagreements stated. Log discoveries,
+dead ends, and decisions — commits are the durable work record.
 
 ## Prove
 
 Follow [verification.md](references/verification.md): every meaningful claim
-needs executable evidence. Then run the focused checks and the repository's full
-build, lint, typecheck, and test gate that apply. For non-trivial or risky work,
+needs executable evidence. Run the focused checks, then the repository's full
+build, lint, typecheck, and test gate. For non-trivial or risky work,
 standalone mode runs the once-by-default fresh-context review in
 [review.md](references/review.md); dispatched mode requests it at Handoff.
 
 ## Handoff
 
 Commit, then report `confidence: high | medium | low`, `review: skip | run`,
-one-line evidence, and merge risk; use no numeric score. In dispatched mode the
-orchestrator decides pass 2 review and records its verdict or waiver; wait for
-that decision. Run `cliban-flow ticket sync <KEY>`, resolve the conflicts and
-explain each resolution diff, re-run focused and full verification, then
-`cliban-flow ticket ready <KEY>`. Its immutable SHA is the handoff; never commit
-after ready. Standalone work follows the same primitives
-without an orchestrator waiver, then offers merge/PR/discard. Dispatched work
-reports SHA, branch, checks, summary, Spec amendments, and merge risks to its
-orchestrator.
+one-line evidence, and merge risk — no numeric score. In dispatched mode, wait
+for the orchestrator's review decision; it records the verdict or waiver. Then
+run `cliban-flow ticket sync <KEY>`, resolve the conflicts and explain each
+resolution diff, re-run focused and full verification, and run
+`cliban-flow ticket ready <KEY>`. The ready SHA is the immutable handoff —
+never commit after ready. Standalone work follows the same primitives
+without an orchestrator waiver, then offers merge/PR/discard. Dispatched work reports
+SHA, branch, checks, summary, Spec amendments, and merge risks.
 
-Finally, sweep one durable lesson into project notes (search first) only if it
-helps a future ticket — most teach none. If stuck, block with the external
-reason or release the claim.
+Sweep one durable lesson into project notes (search first) only if it helps a
+future ticket — most teach none. If stuck, block with the external reason or
+release the claim.

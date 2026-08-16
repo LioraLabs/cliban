@@ -22,6 +22,11 @@ has "$issue" 'before implementation'
 has "$issue" 'confidence: high | medium | low'
 has "$issue" 'review: skip | run'
 has "$issue" 'durable lesson'
+# observable stop conditions — an agent can count attempts and see ## Files,
+# where it cannot measure its own context.
+has "$issue" 'three materially different attempts'
+has "$issue" 'finish line'
+has "$issue" 'leash'
 has "$review" 'once by default'
 has "$review" 'compounds expensively'
 has "$review" 'pass 2'
@@ -49,9 +54,8 @@ has "$workflow" 'ticket ready KEY'
 has "$setup" 'optionally structured'
 has "$adapter" 'optionally structured'
 
-# 75 at CLI-110; +5 for two decided rules — CLI-123's handoff shape and
-# CLI-126's ticket-start prime pointer.
+# set to actual+2 at the 0.11.0 happy-path rewrite plus its anti-spin rules.
 lines=$(wc -l <"$issue")
-[ "$lines" -le 80 ] || { echo "complete-issue is $lines lines" >&2; failed=1; }
+[ "$lines" -le 86 ] || { echo "complete-issue is $lines lines" >&2; failed=1; }
 
 exit "$failed"

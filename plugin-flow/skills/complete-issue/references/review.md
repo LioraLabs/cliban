@@ -44,14 +44,16 @@ A checkpoint-free plan gets one cumulative review. When final review is chosen,
 it always covers the complete ticket diff.
 
 A fix for a pass-2 finding is re-reviewed before `ticket ready` — a rule, not a
-judgment call, and it binds every fix author, the orchestrator included. A fix
-scoped as "free" or "trivial" gets the same gate: twice in one milestone such a
-fix shipped a worse bug than the finding it discharged. The named trap: a
-finding about wording, cosmetics, or a message is never discharged by removing
-the check that produced it. The re-review is a fresh dispatch scoped to the fix
+judgment call, binding every fix author, the orchestrator included, and fixes
+scoped as "free" or "trivial" alike. A finding about wording, cosmetics, or a
+message is never discharged by removing the check that produced it. The
+re-review is a fresh dispatch scoped to the fix
 plus what it could plausibly have broken — not the whole branch again — and a
 fix that bounces at re-review goes to a fresh implementer with the findings as
-the brief, not another iteration by the same author.
+the brief, not another iteration by the same author. A re-review verdicts the
+fix against the recorded findings: new Critical or Important findings outside
+the fix's blast radius are new work for the orchestrator, not a wider bounce,
+and new Minor findings never bounce.
 
 A sync resolution that changes behavior gets one focused fresh-context review
 over the resolution diff. Mechanical combinations need only renewed executable

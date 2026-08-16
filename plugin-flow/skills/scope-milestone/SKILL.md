@@ -1,63 +1,56 @@
 ---
 name: scope-milestone
-description: "Grill a cliban ticket or milestone until every decision that changes the slicing is settled, then fill it with tracer-bullet tickets carrying native blocking edges. Use when the user wants a feature scoped, sliced, ticketed, grilled, or turned into a milestone — typically on the container explore-feature just created."
+description: "Grill a cliban ticket or milestone until every slicing decision is settled, then fill it with tracer-bullet tickets carrying native blocking edges. Use to scope, slice, ticket, or grill a feature — typically the container explore-feature just created."
 requires_skills: [cliban-workflow]
 ---
 
 # Scope Milestone
 
-Take a container off the board and make it executable: interrogate the design until nothing affecting the slicing is still assumed, cut it into tracer bullets, publish them with real dependency edges. `explore-feature` diverges; this converges.
+Make a container executable: interrogate the design until nothing affecting
+the slicing is still assumed, cut it into tracer bullets, publish them with
+real dependency edges. `explore-feature` diverges; this converges.
 
-**Load first:** invoke `cliban-flow:cliban-workflow` for the contract (status mapping, where each artifact lands) and `cliban:cliban` for CLI mechanics. Neither loads on its own — reach for them with the Skill tool before the first board action.
+**Load first:** `cliban-flow:cliban-workflow` and `cliban:cliban` — neither
+loads on its own.
 
 ## 1. Read the container
 
-You are handed a milestone name or an issue key. Read it first — it carries the design, and the conversation that produced it may be long gone.
-
 ```bash
 cliban milestone show "<name>" --project <KEY> --json   # description = the spec
-cliban issue show <KEY> --json                          # or, for a ticket
-cliban issue cat <KEY> --section spec
+cliban issue cat <KEY> --section spec                   # or, for a ticket
 ```
 
-`issue_count: 0` means a fresh milestone waiting to be filled. **Non-zero means someone already put tickets here** — stop and ask whether you're adding to that set, rather than publishing a second overlapping batch.
-
-Given neither a name nor a key, ask. If the user wants to scope from a conversation with nothing on the board yet, that's `explore-feature` — offer it rather than improvising a container.
-
-Then read the surroundings: `issue ls --all --json` for collisions, `project search <KEY> "<terms>" --json` for lessons that constrain the design.
+`issue_count: 0` is a fresh milestone waiting to be filled. Non-zero means
+tickets already exist — stop and ask whether you're adding to that set. Given
+neither a name nor a key, ask; nothing on the board yet is `explore-feature`'s
+job. Then read the surroundings: `issue ls --all --json` for collisions,
+`project search <KEY> "<terms>" --json` for lessons that constrain the design.
 
 ## 2. Grill toward the slice boundaries
 
-Interrogate the design as a **tree**: every decision branches into the decisions hanging off it. The **frontier** is every decision whose prerequisites are settled — what's answerable now, without guessing at answers you haven't heard.
-
-The spec's **Open decisions** are your opening frontier. Start there rather than re-deriving it.
-
-Ask the whole frontier in one round, numbered, each with your recommendation:
+The design is a decision tree; the **frontier** is every decision whose
+prerequisites are settled. The spec's **Open decisions** are the opening
+frontier. Ask the whole frontier in one round, numbered, each with your
+recommendation:
 
 ```
 ❓ **Q1** — **<title>**: <the question, with options if it's a choice>
-
 ➡️ <your recommended answer, and why>
 ```
 
-Then wait. Each round's answers reshape the tree; recompute and ask the next. A question depending on another still open *this* round belongs to a later one.
-
-- **Facts are your job.** Anything the environment can answer — a file's contents, an API's shape, what the schema does today — go look up. Never bill the user for what a `grep` would settle. A lookup in flight is an unsettled prerequisite: ask the rest of the frontier while it runs.
-- **Decisions are the user's.** Put each one to them and wait.
-
-**Grill toward the slice boundaries.** Prioritise questions whose answers change *where one ticket ends and the next begins* — what can land independently, what must exist before what. A question that cannot change the breakdown or its edges is a question for the executor: note it and move on.
-
-("Slice boundary" partitions work. A **seam**, in `complete-issue`'s verification reference, partitions observability — the boundary a check observes across. Different words on purpose.)
-
-Done when the frontier is empty.
+Wait, recompute the tree from the answers, ask the next round. Facts are your
+job — look up anything a grep settles, asking the rest of the frontier while a
+lookup runs. Decisions are the user's. Prioritise questions that change where
+one ticket ends and the next begins; a question that cannot change the
+breakdown belongs to the executor — note it and move on. Done when the
+frontier is empty.
 
 ## 3. Re-test the shape
 
-`explore-feature` guessed the container's shape before these questions were answered. Check the guess now that they are — same test, better information: can an executor finish this as one coherent change without running out of context?
-
-- **A milestone, as expected** → fill it.
-- **A ticket that is still one slice** → skip to step 5's ticket path.
-- **A ticket that outgrew one context** → promote it. Say so and why; the extra scope you found is worth hearing.
+`explore-feature` guessed the container's shape; re-test it with the answers
+in. A milestone, as expected → fill it. A ticket still one slice → step 5's
+ticket path. A ticket that outgrew one context window → promote it, saying
+why:
 
 ```bash
 cliban milestone add "<name>" --project <KEY> --description-file - <<'EOF'
@@ -65,32 +58,38 @@ cliban milestone add "<name>" --project <KEY> --description-file - <<'EOF'
 EOF
 ```
 
-Then resolve the original ticket — either it becomes the milestone's first slice (`issue edit <KEY> -m "<name>"`, spec narrowed), or it stays as the tracking issue. Never leave it in backlog describing work that now lives elsewhere: `issue ls --ready` will offer it to an executor.
+Then resolve the original ticket — first slice (`issue edit <KEY> -m "<name>"`,
+spec narrowed) or tracking issue — never left in backlog describing work that
+now lives elsewhere, where `issue ls --ready` would offer it to an executor.
 
 ## 4. Draft the slices, then quiz
 
-Cut **tracer bullets**: each a narrow but *complete* path through every layer it touches, demoable on its own, sized to one fresh context. Sizing is also the biggest cost lever: an executor's per-turn cost grows with its accumulated conversation, so a ticket needing ~400 tool calls costs roughly 4× two tickets needing ~200 each — aim for slices an agent can land in ~100–150 tool calls. Prefactoring first — make the change easy, then make the easy change. Give each its blocking edges.
+Cut **tracer bullets**: each a narrow but complete path through every layer it
+touches, demoable alone, sized to ~100–150 tool calls of execution — sizing is
+the biggest cost lever, since an executor's per-turn price grows with its
+accumulated context. Prefactor first — make the change easy, then make the
+easy change. Give each slice its blocking edges.
 
-**Partition along surface boundaries.** Sibling slices that will touch the
-same files collide at merge time in ways git does not mark — duplicated
-helpers, incompatible signature changes — so predicted overlap between
-unblocked siblings is a slicing smell. Two signals are free: the surface each
-draft names, and the repo's own history of which files change together
-(`git log --format= --name-only`). Overlapping slices merge, re-slice along
-the boundary, or take an explicit blocking edge so they never share a wave.
-A shared surface no test can observe fails both ways at once — slices touching
-it always take edges, never a shared wave.
+**Partition along surface boundaries.** Sibling slices touching the same files
+collide at merge in ways git does not mark. Two free signals: the surface each
+draft names, and `git log --format= --name-only` for what changes together.
+Overlapping unblocked siblings merge, re-slice along the boundary, or take an
+explicit blocking edge; a shared surface no test observes always takes edges,
+never a shared wave.
 
-**Wide refactors are the exception.** A mechanical change whose blast radius fans across the codebase can't land green as a tracer bullet. Sequence it **expand → migrate → contract**: add the new form beside the old, migrate call sites in batches sized by blast radius (one ticket each, blocked by the expand, green throughout because the old form still exists), then delete the old form in a ticket blocked by every batch.
+**Wide refactors** sequence expand → migrate → contract: add the new form
+beside the old, migrate call sites in blast-radius-sized batches (one ticket
+each, blocked by the expand, green throughout), then delete the old form in a
+ticket blocked by every batch.
 
-Present the breakdown numbered — title, blocked-by, what it delivers end to end. Ask whether the granularity is right, whether each edge is real or just a habit of ordering, and whether anything should merge or split. **Publish nothing before the user approves.**
-
-When small tickets have shared context but neither blocks the other, suggest a
-`related_to` chain for implementer affinity. Add it only after the user approves.
+Present the breakdown numbered — title, blocked-by, what it delivers end to
+end. Ask whether the granularity is right and whether each edge is real. For
+small tickets with shared context but no edge, suggest a `related_to` chain
+for implementer affinity. **Publish nothing before the user approves.**
 
 ## 5. Publish
 
-**Ticket path** — nothing to create; fold the grill's answers into the spec it already has:
+**Ticket path** — fold the grill's answers into the spec it already has:
 
 ```bash
 cliban issue edit <KEY> --section spec --description-file - <<'EOF'
@@ -100,7 +99,9 @@ cliban issue edit <KEY> --section spec --description-file - <<'EOF'
 EOF
 ```
 
-**Milestone path** — the milestone already exists (from `explore-feature`, or step 3). Do not create it again; `milestone add` on an existing name errors. Add issues **in dependency order** so every `--blocked-by` can name a real key:
+**Milestone path** — the milestone already exists; `milestone add` on an
+existing name errors. Add issues in dependency order so every `--blocked-by`
+names a real key; each `--json` echo carries the new key for the next ticket:
 
 ```bash
 cliban issue add "<title>" --project <KEY> -m "<milestone name>" \
@@ -119,31 +120,34 @@ cliban issue add "<title>" --project <KEY> -m "<milestone name>" \
 
 - M path/it/will/edit.rs
 - A path/it/will/create.rs
-- D path/it/will/delete.rs
 EOF
 ```
 
-Each `issue add --json` echoes the new key — read it for the next ticket's `--blocked-by` instead of re-listing the milestone.
+Either path owes the contract:
 
-Five things this stage owes the contract, on either path:
-
-- **`## Spec` only**, via `--section spec`. `## Plan` belongs to the executor, written against a fresh read of the code.
-- **Edges are relations, never prose.** A `Blocked by:` line in a description is invisible to `issue ls --ready` and `milestone waves`, which is the entire reason the edges exist.
-- **`## Files` carries the predicted changeset**, one `A`/`M`/`D` entry per path, from the audit you already did. `milestone waves` intersects these within a wave and joins the tickets that clash, so the prediction is the difference between catching a collision at scope time and catching it at merge time. Predict, don't guarantee; the executor amends it when the code disagrees. `issue lint` rejects a malformed entry, because one every reader drops is a ticket silently missing from collision detection.
-- **No file paths or code snippets in the prose** — outside `## Files` they go stale fastest and nothing reads them. Exception: a snippet encoding a decision more precisely than prose can (a schema, a state machine, a type shape), trimmed to the decision.
-- **`--priority medium` explicitly.** The CLI defaults to `none`.
+- **`## Spec` only** — `## Plan` belongs to the executor, written against a
+  fresh read of the code.
+- **Edges are relations, never prose** — a `Blocked by:` line in a description
+  is invisible to `issue ls --ready` and `milestone waves`.
+- **`## Files` carries the predicted changeset**, one `A`/`M`/`D` entry per
+  path; `milestone waves` intersects these within a wave to catch collisions
+  at scope time, and the executor treats it as its leash on exploration.
+  Predict, don't guarantee — the executor amends it.
+  `issue lint` rejects a malformed entry.
+- **No file paths or code in the prose** outside `## Files`, except a snippet
+  encoding a decision more precisely than prose can, trimmed to the decision.
+- **`--priority medium` explicitly** — the CLI defaults to `none`.
 
 ## 6. Show the waves and hand off
 
-On the ticket path there's no graph — report the sharpened ticket and offer `complete-issue`.
-
-On the milestone path, let the CLI prove the graph is executable:
+Ticket path: report the sharpened ticket and offer `complete-issue`. Milestone
+path — let the CLI prove the graph is executable:
 
 ```bash
 cliban milestone waves --project <KEY> "<milestone name>" --json
-# Waves: [CLI-12] -> [CLI-13, CLI-15] -> [CLI-14]
 ```
 
-A cycle exits non-zero naming the issues — fix the edges before handing off. A non-empty `external_blocked` means something outside the milestone gates this work; say so, because finishing waves won't free it.
-
-Then offer `complete-milestone` (the whole thing, one agent per ticket, in wave order) or `complete-issue` (one ticket now). Starting execution is the user's call; publishing is where this skill ends.
+A cycle exits non-zero naming the issues — fix the edges before handing off.
+Non-empty `external_blocked`: say so; finishing waves won't free it. Then
+offer `complete-milestone` or `complete-issue`. Starting execution is the
+user's call; publishing is where this skill ends.
