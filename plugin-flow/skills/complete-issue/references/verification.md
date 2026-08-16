@@ -16,7 +16,9 @@ derive expected values independently from the implementation.
 Test-first is the default for behavior changes. If the proposed test passes on
 the untouched code, either the behavior already exists or the check observes the
 wrong seam. A compile error or broken fixture is setup failure, not evidence of
-missing behavior.
+missing behavior. A test must fail if the behavior breaks: for code that
+converges or reconciles, that means feeding a pass its own output — one pass
+proves nothing about a fixpoint.
 
 Keep checks outcome-focused. Avoid mocks of code you own, expectations derived
 by repeating the production algorithm, and assertions that only prove a helper
