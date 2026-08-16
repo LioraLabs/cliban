@@ -88,6 +88,56 @@ fn waves_chain_a_linear_blocking_run_until_it_forks() {
     );
 }
 
+// A chain is advice about who works what next, so it must not name a ticket
+// this milestone can never start.
+#[test]
+fn waves_keep_externally_gated_issues_out_of_chains() {
+    let db = std::env::temp_dir().join(format!("cliban_waves_gated_{}.db", std::process::id()));
+    let db = db.to_str().unwrap();
+    run(db, &["project", "add", "CLI", "Cliban"]);
+    run(db, &["milestone", "add", "M", "-p", "CLI"]);
+    for title in ["head", "gated", "tail"] {
+        run(db, &["issue", "add", title, "-p", "CLI", "-m", "M"]);
+    }
+    run(db, &["issue", "add", "outsider", "-p", "CLI"]);
+    // CLI-2 is blocked from inside the milestone AND from outside it, so the
+    // run CLI-1 -> CLI-2 -> CLI-3 is unschedulable from CLI-2 onward.
+    run(db, &["issue", "edit", "CLI-2", "--blocked-by", "CLI-1"]);
+    run(db, &["issue", "edit", "CLI-3", "--blocked-by", "CLI-2"]);
+    run(db, &["issue", "edit", "CLI-2", "--blocked-by", "CLI-4"]);
+
+    let raw = run(db, &["milestone", "waves", "M", "-p", "CLI", "--json"]);
+    let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(json["chains"], serde_json::json!([]), "{raw}");
+    assert_eq!(
+        json["external_blocked"],
+        serde_json::json!(["CLI-2", "CLI-3"]),
+        "{raw}"
+    );
+}
+
+// Reversed key order: a run is emitted in dependency order, so sorting it
+// would be a regression this fixture catches and an ascending one would not.
+#[test]
+fn waves_emit_a_run_in_dependency_order_not_key_order() {
+    let db = std::env::temp_dir().join(format!("cliban_waves_order_{}.db", std::process::id()));
+    let db = db.to_str().unwrap();
+    run(db, &["project", "add", "CLI", "Cliban"]);
+    run(db, &["milestone", "add", "M", "-p", "CLI"]);
+    for title in ["last", "first"] {
+        run(db, &["issue", "add", title, "-p", "CLI", "-m", "M"]);
+    }
+    run(db, &["issue", "edit", "CLI-1", "--blocked-by", "CLI-2"]);
+
+    let raw = run(db, &["milestone", "waves", "M", "-p", "CLI", "--json"]);
+    let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(
+        json["chains"],
+        serde_json::json!([["CLI-2", "CLI-1"]]),
+        "{raw}"
+    );
+}
+
 // An author-approved `related_to` group outranks an inferred run, so the run
 // splits around it instead of claiming its members twice.
 #[test]
