@@ -656,7 +656,12 @@ async fn edit(
     let store = store_open::open(db).await?;
     let p = store
         .call(move |conn| {
-            let cur = projects::fetch_by_key(conn, &key)?;
+            // BEGIN IMMEDIATE: read-modify-write, same class as note add (CLI-88).
+            let tx = rusqlite::Transaction::new_unchecked(
+                conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            let cur = projects::fetch_by_key(&tx, &key)?;
             if let Some(expected) = if_updated_at.as_deref() {
                 let actual = format_usec(cur.updated_at);
                 if actual != expected {
@@ -673,7 +678,7 @@ async fn edit(
             let new_name = name.unwrap_or_else(|| cur.name.clone());
             let new_desc = description.unwrap_or_else(|| cur.description.clone());
             projects::update(
-                conn,
+                &tx,
                 &cur,
                 UpdateProject {
                     name: Some(new_name),
@@ -683,9 +688,9 @@ async fn edit(
                 },
             )?;
             if let Some(days) = days {
-                let cur = projects::fetch_by_key(conn, &key)?;
+                let cur = projects::fetch_by_key(&tx, &key)?;
                 projects::update(
-                    conn,
+                    &tx,
                     &cur,
                     UpdateProject {
                         auto_archive_done_after_days: Some(Some(days)),
@@ -693,7 +698,9 @@ async fn edit(
                     },
                 )?;
             }
-            projects::fetch_by_key(conn, &key)
+            let out = projects::fetch_by_key(&tx, &key);
+            tx.commit()?;
+            out
         })
         .await?;
     confirm_project(&p, "updated project", mode)
@@ -711,16 +718,23 @@ async fn set_archived(
     let store = store_open::open(db).await?;
     let p = store
         .call(move |conn| {
-            let cur = projects::fetch_by_key(conn, &key)?;
-            projects::update(
+            // BEGIN IMMEDIATE: read-modify-write (CLI-88).
+            let tx = rusqlite::Transaction::new_unchecked(
                 conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            let cur = projects::fetch_by_key(&tx, &key)?;
+            projects::update(
+                &tx,
                 &cur,
                 UpdateProject {
                     archived: Some(archived),
                     ..Default::default()
                 },
             )?;
-            projects::fetch_by_key(conn, &key)
+            let out = projects::fetch_by_key(&tx, &key);
+            tx.commit()?;
+            out
         })
         .await?;
     Ok(p)
@@ -759,7 +773,14 @@ async fn note_add(
     let k = key.clone();
     store
         .call(move |conn| {
-            let cur = projects::fetch_by_key(conn, &k)?;
+            // BEGIN IMMEDIATE: this is a read-modify-write with no CAS, so
+            // without the up-front write lock a concurrent note is silently
+            // lost rather than serialized (CLI-88).
+            let tx = rusqlite::Transaction::new_unchecked(
+                conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            let cur = projects::fetch_by_key(&tx, &k)?;
             let (start, end, found) =
                 cliban_core::sections::find_section(&cur.description, "Notes");
             let new_body = if found {
@@ -775,13 +796,14 @@ async fn note_add(
             let new_desc =
                 cliban_core::sections::replace_section(&cur.description, "Notes", &new_body);
             projects::update(
-                conn,
+                &tx,
                 &cur,
                 UpdateProject {
                     description: Some(new_desc),
                     ..Default::default()
                 },
             )?;
+            tx.commit()?;
             Ok(())
         })
         .await?;

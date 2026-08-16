@@ -11,6 +11,7 @@ use cliban_core::Store;
 
 use chrono::Utc;
 use rusqlite::OptionalExtension;
+use rusqlite::{Transaction, TransactionBehavior};
 
 use crate::descmd;
 use crate::descmd::find_section;
@@ -1706,7 +1707,10 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
         let create_section = a.create_section;
         store
             .call(move |conn| {
-                let issue = issues::get_by_key(conn, &lookup)?
+                // BEGIN IMMEDIATE: take the write lock before the read so
+                // contention lands in the class busy_timeout retries (CLI-88).
+                let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+                let issue = issues::get_by_key(&tx, &lookup)?
                     .ok_or_else(|| cliban_core::Error::NamedNotFound(lookup.clone()))?;
                 check_cas(&issue, cas_check.as_deref())?;
                 let mut upd = upd;
@@ -1718,7 +1722,8 @@ async fn edit(db: &Option<String>, a: EditArgs) -> CliResult<()> {
                         upd.description = Some(replace_section(&issue.description, anchor, &body));
                     }
                 }
-                issues::update(conn, &issue, upd)?;
+                issues::update(&tx, &issue, upd)?;
+                tx.commit()?;
                 Ok(())
             })
             .await?;
@@ -1890,7 +1895,7 @@ async fn log(db: &Option<String>, a: LogArgs, teach: Option<Teach>) -> CliResult
     let entry = msg.clone();
     store
         .call(move |conn| {
-            let tx = conn.unchecked_transaction()?;
+            let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
             let issue = issues::get_by_key(&tx, &lookup)?
                 .ok_or_else(|| cliban_core::Error::NamedNotFound(lookup.clone()))?;
             let new_desc = descmd::append_activity_log(&issue.description, &entry, now)
@@ -1939,7 +1944,7 @@ async fn tick(db: &Option<String>, a: TickArgs) -> CliResult<()> {
     let step = a.step;
     let (updated_at, noop, task) = store
         .call(move |conn| {
-            let tx = conn.unchecked_transaction()?;
+            let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
             let issue = issues::get_by_key(&tx, &lookup)?
                 .ok_or_else(|| cliban_core::Error::NamedNotFound(lookup.clone()))?;
             let task = resolve_task(task_arg, &issue.description)?;
@@ -2035,7 +2040,7 @@ async fn promote(db: &Option<String>, a: PromoteArgs) -> CliResult<()> {
 
     let (new_key, task) = store
         .call(move |conn| {
-            let tx = conn.unchecked_transaction()?;
+            let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
 
             // 1. Read parent issue + project.
             let parent: Option<(i64, i64, String, Option<i64>, i64)> = tx
@@ -3070,7 +3075,9 @@ async fn append_section_cmd(db: &Option<String>, a: AppendSectionArgs) -> CliRes
     let create = a.create_section;
     let issue = store
         .call(move |conn| {
-            let issue = issues::get_by_key(conn, &lookup)?
+            // BEGIN IMMEDIATE, as in `log`: read-modify-write (CLI-88).
+            let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+            let issue = issues::get_by_key(&tx, &lookup)?
                 .ok_or_else(|| cliban_core::Error::NamedNotFound(lookup.clone()))?;
             require_section(&issue, &anchor_job, create)?;
             let text = cliban_core::sections::sanitize_section_body(&anchor_job, &text)
@@ -3078,7 +3085,7 @@ async fn append_section_cmd(db: &Option<String>, a: AppendSectionArgs) -> CliRes
             let new_desc =
                 cliban_core::sections::append_section(&issue.description, &anchor_job, &text);
             let updated = issues::update(
-                conn,
+                &tx,
                 &issue,
                 UpdateIssue {
                     description: Some(new_desc),
@@ -3086,11 +3093,12 @@ async fn append_section_cmd(db: &Option<String>, a: AppendSectionArgs) -> CliRes
                 },
             )?;
             crate::audit::record(
-                conn,
+                &tx,
                 &updated,
                 "edit",
                 &format!("appended to ## {anchor_job}"),
             );
+            tx.commit()?;
             Ok(updated)
         })
         .await?;
