@@ -141,10 +141,16 @@ fields: `ts,key,project,kind,title` + `message/actor/milestone` when set.
 
 ## The description contract
 
-Four H2 anchors are reserved, matched exactly: `## Spec`, `## Plan`,
-`## Activity Log`, `## Notes`. Other H2s are yours; section tools address
-them by verbatim anchor. Plan tasks are `### Task N:` headings; steps are
-column-zero GFM checkboxes (`- [ ] **Step 1: ...**`).
+Five H2 anchors are reserved, matched exactly: `## Spec`, `## Plan`,
+`## Activity Log`, `## Notes`, `## Files`. Other H2s are yours; section tools
+address them by verbatim anchor. Plan tasks are `### Task N:` headings; steps
+are column-zero GFM checkboxes (`- [ ] **Step 1: ...**`).
+
+`## Files` is the ticket's predicted changeset, one `A`/`M`/`D` entry per path
+(`- M crates/core/src/lib.rs`); prose lines between entries are ignored.
+`milestone waves` intersects predictions within a wave and joins the tickets
+that clash, which is why `lint` treats a malformed entry as an error: an entry
+every reader drops is a ticket silently missing from collision detection.
 
 ```bash
 cliban issue edit PROJ-12 --section spec --description-file -   # replace ONE section, others byte-identical

@@ -114,16 +114,23 @@ cliban issue add "<title>" --project <KEY> -m "<milestone name>" \
 - …
 
 **Decisions:** the grill's answers this ticket has to respect.
+
+## Files
+
+- M path/it/will/edit.rs
+- A path/it/will/create.rs
+- D path/it/will/delete.rs
 EOF
 ```
 
 Each `issue add --json` echoes the new key — read it for the next ticket's `--blocked-by` instead of re-listing the milestone.
 
-Four things this stage owes the contract, on either path:
+Five things this stage owes the contract, on either path:
 
 - **`## Spec` only**, via `--section spec`. `## Plan` belongs to the executor, written against a fresh read of the code.
 - **Edges are relations, never prose.** A `Blocked by:` line in a description is invisible to `issue ls --ready` and `milestone waves`, which is the entire reason the edges exist.
-- **No file paths or code snippets** — they go stale fastest. Exception: a snippet encoding a decision more precisely than prose can (a schema, a state machine, a type shape), trimmed to the decision.
+- **`## Files` carries the predicted changeset**, one `A`/`M`/`D` entry per path, from the audit you already did. `milestone waves` intersects these within a wave and joins the tickets that clash, so the prediction is the difference between catching a collision at scope time and catching it at merge time. Predict, don't guarantee; the executor amends it when the code disagrees. `issue lint` rejects a malformed entry, because one every reader drops is a ticket silently missing from collision detection.
+- **No file paths or code snippets in the prose** — outside `## Files` they go stale fastest and nothing reads them. Exception: a snippet encoding a decision more precisely than prose can (a schema, a state machine, a type shape), trimmed to the decision.
 - **`--priority medium` explicitly.** The CLI defaults to `none`.
 
 ## 6. Show the waves and hand off

@@ -55,6 +55,22 @@ pub fn lint_description(desc: &str) -> Vec<Finding> {
         warn(&mut findings, "no ## Spec section".to_string());
     }
 
+    // A `## Files` entry that does not parse is dropped by every reader, so one
+    // typo silently removes the ticket from wave collision detection and two
+    // agents land on the same file. That is the failure the section exists to
+    // prevent, so a malformed entry is an error rather than a warning.
+    for line in cliban_core::sections::file_lines(desc) {
+        if let cliban_core::sections::FileLine::Invalid(text) = line {
+            err(
+                &mut findings,
+                format!(
+                    "## Files entry \"{text}\" is not \"<A|M|D> <path>\" — \
+                     collision detection will not see it"
+                ),
+            );
+        }
+    }
+
     // Duplicate anchors: every section tool resolves the first, so the rest
     // are unaddressable — the residue of an entry that split the description.
     // Exact match, because find_section resolves anchors case-sensitively.
@@ -384,5 +400,23 @@ mod tests {
             !f.iter().any(|f| f.message.contains("tick cannot reach")),
             "{f:?}"
         );
+    }
+
+    #[test]
+    fn a_malformed_files_entry_is_an_error_not_a_warning() {
+        // Silently dropped, it removes the ticket from collision detection.
+        let d = "## Spec\n\ns\n\n## Files\n\n- M good/path.rs\n- X bad/status.rs\n";
+        let f = lint_description(d);
+        let bad: Vec<_> = f.iter().filter(|f| f.message.contains("## Files")).collect();
+        assert_eq!(bad.len(), 1, "{f:?}");
+        assert_eq!(bad[0].severity, Severity::Error, "{f:?}");
+        assert!(bad[0].message.contains("X bad/status.rs"), "{f:?}");
+    }
+
+    #[test]
+    fn a_well_formed_files_section_with_prose_lints_clean() {
+        let d = "## Spec\n\ns\n\n## Files\n\nPredicted, amended when wrong.\n\n\
+                 - A new/file.rs\n- M old/file.rs\n- D gone/file.rs\n";
+        assert!(lint_description(d).is_empty(), "{:?}", lint_description(d));
     }
 }

@@ -1,9 +1,10 @@
 //! Locating H2 sections in the issue/milestone description markdown.
 //!
 //! The description is a contract, not free text: `## Spec`, `## Plan`,
-//! `## Activity Log`, and `## Notes` each have an owner, and every tool that
-//! edits one must leave the others byte-identical. This module is the single
-//! definition of where a section starts and ends.
+//! `## Activity Log`, `## Notes`, and `## Files` each have an owner, and every
+//! tool that edits one must leave the others byte-identical. This module is the
+//! single definition of where a section starts and ends, and of how the one
+//! machine-read section, `## Files`, parses.
 //!
 //! It lives in core rather than in the CLI's `descmd` because the Linear bridge
 //! needs the same boundaries: a re-import replaces `## Spec` and must not
@@ -438,9 +439,200 @@ fn collapse_blank_runs(s: &str) -> String {
     out
 }
 
+/// One entry of a `## Files` section: a ticket's prediction that it will add,
+/// modify, or delete `path`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PredictedChange {
+    /// `A` add, `M` modify, `D` delete — git's own vocabulary.
+    pub status: char,
+    pub path: String,
+}
+
+/// A list item in a `## Files` section: either a parsed prediction or the raw
+/// text of one that does not parse.
+///
+/// Readers skip `Invalid`; `lint` reports it. They are one enum because a
+/// dropped entry and a reported entry must be the same set: an entry silently
+/// ignored by the reader but accepted by the linter is a collision nobody
+/// sees, which is the failure this section exists to prevent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileLine {
+    Change(PredictedChange),
+    Invalid(String),
+}
+
+/// Parse the `## Files` section. Prose lines are ignored, so the section can
+/// carry a sentence of context; only list items are entries, and every list
+/// item must parse. An absent section yields an empty vector.
+pub fn file_lines(desc: &str) -> Vec<FileLine> {
+    let (start, end, found) = find_section(desc, "Files");
+    if !found {
+        return Vec::new();
+    }
+    let body = &desc[start..end];
+    let mut out = Vec::new();
+    // The list parser, not a line scan: it is fence-aware and nesting-aware,
+    // so an entry-shaped line quoted inside a code fence is content rather
+    // than a prediction, and an item written with any valid bullet still
+    // reaches the reader instead of vanishing before it can be reported.
+    for range in top_level_list_items(body) {
+        let item = list_item_body(&body[range]);
+        let item = item.trim();
+        if item.is_empty() {
+            out.push(FileLine::Invalid(String::new()));
+            continue;
+        }
+        // `list_item_body` folds nested sub-bullets and lazy continuation
+        // lines into the item on purpose — right for `## Activity Log`,
+        // where a detail belongs to the entry that opened it. Here one
+        // bullet must be one path: a folded multi-line item would either
+        // glue a sibling's prediction onto this one's path (nested bullet)
+        // or smuggle a second line into the path string (lazy continuation),
+        // and either way collision detection would silently miss it. Reject
+        // it instead of mangling it, carrying the whole (already-dedented)
+        // item so `lint` can show the author what to split.
+        if item.contains('\n') {
+            out.push(FileLine::Invalid(item.to_string()));
+            continue;
+        }
+        let (status, path) = match item.split_once(char::is_whitespace) {
+            Some((s, p)) => (s, p.trim()),
+            None => (item, ""),
+        };
+        let mut chars = status.chars();
+        match (chars.next(), chars.next(), path.is_empty()) {
+            (Some(s @ ('A' | 'M' | 'D')), None, false) => {
+                out.push(FileLine::Change(PredictedChange {
+                    status: s,
+                    path: path.to_string(),
+                }));
+            }
+            _ => out.push(FileLine::Invalid(item.to_string())),
+        }
+    }
+    out
+}
+
+/// The parseable entries of a `## Files` section, for readers that only care
+/// about what the ticket claims it will touch.
+pub fn predicted_changes(desc: &str) -> Vec<PredictedChange> {
+    file_lines(desc)
+        .into_iter()
+        .filter_map(|l| match l {
+            FileLine::Change(c) => Some(c),
+            FileLine::Invalid(_) => None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_lines_parses_entries_and_ignores_prose() {
+        let desc = "## Spec\n\nwords\n\n## Files\n\nPredicted, not a contract.\n\n\
+                    - M crates/core/src/lib.rs\n- A crates/core/tests/new.rs\n\
+                    - D old/gone.rs\n\n## Notes\n\n- M not/in/files.rs\n";
+        assert_eq!(
+            predicted_changes(desc),
+            vec![
+                PredictedChange {
+                    status: 'M',
+                    path: "crates/core/src/lib.rs".into()
+                },
+                PredictedChange {
+                    status: 'A',
+                    path: "crates/core/tests/new.rs".into()
+                },
+                PredictedChange {
+                    status: 'D',
+                    path: "old/gone.rs".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn file_lines_flag_unparseable_items_rather_than_dropping_them() {
+        let desc = "## Files\n\n- X bad/status.rs\n- M \n- justapath.rs\n- m lower/case.rs\n";
+        let lines = file_lines(desc);
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        assert!(lines.iter().all(|l| matches!(l, FileLine::Invalid(_))));
+        // A path containing spaces is kept verbatim: paths may contain them.
+        assert_eq!(
+            predicted_changes("## Files\n\n- M a path/with spaces.rs\n"),
+            vec![PredictedChange {
+                status: 'M',
+                path: "a path/with spaces.rs".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn no_files_section_is_not_an_error() {
+        assert!(file_lines("## Spec\n\nnothing here\n").is_empty());
+    }
+
+    #[test]
+    fn an_entry_quoted_in_a_fence_is_content_not_a_prediction() {
+        // Same bug class this module documents fixing for `##` headings: a
+        // fenced example of the format must not become a real entry.
+        let desc = "## Files\n\nThe format is:\n\n```markdown\n- M example/only.rs\n```\n\n\
+                    - M real/entry.rs\n";
+        assert_eq!(
+            predicted_changes(desc),
+            vec![PredictedChange {
+                status: 'M',
+                path: "real/entry.rs".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn every_valid_bullet_reaches_the_reader() {
+        // A dropped entry is invisible to lint AND to collision detection, so
+        // an entry written with a tab or a `+` must still be seen, and seen as
+        // whatever it is: a change if it parses, an Invalid if it does not.
+        let lines = file_lines("## Files\n\n-\tM tab/bullet.rs\n+ M plus/bullet.rs\n- X bad.rs\n");
+        assert_eq!(
+            lines,
+            vec![
+                FileLine::Change(PredictedChange {
+                    status: 'M',
+                    path: "tab/bullet.rs".into()
+                }),
+                FileLine::Change(PredictedChange {
+                    status: 'M',
+                    path: "plus/bullet.rs".into()
+                }),
+                FileLine::Invalid("X bad.rs".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_nested_sub_bullet_under_an_entry_is_flagged_not_merged() {
+        // The nested bullet's own prediction must not be silently glued onto
+        // its parent's path — that would mask `outer.rs` from collision
+        // detection (it no longer matches a sibling ticket's clean
+        // `outer.rs`) while also failing to surface `nested/...` as a
+        // prediction of its own.
+        let desc = "## Files\n\n- M outer.rs\n  - M nested/looks/like/entry.rs\n";
+        let lines = file_lines(desc);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(matches!(&lines[0], FileLine::Invalid(_)), "{lines:?}");
+        assert!(predicted_changes(desc).is_empty(), "{lines:?}");
+    }
+
+    #[test]
+    fn a_lazy_continuation_line_is_flagged_not_folded_into_the_path() {
+        let desc = "## Files\n\n- M outer.rs\n  onto a path-shaped continuation.rs\n";
+        let lines = file_lines(desc);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(matches!(&lines[0], FileLine::Invalid(_)), "{lines:?}");
+        assert!(predicted_changes(desc).is_empty(), "{lines:?}");
+    }
 
     #[test]
     fn find_section_returns_the_content_range() {

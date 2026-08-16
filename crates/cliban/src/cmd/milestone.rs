@@ -846,6 +846,10 @@ async fn waves(
             "{}",
             json!({
                 "chains": w.chains,
+                "collisions": w.collisions
+                    .iter()
+                    .map(|c| json!({"keys": c.keys, "path": c.path}))
+                    .collect::<Vec<_>>(),
                 "done": w.done,
                 "external_blocked": w.external_blocked,
                 "waves": w.waves,
@@ -874,6 +878,9 @@ async fn waves(
                 .collect::<Vec<_>>()
                 .join("; ")
         );
+    }
+    for c in &w.collisions {
+        println!("collision: {} predicted by {}", c.path, c.keys.join(", "));
     }
     Ok(())
 }

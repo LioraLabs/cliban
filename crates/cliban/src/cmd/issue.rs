@@ -1002,7 +1002,7 @@ async fn resolve_refs(store: &Store, issue: &Issue) -> CliResult<(String, String
     Ok(pair)
 }
 
-/// Map a `--section` value to its H2 anchor. The four contract sections have
+/// Map a `--section` value to its H2 anchor. The five contract sections have
 /// case-insensitive short aliases; anything else is a **verbatim** H2 anchor —
 /// `--section "Decisions so far"` targets `## Decisions so far`, exact match.
 fn resolve_section(s: &str) -> Result<String, CliError> {
@@ -1015,6 +1015,7 @@ fn resolve_section(s: &str) -> Result<String, CliError> {
         "plan" => "Plan".to_string(),
         "activity" | "activity log" => "Activity Log".to_string(),
         "notes" => "Notes".to_string(),
+        "files" => "Files".to_string(),
         _ => t.to_string(),
     })
 }
@@ -3125,6 +3126,24 @@ async fn append_section_cmd(db: &Option<String>, a: AppendSectionArgs) -> CliRes
 mod tests {
     use super::*;
     use clap::ValueEnum;
+
+    #[test]
+    fn every_reserved_anchor_answers_to_its_lowercase_name() {
+        // Anchors match case-sensitively, so an anchor missing from this map
+        // is one whose obvious spelling silently addresses a different,
+        // non-existent section. `--section files` failed this way the first
+        // time anyone typed it.
+        for (typed, anchor) in [
+            ("spec", "Spec"),
+            ("plan", "Plan"),
+            ("activity", "Activity Log"),
+            ("notes", "Notes"),
+            ("files", "Files"),
+        ] {
+            assert_eq!(resolve_section(typed).ok().as_deref(), Some(anchor));
+            assert_eq!(resolve_section(anchor).ok().as_deref(), Some(anchor));
+        }
+    }
 
     #[test]
     fn the_priority_flag_offers_exactly_what_the_store_accepts() {

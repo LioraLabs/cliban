@@ -108,6 +108,7 @@ touching the others:
 ## Plan
 ## Activity Log
 ## Notes
+## Files
 ```
 
 ```bash
