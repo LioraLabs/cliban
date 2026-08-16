@@ -180,4 +180,23 @@ run_flow ticket sync "$key"
 assert_status 0 "after the implementer commits the resolution, the branch is in sync"
 assert_board_has "$key" "already up to date" "the round trip ends on the board"
 
+# The read end of the integration relay: sync replays every INTEGRATED entry
+# on stderr, so an in-flight agent cannot sync without seeing what landed.
+fixture_new
+fixture_milestone_worktree
+first=$(new_issue "Landed sibling")
+fbranch=$(branch_of "$first")
+fixture_ticket_worktree "$fbranch"
+commit_file_at "$(fixture_ticket_wt "$fbranch")" landed.txt "landed work"
+second=$(new_issue "In-flight ticket")
+sbranch=$(branch_of "$second")
+fixture_ticket_worktree "$sbranch"
+cb issue mv "$first" in-review >/dev/null
+run_flow ticket integrate "$first" --invariants "cardKey keys by id"
+assert_status 0 "the sibling integrates with invariants"
+key=$second
+run_flow ticket sync "$second"
+assert_status 0 "the in-flight ticket syncs the new tip"
+assert_stderr_has "INTEGRATED $first: cardKey keys by id" "sync replays the integrated sibling's invariants"
+
 finish

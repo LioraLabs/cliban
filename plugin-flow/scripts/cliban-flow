@@ -168,13 +168,17 @@ usage: cliban-flow <group> <command> [args]
 
   ticket sync <KEY>     Merge the milestone tip into the ticket branch. Prints
                         the resulting tip SHA, or conflicted paths at exit 1.
+                        Replays integrated siblings' INTEGRATED invariant
+                        entries on stderr.
 
   ticket ready <KEY>    Verify the branch and clean worktree, then move the
                         ticket to in-review. Prints the ticket tip SHA.
 
-  ticket integrate <KEY> [--dry-run]
+  ticket integrate <KEY> [--dry-run] [--invariants <text>]
                         Squash a ready ticket onto its milestone branch, mark it
                         done, and remove its worktree. Dry-run only reports.
+                        --invariants records "INTEGRATED <KEY>: <text>" on the
+                        milestone's activity log for later syncs to replay.
 
   ticket abandon <KEY> --confirm <REASON>
                         Release the claim and discard clean ticket work.
@@ -1372,6 +1376,25 @@ cmd_ticket_status() {
 # conflict is what a correct merge of two correct branches does — a real outcome
 # of a question properly asked — so it exits 1, with the unmerged paths on
 # stdout because that is the answer.
+# relay_invariants — every INTEGRATED entry on this ticket's milestone, on
+# stderr so stdout keeps the merge-result contract. The read end of the
+# integration relay: an agent cannot sync without seeing what its integrated
+# siblings changed that git will not mark.
+#
+# ponytail: the whole ledger every time, no since-filter — entries are
+# one-liners, a milestone integrates tens of tickets at most, and the complete
+# set is what a handoff successor needs anyway.
+relay_invariants() {
+    [ -n "$ISSUE_MILESTONE" ] || return 0
+    local entries
+    entries=$(cliban milestone show "$ISSUE_MILESTONE" -p "$ISSUE_PROJECT" --json 2>/dev/null |
+        json_fields description | grep -E '^- [0-9][0-9:TZ-]* — INTEGRATED ') || return 0
+    {
+        printf 'integrated siblings changed these invariants; check the resolution against each:\n'
+        printf '%s\n' "$entries"
+    } >&2
+}
+
 cmd_ticket_sync() {
     local key=${1:-}
     [ -n "$key" ] || usage_error "ticket sync needs an issue key"
@@ -1395,6 +1418,7 @@ cmd_ticket_sync() {
     # commit for the sake of having something to report.
     if is_ancestor "$mbranch" "$ISSUE_BRANCH"; then
         say "$(full_sha "$ISSUE_BRANCH")"
+        relay_invariants
         board_record "$ISSUE_KEY" \
             "already up to date ($ISSUE_BRANCH@$tsha already contains $mbranch@$msha)"
         exit 0
@@ -1420,6 +1444,7 @@ cmd_ticket_sync() {
         [ "$after" != "$(full_sha "$mbranch")" ] || ff=", fast-forward"
 
         say "$after"
+        relay_invariants
         board_record "$ISSUE_KEY" \
             "merged ($mbranch@$msha into $ISSUE_BRANCH@$tsha, clean$ff, now at $(short_sha "$ISSUE_BRANCH"))"
         exit 0
@@ -1442,6 +1467,7 @@ cmd_ticket_sync() {
     fi
 
     say "$unmerged"
+    relay_invariants
     instruct \
         "Conflict in $TICKET_WT; the paths are on stdout." \
         "The agent implementing $ISSUE_KEY resolves this. The orchestrator will not do it." \
@@ -1602,15 +1628,25 @@ cmd_ticket_ready() {
     exit 0
 }
 
-# ticket integrate <KEY> [--dry-run] — serialize one tested ticket tree onto
+# ticket integrate <KEY> [--dry-run] [--invariants <text>] — serialize one tested ticket tree onto
 # the milestone branch as one squash commit. Strict ancestry makes that tree
 # byte-identical to the one the implementer tested; this command never builds.
 cmd_ticket_integrate() {
-    local key=${1:-} dry_run=0
+    local key=${1:-} dry_run=0 invariants=""
     [ -n "$key" ] || usage_error "ticket integrate needs an issue key"
     shift
-    if [ "${1:-}" = --dry-run ]; then dry_run=1; shift; fi
-    [ $# -eq 0 ] || usage_error "ticket integrate takes one issue key and optional --dry-run, got: $key $*"
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --dry-run) dry_run=1; shift ;;
+            --invariants)
+                # Reject empty and flag-shaped values: "--invariants --dry-run"
+                # is a forgotten argument, and acting on it would turn an
+                # intended dry-run into a real integration.
+                case ${2:-} in ''|-*) usage_error "--invariants needs non-empty text to relay" ;; esac
+                invariants=$2; shift 2 ;;
+            *) usage_error "ticket integrate takes one issue key, optional --dry-run and --invariants <text>, got: $key $*" ;;
+        esac
+    done
     require_repo
     load_issue "$key"
 
@@ -1687,6 +1723,14 @@ $subjects" -m "Ticket: $ISSUE_KEY" || refuse_ticket "$ISSUE_KEY" \
         "could not move $ISSUE_KEY to done after squash $squash_sha" \
         "The git commit exists; retry the board move before integrating anything else."
     cliban linear push "$ISSUE_KEY" >/dev/null 2>&1 || true
+    # The write end of the integration relay: the ledger entry every later
+    # `ticket sync` replays to its in-flight agent. Warn-degrade like every
+    # other log line — the squash has already landed.
+    if [ -n "$invariants" ]; then
+        cliban milestone log "$ISSUE_MILESTONE" -p "$ISSUE_PROJECT" \
+            "INTEGRATED $ISSUE_KEY: $invariants" >/dev/null 2>&1 ||
+            warn "could not record $ISSUE_KEY's invariants on milestone \"$ISSUE_MILESTONE\"'s activity log"
+    fi
     quiet gitr worktree remove "$TICKET_WT" || refuse_ticket "$ISSUE_KEY" \
         "could not remove ticket worktree $TICKET_WT" \
         "The squash and board move succeeded. Remove only that worktree manually."

@@ -115,8 +115,10 @@ and findings summary remains the durable record.
 
 ```bash
 cliban-flow ticket integrate <KEY> --dry-run
-cliban-flow ticket integrate <KEY>
+cliban-flow ticket integrate <KEY> --invariants "<what siblings could break without a conflict marker>"
 ```
+
+`--invariants` is the integration relay, and writing it is the orchestrator's job — it is the only participant that has seen both sides. Relay what a sibling could break with no conflict marker: signature shapes, load-bearing attributes, what a key actually keys, guard ordering. Not the diff — sync surfaces that on its own. Every later `ticket sync` replays the ledger to its agent on stderr.
 
 The dispatcher accepts only strict ancestry: the tested ticket tree already contains the exact milestone tip it will land on. Integration is therefore a squash with no new combination of trees, so no post-integration build is needed. Do not relax the ancestry guard without also restoring a post-integration build and test gate; those two guarantees are one design.
 

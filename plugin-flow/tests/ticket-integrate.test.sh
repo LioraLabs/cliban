@@ -110,4 +110,31 @@ assert_stderr_has "moved after integration started" "the refusal names the race"
 assert_eq "$(status_of "$key")" "in-review" "late detection does not complete the ticket"
 assert_eq "$(gitf worktree list --porcelain | grep -c "$(fixture_ticket_wt "$branch")")" "1" "late detection retains the worktree"
 
+# --invariants: the write end of the integration relay. The entry lands on the
+# milestone's activity log so every later `ticket sync` replays it.
+fixture_new
+fixture_milestone_worktree
+ready_ticket "Relay ticket"
+run_flow ticket integrate "$key" --invariants "frames are keyed by id, not parent branch name"
+assert_status 0 "integrate accepts --invariants"
+mdesc=$(cb milestone show "Test milestone" -p FLOW --json |
+    python3 -c 'import json,sys; print(json.load(sys.stdin).get("description") or "")')
+if printf '%s' "$mdesc" | grep -qF -- "INTEGRATED $key: frames are keyed by id, not parent branch name"; then
+    pass "the invariants land on the milestone activity log"
+else
+    fail "the invariants land on the milestone activity log" "milestone description: $mdesc"
+fi
+
+# Forgotten --invariants text must refuse, not integrate: "--dry-run" as the
+# value would silently turn a dry-run into a real integration.
+fixture_new
+fixture_milestone_worktree
+ready_ticket "Guarded relay ticket"
+run_flow ticket integrate "$key" --invariants --dry-run
+assert_status 2 "--invariants with a flag-shaped value refuses"
+assert_eq "$(status_of "$key")" "in-review" "the refused integration changed nothing"
+run_flow ticket integrate "$key" --invariants ""
+assert_status 2 "--invariants with empty text refuses"
+assert_eq "$(status_of "$key")" "in-review" "the empty-text refusal changed nothing"
+
 finish
