@@ -1,9 +1,10 @@
 //! Locating H2 sections in the issue/milestone description markdown.
 //!
 //! The description is a contract, not free text: `## Spec`, `## Plan`,
-//! `## Activity Log`, and `## Notes` each have an owner, and every tool that
-//! edits one must leave the others byte-identical. This module is the single
-//! definition of where a section starts and ends.
+//! `## Activity Log`, `## Notes`, and `## Files` each have an owner, and every
+//! tool that edits one must leave the others byte-identical. This module is the
+//! single definition of where a section starts and ends, and of how the one
+//! machine-read section, `## Files`, parses.
 //!
 //! It lives in core rather than in the CLI's `descmd` because the Linear bridge
 //! needs the same boundaries: a re-import replaces `## Spec` and must not
