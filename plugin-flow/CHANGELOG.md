@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0
+
+- Staff a chain with one implementer by default, and say why: a linear run of blocking edges is serialised anyway, so dispatching each ticket cold buys no parallelism and re-learns the same surface every wave.
+- Give the liveness sweep a cost probe the orchestrator can actually run, over the transcript path the dispatch returns, with thresholds at 200k solo and 350k for a chain carrier.
+- Correct the cost metric in both executor skills from cumulative spend to current context, since every turn re-sends the conversation.
+
 ## 0.9.0
 
 - Refuse a `ticket ready` review waiver written by the ticket's own agent: authorship is read from the activity feed's actor, not matched by line shape, so a ticket can no longer certify its own work as `agent:<KEY>`.

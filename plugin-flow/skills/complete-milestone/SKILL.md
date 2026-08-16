@@ -48,9 +48,14 @@ cliban milestone waves --project <KEY> "<milestone name>" --json
 
 `waves[0]` is dispatchable now; wave N is safe once 1..N-1 have merged. Re-run after each integration rather than tracking readiness yourself.
 
-Treat `chains` as advisory: prefer the same implementer sequentially, starting
-each ticket only at its wave time from the current milestone tip. You may split or extend
-a chain when useful; reuse context, never ticket worktrees or branches.
+`chains` never schedule; they staff. Walk a chain with one implementer, in the
+order printed, starting each ticket only at its wave time from the current
+milestone tip. A chain is an author-approved `related_to` group or a linear run
+of blocking edges, and the run is the case that pays: its tickets are
+serialised anyway and sit on one surface, so dispatching each one cold buys no
+parallelism and re-learns the same code every wave. Reuse context, never ticket
+worktrees or branches. Split a chain only when its carrier grows too expensive
+to keep (see the sweep) or the tickets prove unrelated.
 
 - **A cycle exits 2** naming the issues — fix the board before orchestrating.
 - **Non-empty `external_blocked`** is a stop-and-ask: those issues are gated by work *outside* the milestone, and no amount of wave-finishing frees them.
@@ -142,11 +147,22 @@ a working agent to perform the sweep. If all signals are empty or
 stale, ask the agent for its current phase and blocker before concluding it is
 stuck; a hard ticket can legitimately stay silent for a long stretch.
 
-Cost is a sweep signal alongside liveness: an agent whose cumulative spend
-dwarfs its remaining work gets ordered to commit, write the handoff
-(shape: `complete-issue`'s Work step), and exit — the observed fresh restart
+Cost is a sweep signal alongside liveness, and it is yours to measure: an agent
+cannot police its own growth, and asking it to costs a turn. Every turn re-sends
+the whole conversation, so the number that predicts the next turn's price is
+**current context**, not spend so far. Read it from the transcript path the
+dispatch returned, without pulling any of it into your own context:
+
+```bash
+grep -o '"cache_read_input_tokens":[0-9]*' <agent-output-file> | tail -1
+```
+
+Past roughly **200k on a solo ticket** or **350k on a chain carrier**, order it
+to commit, write the handoff (shape: `complete-issue`'s Work step), and exit;
+resume the chain on a fresh agent from that handoff. The observed fresh restart
 finished the same merge at 15% of the runaway's cost, because the handoff had
-externalized the comprehension.
+externalized the comprehension. Never read the transcript file itself: it is the
+agent's full JSONL and it will swamp you.
 
 Ask through the agent runtime's `send_message` operation using the agent ID saved at dispatch. If that address is unreachable, apply `complete-issue`'s **Resume exception** before declaring the claimant gone, then use `recover-milestone`'s ticket interpretations: respawn work-bearing tickets in their worktree; for an empty ticket run `cliban issue release <KEY>` and redispatch through `ticket start <KEY>`; for an external blocker run `cliban issue mv <KEY> blocked --note "<why>"` and surface it to the user.
 
