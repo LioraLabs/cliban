@@ -482,6 +482,19 @@ pub fn file_lines(desc: &str) -> Vec<FileLine> {
             out.push(FileLine::Invalid(String::new()));
             continue;
         }
+        // `list_item_body` folds nested sub-bullets and lazy continuation
+        // lines into the item on purpose — right for `## Activity Log`,
+        // where a detail belongs to the entry that opened it. Here one
+        // bullet must be one path: a folded multi-line item would either
+        // glue a sibling's prediction onto this one's path (nested bullet)
+        // or smuggle a second line into the path string (lazy continuation),
+        // and either way collision detection would silently miss it. Reject
+        // it instead of mangling it, carrying the whole (already-dedented)
+        // item so `lint` can show the author what to split.
+        if item.contains('\n') {
+            out.push(FileLine::Invalid(item.to_string()));
+            continue;
+        }
         let (status, path) = match item.split_once(char::is_whitespace) {
             Some((s, p)) => (s, p.trim()),
             None => (item, ""),
@@ -596,6 +609,29 @@ mod tests {
                 FileLine::Invalid("X bad.rs".into()),
             ]
         );
+    }
+
+    #[test]
+    fn a_nested_sub_bullet_under_an_entry_is_flagged_not_merged() {
+        // The nested bullet's own prediction must not be silently glued onto
+        // its parent's path — that would mask `outer.rs` from collision
+        // detection (it no longer matches a sibling ticket's clean
+        // `outer.rs`) while also failing to surface `nested/...` as a
+        // prediction of its own.
+        let desc = "## Files\n\n- M outer.rs\n  - M nested/looks/like/entry.rs\n";
+        let lines = file_lines(desc);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(matches!(&lines[0], FileLine::Invalid(_)), "{lines:?}");
+        assert!(predicted_changes(desc).is_empty(), "{lines:?}");
+    }
+
+    #[test]
+    fn a_lazy_continuation_line_is_flagged_not_folded_into_the_path() {
+        let desc = "## Files\n\n- M outer.rs\n  onto a path-shaped continuation.rs\n";
+        let lines = file_lines(desc);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(matches!(&lines[0], FileLine::Invalid(_)), "{lines:?}");
+        assert!(predicted_changes(desc).is_empty(), "{lines:?}");
     }
 
     #[test]
