@@ -96,7 +96,10 @@ The brief:
 3. Report only after `ticket ready` succeeds. Include its immutable SHA, branch, test status, one-line summary, any `## Spec` amendment, and merge-risk notes. Never commit after ready; a changed branch must repeat sync, verification, and ready.
 
 Never pre-plan a ticket for its agent. The agent plans and executes it, adding a
-checkpoint only where a mistaken foundation would compound expensively.
+checkpoint only where a mistaken foundation would compound expensively. Do add
+wave-level pointers to the brief — what the wave's siblings touch, traps already
+in the INTEGRATED ledger — since the ticket-scoped prime from `ticket start`
+cannot see across the wave.
 
 Before ready, the implementer sends confidence, a skip/run recommendation,
 one-line evidence, and merge risk. Either side may request review; the

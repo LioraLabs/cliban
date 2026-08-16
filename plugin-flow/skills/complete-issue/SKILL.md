@@ -7,12 +7,11 @@ requires_skills: [cliban-workflow]
 # Complete Issue
 
 One ticket, end to end. Load `cliban-flow:cliban-workflow` and `cliban:cliban`
-before the first board action. Resolve the dispatcher from the workflow contract;
-it owns the git and board transitions in both modes.
-
-The session-start hook surfaces `in-review` candidates. When git or the PR proves
-a prior standalone handoff merged, run `mv <KEY> done --note "merged as <sha>"`.
-Linear bridge synchronization is a separate explicit action after lifecycle moves.
+before the first board action; the dispatcher from the workflow contract owns
+the git and board transitions in both modes.
+The session-start hook surfaces `in-review` candidates: when git or the PR
+proves one merged, run `mv <KEY> done --note "merged as <sha>"`. Linear bridge
+sync is a separate explicit action after lifecycle moves.
 
 ## Start
 
@@ -22,42 +21,37 @@ mode first export `CLIBAN_ACTOR=agent:<KEY>`, use the supplied worktree, and nev
 integrate, move the issue to done, or touch `main` or the milestone branch.
 
 If a claimed in-progress ticket may belong to a dead session, read its `## Plan`,
-`## Activity Log`, and worktree, then ask the claimant. Take over only when it
-cannot continue or the orchestrator confirms it ended; use `issue release <KEY>` or
-`claim <KEY> --force` and resume the existing artifacts.
-
-Read the issue, its Spec and activity, relevant project notes, the milestone
-description, the adapter, and the code before deciding what work is needed.
+`## Activity Log`, and worktree, then ask the claimant; take over only when it
+cannot continue or the orchestrator confirms it ended (`issue release <KEY>` or
+`claim <KEY> --force`) and resume the existing artifacts. Read the issue, its
+Spec and activity, the milestone description, the adapter, the project notes
+`ticket start` printed on stderr (the repo's paid-for lessons;
+`cliban project search` reaches the rest), and the code.
 
 ## Plan
 
 Write a proportional `## Plan` before implementation and confirm it with
-`issue cat`: a sentence or short approach is enough for small work; larger work
+`issue cat` before execution begins: a sentence suffices; larger work
 may use ordered `### Task N:` headings and checkboxes. Add a mid-ticket review
 checkpoint only where a wrong foundation compounds expensively. Never replace
-the whole description. This board-visible plan is the recoverability guarantee;
-confirm it before execution begins.
+the whole description — the board-visible plan is the recoverability guarantee.
 
 ## Work
 
 Inspect the installed skills and apply the implementation, debugging, language,
 and review disciplines relevant to this ticket. Every API turn re-reads the
 whole conversation, so cost grows with the square of your turn count: batch
-independent tool calls in one message, chain sequential shell steps into one
-Bash call, and don't re-read files a prior turn settled. Keep this workflow
-porous: it defines lifecycle invariants, not how to program. Commits are the
-durable work record; choose their cadence.
-
-A ticket can outgrow its agent. When re-sent history dwarfs the work each turn
-advances (rule of thumb: past a few hundred thousand cumulative tokens), stop:
-commit what stands, write the handoff, and exit — a fresh agent finishes from
-the board at a fraction of the cost. The handoff is one `issue log` entry
-carrying per-item status against any open review findings, the exact boundary
-of a half-applied refactor, which call sites are already converted, sync
-state, dead ends tried, and any disagreement with a review stated rather than
-dropped. Structure it with `###` subheadings — a top-level `##` is refused at
-write time. Log only discoveries, dead ends, scope changes,
-and decisions. Amend the Spec when evidence disproves it. Promote discovered
+independent tool calls, chain sequential shell steps, don't re-read settled
+files. When re-sent history still comes to dwarf what a turn advances (rule of
+thumb: a few hundred thousand cumulative tokens), commit what stands, write
+the handoff, and exit — a fresh agent finishes from the board at a fraction of
+the cost. The handoff is one `issue log` entry (`###` subheads; a top-level
+`##` is refused): status per open review finding, the half-applied refactor's
+exact boundary, converted call sites, sync state, dead ends, and disagreements
+with a review stated, not dropped.
+Keep this workflow porous — lifecycle invariants, not how to program. Commits
+are the durable work record; log only discoveries, dead ends, scope changes,
+and decisions. Amend the Spec when evidence disproves it; promote discovered
 scope instead of absorbing it.
 
 ## Prove
@@ -76,10 +70,11 @@ orchestrator decides pass 2 review and records its verdict or waiver; wait for
 that decision. Run `cliban-flow ticket sync <KEY>`, resolve the conflicts and
 explain each resolution diff, re-run focused and full verification, then
 `cliban-flow ticket ready <KEY>`. Its immutable SHA is the handoff; never commit
-after ready. Standalone work follows the same primitives without an orchestrator waiver,
-then offers merge/PR/discard. Dispatched work reports
-SHA, branch, checks, summary, Spec amendments, and merge risks to its orchestrator.
+after ready. Standalone work follows the same primitives
+without an orchestrator waiver, then offers merge/PR/discard. Dispatched work
+reports SHA, branch, checks, summary, Spec amendments, and merge risks to its
+orchestrator.
 
-Finally, search project notes and sweep one durable lesson only if it will help a
-future ticket. Most tickets teach none. If stuck, block with the external reason
-or release the claim.
+Finally, sweep one durable lesson into project notes (search first) only if it
+helps a future ticket — most teach none. If stuck, block with the external
+reason or release the claim.

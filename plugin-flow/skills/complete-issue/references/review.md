@@ -10,8 +10,9 @@ agent when none is bound. Every dispatch — checkpoint, pass 2, or re-review
 after a fix — runs in fresh context: it reviews the work product, not the
 dispatcher's reasoning about it, so it never inherits session history and never
 resumes an earlier reviewer. Give it the Spec, plan, implementer's claims, base
-and head SHAs, and tests — never the dispatcher's own theory of where the
-defect is — and this brief:
+and head SHAs, tests, and the project notes matching the ticket (a reviewer
+without the repo's known traps re-derives them or misses them) — never the
+dispatcher's own theory of where the defect is — and this brief:
 
 > Read the code and `git diff BASE..HEAD`; do not trust the report. Return
 > `SPEC: ACCEPT|REJECT` for missing, extra, or misunderstood requirements, then

@@ -347,4 +347,14 @@ assert_stderr_has "no usable branch name" "the refusal says why"
 assert_eq "$(gitf worktree list --porcelain | grep -c '^worktree ')" "1" \
     "no worktree was created"
 
+# The prime: ticket start carries the project's matching notes to the agent on
+# stderr, so dispatch does not rely on each agent going looking.
+fixture_new
+fixture_milestone_worktree
+cb project note add FLOW "frobnicator wobble lore" --body "always wobble the frobnicator twice" >/dev/null
+key=$(new_issue "Wobble the frobnicator safely")
+run_flow ticket start "$key"
+assert_status 0 "ticket start succeeds with notes present"
+assert_stderr_has "wobble the frobnicator twice" "matching project notes are primed on stderr"
+
 finish

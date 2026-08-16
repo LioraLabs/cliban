@@ -159,7 +159,8 @@ usage: cliban-flow <group> <command> [args]
 
   ticket start <KEY>    Create <KEY>'s branch off its milestone tip, or main for
                         a standalone ticket, and check it out in an isolated
-                        worktree. Prints the worktree path.
+                        worktree. Prints the worktree path, and the project
+                        notes matching the ticket on stderr.
 
   ticket status <KEY>   Is <KEY>'s branch integrable? Read-only: prints
                         "mergeable" (exit 0) when the milestone branch tip is
@@ -1150,6 +1151,41 @@ rollback_ticket_start() {
         warn "could not release $ISSUE_KEY after start failed"
 }
 
+# prime_notes — the project notes matching this ticket, on stderr beside the
+# worktree path. The dispatch carries the repo's accumulated knowledge because
+# agents demonstrably do not go looking for it; one search here replaces every
+# agent re-deriving the same lessons from the code.
+#
+# ponytail: top 3 notes, full content — heading-only would just force the
+# lookup the prime exists to remove. Tune the cap if notes grow pathological.
+prime_notes() {
+    # The search is a subsequence matcher: a whole title matches nothing once
+    # word order diverges, so query each significant word and merge by score.
+    local notes word
+    notes=$(for word in $(printf '%s' "$ISSUE_TITLE" |
+            LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -cs 'a-z0-9' '\n' |
+            awk 'length($0) >= 4' | sort -u); do
+        cliban project search "$ISSUE_PROJECT" "$word" --json 2>/dev/null || true
+    done | python3 -c 'import json, sys
+best = {}
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    d = json.loads(line)
+    k = d.get("heading", "")
+    if k not in best or d.get("score", 0) > best[k].get("score", 0):
+        best[k] = d
+for d in sorted(best.values(), key=lambda d: -d.get("score", 0))[:3]:
+    print(d.get("content", "").strip() or "### " + d.get("heading", ""))') ||
+        { warn "could not prime project notes for $ISSUE_KEY"; return 0; }
+    [ -n "$notes" ] || return 0
+    {
+        printf 'project notes matching this ticket — read before the code:\n'
+        printf '%s\n' "$notes"
+    } >&2
+}
+
 cmd_ticket_start() {
     local key=${1:-}
     [ -n "$key" ] || usage_error "ticket start needs an issue key"
@@ -1323,6 +1359,7 @@ cmd_ticket_start() {
     fi
 
     say "$path"
+    prime_notes
     board_record "$ISSUE_KEY" "$outcome ($ISSUE_BRANCH at $path)"
     exit 0
 }

@@ -49,7 +49,9 @@ has "$workflow" 'ticket ready KEY'
 has "$setup" 'optionally structured'
 has "$adapter" 'optionally structured'
 
+# 75 at CLI-110; +5 for two decided rules — CLI-123's handoff shape and
+# CLI-126's ticket-start prime pointer.
 lines=$(wc -l <"$issue")
-[ "$lines" -le 75 ] || { echo "complete-issue is $lines lines" >&2; failed=1; }
+[ "$lines" -le 80 ] || { echo "complete-issue is $lines lines" >&2; failed=1; }
 
 exit "$failed"
