@@ -723,7 +723,9 @@ async fn apply_edit(
     let call_key = project_key.clone();
     let m = store
         .call(move |conn| {
-            let cur = milestones::get(conn, &call_key, &name)?
+            // BEGIN IMMEDIATE: read-modify-write (CLI-88).
+            let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+            let cur = milestones::get(&tx, &call_key, &name)?
                 .ok_or_else(|| cliban_core::Error::NamedNotFound(name.clone()))?;
             // Unlike an issue, a milestone has no durable rows behind its
             // ## Activity Log — the section is the only copy of the record,
@@ -742,7 +744,9 @@ async fn apply_edit(
                     ));
                 }
             }
-            milestones::update(conn, &cur, params)
+            let out = milestones::update(&tx, &cur, params)?;
+            tx.commit()?;
+            Ok(out)
         })
         .await?;
     let count = issue_count(&store, project_key, m.name.clone()).await?;

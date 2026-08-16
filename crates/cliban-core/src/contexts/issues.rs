@@ -35,7 +35,10 @@ pub struct CreateIssue {
 
 /// `create/2`. Runs entirely in one transaction (key bump + insert).
 pub fn create(conn: &Connection, project_key: &str, attrs: CreateIssue) -> Result<Issue> {
-    let tx = conn.unchecked_transaction()?;
+    let tx = rusqlite::Transaction::new_unchecked(
+        conn,
+        rusqlite::TransactionBehavior::Immediate,
+    )?;
 
     let project = projects::fetch_by_key(&tx, project_key)?;
 
@@ -235,7 +238,10 @@ pub fn update(conn: &Connection, issue: &Issue, attrs: UpdateIssue) -> Result<Is
     if !conn.is_autocommit() {
         return update_in_tx(conn, issue, attrs);
     }
-    let tx = conn.unchecked_transaction()?;
+    let tx = rusqlite::Transaction::new_unchecked(
+        conn,
+        rusqlite::TransactionBehavior::Immediate,
+    )?;
     let current = update_in_tx(&tx, issue, attrs)?;
     tx.commit()?;
     Ok(current)
@@ -348,7 +354,10 @@ pub fn delete(conn: &Connection, issue: &Issue) -> Result<()> {
 pub fn set_labels(conn: &Connection, issue: &Issue, names: &[String]) -> Result<Issue> {
     let project = projects::get_by_id(conn, issue.project_id)?
         .ok_or_else(|| Error::ProjectNotFound(issue.project_id.to_string()))?;
-    let tx = conn.unchecked_transaction()?;
+    let tx = rusqlite::Transaction::new_unchecked(
+        conn,
+        rusqlite::TransactionBehavior::Immediate,
+    )?;
     let label_rows = labels::upsert_many(&tx, &project, names)?;
 
     tx.execute(

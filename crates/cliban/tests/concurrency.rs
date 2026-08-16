@@ -198,3 +198,19 @@ fn concurrent_project_notes_all_survive() {
         );
     }
 }
+
+#[test]
+fn concurrent_moves_all_accepted() {
+    // mv routes through issues::update's own transaction (no outer tx in the
+    // command), so this exercises the core-side immediate class: no writer is
+    // turned away, whether it changed the status or hit the retry-safe noop.
+    let db = seeded("mv", "");
+    storm(&db, |i| {
+        vec![
+            "issue".into(),
+            "mv".into(),
+            "TST-1".into(),
+            if i % 2 == 0 { "in-progress" } else { "backlog" }.into(),
+        ]
+    });
+}

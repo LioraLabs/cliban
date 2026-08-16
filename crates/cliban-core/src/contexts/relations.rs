@@ -49,7 +49,10 @@ pub fn add(conn: &Connection, from_key: &str, to_key: &str, kind: &str) -> Resul
         return Err(Error::validation("to", "issue cannot relate to itself"));
     }
     let now = time::format_usec(time::now_usec());
-    let tx = conn.unchecked_transaction()?;
+    let tx = rusqlite::Transaction::new_unchecked(
+        conn,
+        rusqlite::TransactionBehavior::Immediate,
+    )?;
     insert_edge(&tx, from, to, kind, &now)?;
     if kind == "related_to" {
         insert_edge(&tx, to, from, kind, &now)?;
@@ -62,7 +65,10 @@ pub fn add(conn: &Connection, from_key: &str, to_key: &str, kind: &str) -> Resul
 pub fn remove(conn: &Connection, from_key: &str, to_key: &str, kind: &str) -> Result<()> {
     let from = issue_id_by_key(conn, from_key)?;
     let to = issue_id_by_key(conn, to_key)?;
-    let tx = conn.unchecked_transaction()?;
+    let tx = rusqlite::Transaction::new_unchecked(
+        conn,
+        rusqlite::TransactionBehavior::Immediate,
+    )?;
     tx.execute(
         "DELETE FROM issue_relation WHERE from_issue_id = ?1 AND to_issue_id = ?2 AND type = ?3",
         params![from, to, kind],
