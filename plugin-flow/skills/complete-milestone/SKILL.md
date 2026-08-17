@@ -79,32 +79,28 @@ within a wave, **on the session model** — it runs `complete-issue` in dispatch
 mode and spawns its own implementers, verifiers, and reviewers, and a planner
 demoted to the cheap model plans cheaply. The mid-tier demotion happens one
 level below you, and is its call, not yours. Task name: lowercase the key,
-`-` → `_` (`CLI-95` becomes `cli_95`) — the liveness sweep and
-`recover-milestone` both look agents up by that name, so it is a convention two
-skills consume, not decoration. Keep the returned agent ID as well; it is the
-address that survives a harness that names tasks differently.
+`-` → `_` (`CLI-95` becomes `cli_95`). Keep the returned agent ID: it is the
+address for one-way brief amendments — a sibling's invariant, an amended
+`## Files` — relayed to a running planner with no reply awaited; a delegate's
+answers arrive only as its completion report.
 
 The brief: cd into the worktree, confirm isolation, run `complete-issue` for
 `<KEY>`, follow dispatched completion through sync and ready, and report only
-after ready succeeds — its immutable SHA, branch, seam verdicts, test status, a
-one-line summary, any `## Spec` amendment, and merge risks. It never integrates,
-moves the issue to done, or touches `main` or the milestone branch. Never
-pre-plan the ticket; do add the wave-level pointers it cannot see — what
-siblings touch, traps already in the INTEGRATED ledger.
+after ready succeeds — its final message carries the immutable SHA, branch,
+seam verdicts, test status, a one-line summary, any `## Spec` amendment, and
+merge risks. It never integrates, moves the issue to done, or touches `main`
+or the milestone branch. Never pre-plan the ticket; do add the wave-level
+pointers it cannot see — what siblings touch, traps already in the INTEGRATED
+ledger.
 
-Decide pass 2 per [review.md](../complete-issue/references/review.md), which
-owns the review contract. On skip, record the waiver yourself — ready refuses
-one written by the ticket's own agent:
+## 4. On every wake
 
-```bash
-cliban issue log <KEY> "review waived by orchestrator: <reason>"
-```
-
-## 4. Sweep running work
-
-An orchestrator only acts when awake, so tie the sweep to the moments it is: at
-every wake — an agent report, a relayed message, a user turn — run a cheap,
-read-only liveness sweep over running and dead agents:
+Wakes arrive on their own: each dispatched planner's completion — finished,
+struck out, or dead, the harness reports all three — re-invokes you, as does a
+user turn. Between wakes you are not running and nothing is lost; the board
+and git hold the milestone's whole state, so ending your turn with planners
+in flight is the milestone running. On each wake, before acting on the report
+that caused it, derive where everything stands:
 
 ```bash
 cliban issue cat <KEY> --section plan
@@ -116,24 +112,32 @@ git -C <ticket-worktree> status -s
 The board outranks your memory, always, and after a compaction especially: waves
 recomputed, ticked plans, and the `[cliban-flow]` activity lines say what has
 happened. Re-dispatching a ticket you cannot remember integrating is the most
-expensive mistake available to you, and the sweep is what prevents it.
+expensive mistake available to you, and the derivation is what prevents it.
 
-Healthy: a plan with seams on the board and, over time, ticking tasks, advancing
-activity, or commits. Do not interrupt a working agent. If all signals are empty
-or stale, ask the agent — `send_message` to the agent ID saved at dispatch — for
-its current phase and blocker before concluding it is stuck; a hard ticket can
-stay silent a long stretch.
-
-If the agent ID is unreachable, apply `complete-issue`'s **Resume exception**
-before declaring the claimant gone, then read `recover-milestone` and follow its
-interpretation of that ticket's state — it owns them. Independent siblings
-continue while dependents wait. After a second death on the same ticket, stop
-retrying and ask the user.
+Healthy: a plan with seams on the board and, over time, ticking tasks,
+advancing activity, or commits. Silence is indistinguishable from progress — a
+hard ticket can stay quiet a long stretch — so judge by the artifacts and let
+a working delegate work. A completion that arrives without a ready SHA is a
+death or a strike-out: read `recover-milestone` and follow its interpretation
+of that ticket's state — it owns them. Independent siblings continue while
+dependents wait. After a second death on the same ticket, stop retrying and
+ask the user.
 
 ## 5. Integrate
 
-A "done" notification is a claim to verify: confirm the issue is `in-review` and
-the report carries the SHA returned by `ticket ready`, then:
+A completion report is a claim to verify: confirm the issue is `in-review` and
+the report carries the SHA returned by `ticket ready`. Then decide pass 2 per
+[review.md](../complete-issue/references/review.md), which owns the review
+contract — the planner is gone, and its recommendation is in the report. On
+run, dispatch a fresh reviewer over the ticket diff at the ready SHA; findings
+brief a fresh planner on the same ticket, which lands a new ready SHA. On
+skip, record the waiver — ready refuses one written by the ticket's own agent:
+
+```bash
+cliban issue log <KEY> "review waived by orchestrator: <reason>"
+```
+
+Then:
 
 ```bash
 cliban-flow ticket integrate <KEY> --dry-run
@@ -142,9 +146,7 @@ cliban-flow ticket integrate <KEY> --invariants "<what siblings could break with
 
 `--invariants` is the integration relay, and yours to write — only you have seen
 both sides: signature shapes, load-bearing attributes, guard ordering. Every
-later `ticket sync` replays the ledger to its agent. Stranded reviews are
-expected when direct delivery fails; relay the full review to the ticket's
-planner at integration — the ticket's logged verdict stays the durable record.
+later `ticket sync` replays the ledger to its agent.
 
 The dispatcher accepts only strict ancestry: the tested tree already contains
 the exact milestone tip, so integration is a squash with no new combination of

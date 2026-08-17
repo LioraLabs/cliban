@@ -34,9 +34,10 @@ Both return `SPEC: ACCEPT|REJECT` then `QUALITY:` findings ordered Critical,
 Important, Minor with file:line evidence. Report the axes separately — a change
 can pass one and fail the other, and merging them lets one mask the other.
 
-Log the verdict on the ticket before sending the full review to the supplied
-agentId; an agent type is never an address, and full review text stays off the
-board. The line the ready gate reads:
+The deliverable lands in two places, both of which outlive the reviewer: the
+one-line verdict to the ticket's log first, and the full review as the final
+message, which reaches the dispatcher at completion. Full review text stays
+off the board. The logged line is the one the ready gate reads:
 
 ```
 cliban issue log <KEY> "review: SPEC ACCEPT; QUALITY pass — <findings>"
@@ -70,11 +71,13 @@ the reviewer is wrong, answer with executable evidence and log the disposition.
 
 ## The orchestrator's reviews
 
-**Pass 2.** Before sync the planner reports confidence and a `review: skip |
-run` recommendation grounded in the seam verdicts and in what its implementers
-asked to have reviewed. Either side may request review; the orchestrator decides
-at every confidence level, and a ticket whose final seam review passed is
-already reviewed — pass 2 is for what the planner could not see.
+**Pass 2.** The planner's handoff report carries confidence and a
+`review: skip | run` recommendation grounded in the seam verdicts and in what
+its implementers asked to have reviewed. The orchestrator decides at the
+completion wake, on the reported ready SHA, at every confidence level — a
+ticket whose final seam review passed is already reviewed; pass 2 hunts what
+the planner could not see. Findings brief a fresh planner on the ticket,
+which lands a new ready SHA; a skip is logged as the orchestrator's waiver.
 
 **Integration.** At a wave boundary the orchestrator reviews the assembled wave,
 not the tickets: the conflicts git does not mark. A wave of one has no siblings

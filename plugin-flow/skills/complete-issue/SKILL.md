@@ -29,10 +29,10 @@ dispatched work starts from the current milestone tip — first export
 milestone branch, integration, and the move to done to the orchestrator.
 
 **Resume exception** — a claimed in-progress ticket that may belong to a dead
-session: read its `## Plan`, `## Activity Log`, and worktree, then
-ask the claimant. Take over only when it cannot continue or the orchestrator confirms
-it ended (`issue release <KEY>` or `claim <KEY> --force`), and resume the
-existing artifacts.
+session: derive its position from `## Plan`, `## Activity Log`, the worktree,
+and git. Take over only when your orchestrator or the user confirms the
+claimant is gone (`issue release <KEY>` or `claim <KEY> --force`), then resume
+the existing artifacts — fresh session, warm workspace.
 
 Read the issue, its Spec and activity, the milestone description, the adapter,
 the project notes `ticket start` printed on stderr, the ADRs and domain docs
@@ -72,7 +72,9 @@ against an unfamiliar codebase is exactly where the risk model is worst.
 ## The loop
 
 Per task, in plan order, one at a time — implementers share a worktree and
-would collide.
+would collide. Each dispatch ends your turn; the delegate's completion wakes
+you with its report. The plan and log on the board are the loop's state,
+re-derived on every wake.
 
 1. **Dispatch the implementer** (contract Implementer binding) with the worktree
    path, ticket key, the Spec excerpt the task must satisfy, the task's five
@@ -107,9 +109,11 @@ The board outranks your memory, always, and after a compaction especially: the
 plan's ticked boxes, the activity log, and `git log` say what happened. Re-read
 them rather than re-dispatching a task you cannot remember finishing.
 
-Run continuously: do not check in between tasks. Stop only for a destructive or
-irreversible operation, a security-sensitive action, an effect outside your
-worktree, or a plan defect no reading resolves.
+Run the loop to the end without consulting the user: ending your turn on an
+in-flight dispatch is the loop running, and the next report resumes it.
+Consult the user only for a destructive or irreversible operation, a
+security-sensitive action, an effect outside your worktree, or a plan defect
+no reading resolves.
 
 The Spec's acceptance criteria are the finish line — work past them is
 gold-plating; promote discovered scope, don't absorb it, and amend the Spec when
@@ -130,29 +134,37 @@ earlier one, so the last reviewer sees the accumulation rather than one diff's
 worth of it.
 
 Before the final seam, run the repository's full build, lint, typecheck, and
-test gate yourself — you run it, an implementer fixes what it breaks.
+test gate — yours to run, an implementer's to fix. A gate that fits a
+foreground call runs in one; one that could outlast it goes to a delegate
+that runs it and returns the output.
 
 ## Handoff
 
-Commit, then report `confidence: high | medium | low`, `review: skip | run`,
-one-line evidence, and merge risk. Ground the recommendation
-in the seam verdicts and in what your implementers asked to have reviewed, not
-in a feeling. Anything left open that outlives the ticket — an accepted Minor, a
-`Ruling:` with a real cost, a trap the next ticket will hit — goes to
-`cliban milestone log` as one line: the ticket's log dies with the ticket's
-review, and the milestone reviewer reads the milestone's. In dispatched mode,
-wait for the orchestrator's decision; it
-records the verdict or waiver. Then run `cliban-flow ticket sync <KEY>` and
-resolve the conflicts yourself (combining two verified trees is planning, not
+The handoff is the exit ritual, and it is the step to protect above every
+other: the ticket's value either leaves the session here or dies with it.
+Commit, then sweep the loose ends onto durable ground — anything open that
+outlives the ticket (an accepted Minor, a `Ruling:` with a real cost, a trap
+the next ticket will hit) goes to `cliban milestone log` as one line, because
+the ticket's log dies with the ticket's review and the milestone reviewer
+reads the milestone's. Then run `cliban-flow ticket sync <KEY>` and resolve
+the conflicts yourself (combining two verified trees is planning, not
 implementation), explain each resolution diff, re-run focused and full
-verification, and run `cliban-flow ticket ready <KEY>`. The ready SHA is the
-immutable handoff — never commit after ready. Standalone work follows the same
-primitives without an orchestrator waiver, then offers merge/PR/discard.
-Dispatched work reports SHA, branch, checks, summary, Spec amendments, and
-merge risks.
+verification, and run `cliban-flow ticket ready <KEY>` — its gate reads the
+final seam's logged verdict. The ready SHA is the immutable handoff; never
+commit after ready.
+
+Then hand in the deliverable and end: your final message reports the ready
+SHA, branch, checks, seam verdicts, one-line summary, Spec amendments, merge
+risks, `confidence: high | medium | low`, and `review: skip | run` — grounded
+in the seam verdicts and in what your implementers asked to have reviewed,
+not in a feeling. No approval step exists: your orchestrator decides pass 2
+on the ready SHA after you are gone, and its findings arrive as a fresh
+delegate's brief on this ticket. Standalone work follows the same primitives,
+then offers merge/PR/discard.
 
 When you strike out, or your orchestrator calls you off, commit what stands,
-write the handoff, and exit — a fresh planner finishes from the board. The
+write the handoff, and exit — a fresh planner finishes from the board and the
+worktree it inherits. The
 handoff is one `issue log` entry: open findings, the half-applied change's exact
 boundary, sync state, dead ends, rulings, and disagreements stated.
 

@@ -42,6 +42,39 @@ instead of recreating the git operation it owns. Exit 0 = success or an
 affirmative verdict; 1 = a legitimate negative verdict with its next step;
 2 = a refusal whose instruction must be followed before retrying.
 
+## Delegation
+
+Every agent in this suite is a **one-shot delegate**: brief in, deliverable
+out, session over. Three layers, three lifetimes — the board is permanent, the
+worktree lives for the assignment, the session is disposable. Work survives
+because everything that matters leaves the session before it ends: commits to
+the branch, findings to `issue log`, verdicts to the board, the report as the
+final message.
+
+- **Channels.** A delegate hears its brief at dispatch; the dispatcher may
+  amend it mid-flight with a one-way message (a sibling's invariant, a changed
+  `## Files`), reply never awaited. A delegate speaks once — its deliverable,
+  as board writes plus its return value. The return value reaches only its
+  dispatcher; the board reaches everyone, forever.
+- **Wakes.** Dispatching ends the turn; the delegate's completion — finished
+  or dead, the harness reports both — is the wake, and it arrives on its own.
+  On each wake: derive the state from the board and git, act, dispatch, end
+  the turn. Ending the turn with delegates in flight is the loop running.
+- **Long commands are delegates.** A gate that could outlast a foreground
+  call runs inside a dispatched agent that returns its output — the same
+  wait-shape as everything else.
+- **Recovery is a fresh session in a warm workspace.** A delegate that died
+  mid-assignment is replaced by a fresh one that inherits the worktree and
+  derives its position from the board and git. Nothing resumes; everything
+  re-derives.
+
+Four waits present as diligence and deliver silence, so they are named: a
+`sleep` (the harness backgrounds it — it waits zero seconds and burns the
+turn), a read re-run to check whether a dispatch finished, a message to
+another agent sent to await its reply, and a deliverable held for an approval
+step. No approval step exists, and the only wake is a delegate completing —
+every wait is shaped as that, or is not a wait.
+
 ## Status mapping
 
 | Workflow event | Board action |

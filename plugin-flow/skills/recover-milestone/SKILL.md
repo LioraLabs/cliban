@@ -35,11 +35,12 @@ concluding anything from git alone.
   confirms discard, `ticket abandon <KEY> --confirm "<why>"`; restart later
   through `ticket start <KEY>`.
 - **Silent agent** — in-progress, commits ahead, no ticked plan tasks is not
-  abandonment. Derive the task name from the key (`CLI-95` becomes `cli_95`),
-  find it with `list_agents`, then `send_message` to its resolved agent ID. If
-  absent or unreachable, load and read `complete-issue` and apply its
-  **Resume exception** before deciding the claimant is gone and respawning
-  onto the existing worktree to inspect and verify the work.
+  abandonment: silence is indistinguishable from progress, and a false "dead"
+  verdict costs more than a slow one. A delegate dies with the session that
+  dispatched it, so a claimant from an interrupted run is already gone — load
+  `complete-issue`, apply its **Resume exception**, and respawn a fresh
+  session onto the existing worktree to inspect and verify the work before
+  anything is discarded.
 - **Interrupted merge** — unmerged paths belong to the ticket's own worktree,
   not the orchestrator: respawn there to resolve the conflicts, inspect the
   resolution diff, verify, commit, then `ticket sync <KEY>` and
