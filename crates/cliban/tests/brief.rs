@@ -188,7 +188,7 @@ fn board_briefs_count_and_list() {
         check(
             &out,
             &[
-                "In progress: BR-2 Fat issue, updated",
+                "Blocked: BR-2 Fat issue, updated",
                 "Blocked: BR-4 Stuck thing",
                 "In review: BR-3 Review thing",
                 "Newest change",
@@ -249,4 +249,70 @@ fn brief_conflicts_with_json_and_table() {
     ] {
         assert_eq!(run(&db, &args).1, 2, "{args:?}");
     }
+}
+
+#[test]
+fn board_brief_names_edge_blocked_issues() {
+    let db = tmp("edge").to_string_lossy().to_string();
+    ok(&db, &["project", "add", "ED", "Edge"]);
+    ok(&db, &["issue", "add", "Root", "-p", "ED"]);
+    ok(
+        &db,
+        &[
+            "issue",
+            "add",
+            "Waiting",
+            "-p",
+            "ED",
+            "--blocked-by",
+            "ED-1",
+        ],
+    );
+    for args in [
+        vec!["project", "show", "ED", "--brief"],
+        vec!["issue", "ls", "-p", "ED", "--brief"],
+    ] {
+        let out = ok(&db, &args);
+        assert!(out.contains("Blocked: ED-2 Waiting"), "{out}");
+        assert!(!out.contains("Blocked: ED-1"), "{out}");
+        assert!(out.contains("2 in backlog"), "{out}");
+    }
+}
+
+#[test]
+fn issue_brief_skips_archived_blocker() {
+    let db = tmp("arch").to_string_lossy().to_string();
+    ok(&db, &["project", "add", "AR", "Arch"]);
+    ok(&db, &["issue", "add", "Old", "-p", "AR"]);
+    ok(
+        &db,
+        &["issue", "add", "New", "-p", "AR", "--blocked-by", "AR-1"],
+    );
+    assert!(ok(&db, &["issue", "show", "AR-2", "--brief"]).contains("Blocked by AR-1 (backlog)."));
+    ok(&db, &["issue", "archive", "AR-1"]);
+    let out = ok(&db, &["issue", "show", "AR-2", "--brief"]);
+    assert!(out.contains("No open blockers."), "{out}");
+}
+
+#[test]
+fn issue_brief_log_survives_description_rewrite() {
+    let db = tmp("log").to_string_lossy().to_string();
+    ok(&db, &["project", "add", "LG", "Log"]);
+    ok(&db, &["issue", "add", "Thing", "-p", "LG"]);
+    ok(&db, &["issue", "log", "LG-1", "durable note"]);
+    ok(
+        &db,
+        &["issue", "edit", "LG-1", "--description", "fresh spec"],
+    );
+    let out = ok(&db, &["issue", "show", "LG-1", "--brief"]);
+    assert!(out.contains("durable note"), "{out}");
+}
+
+#[test]
+fn activity_brief_says_created_and_completed() {
+    let db = seeded();
+    ok(&db, &["issue", "mv", "BR-3", "done"]);
+    let out = ok(&db, &["activity", "-p", "BR", "--brief"]);
+    assert!(out.contains(", BR-1 was created: Blocker thing."), "{out}");
+    assert!(out.contains(", BR-3 was completed: Review thing."), "{out}");
 }

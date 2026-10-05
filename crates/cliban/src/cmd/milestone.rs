@@ -683,7 +683,11 @@ async fn show(
             header += &format!(", target {}", format_date(t));
         }
         header.push('.');
-        print!("{}", crate::brief::board(&header, &issue_list, Utc::now()));
+        let blocked = crate::cmd::issue::edge_blocked(&store).await?;
+        print!(
+            "{}",
+            crate::brief::board(&header, &issue_list, &blocked, Utc::now())
+        );
         return Ok(());
     }
 

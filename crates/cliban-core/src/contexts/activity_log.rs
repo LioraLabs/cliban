@@ -88,6 +88,22 @@ pub fn list_for_issue(
     Ok(out)
 }
 
+/// Newest recorded entry of one `kind` for an issue, if any.
+pub fn latest_of_kind(
+    conn: &Connection,
+    issue_id: i64,
+    kind: &str,
+) -> Result<Option<ActivityLogEntry>> {
+    let sql = format!(
+        "SELECT {} FROM activity_log_entries WHERE issue_id = ?1 AND kind = ?2 \
+         ORDER BY ts DESC, id DESC LIMIT 1",
+        rows::ACTIVITY_COLS
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut it = stmt.query_map(params![issue_id, kind], rows::activity_log_entry)?;
+    Ok(it.next().transpose()?)
+}
+
 /// `render/1` — one markdown line per entry. Format mirrors the Elixir
 /// `render_line/1`: `<iso8601>  <kind padded to 8>  <msg>`, trailing
 /// whitespace trimmed per line.

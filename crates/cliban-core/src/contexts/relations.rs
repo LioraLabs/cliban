@@ -188,6 +188,29 @@ pub fn list_ready(
     Ok(out)
 }
 
+/// The one rule for "an open blocker": not archived, not done.
+const OPEN_BLOCKER: &str = "blocker.archived = 0 AND blocker.status != 'done'";
+
+/// Open blockers of one issue, by key. Same rule as [`list_blocked`].
+pub fn open_blockers(conn: &Connection, issue_id: i64) -> Result<Vec<Issue>> {
+    let cols = rows::ISSUE_COLS
+        .split(", ")
+        .map(|c| format!("blocker.{c}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT {cols} FROM issue_relation r \
+         JOIN issues blocker ON blocker.id = r.from_issue_id \
+         WHERE r.to_issue_id = ?1 AND r.type = 'blocks' AND {OPEN_BLOCKER} \
+         ORDER BY blocker.key"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let out = stmt
+        .query_map(params![issue_id], rows::issue)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(out)
+}
+
 /// `list_blocked/1`: non-archived issues with at least one open (non-done,
 /// non-archived) blocker. `project_key = None` spans all projects.
 pub fn list_blocked(conn: &Connection, project_key: Option<&str>) -> Result<Vec<Issue>> {
@@ -200,7 +223,7 @@ pub fn list_blocked(conn: &Connection, project_key: Option<&str>) -> Result<Vec<
         "SELECT DISTINCT {cols} FROM issues i \
          JOIN issue_relation r ON r.to_issue_id = i.id AND r.type = 'blocks' \
          JOIN issues blocker ON blocker.id = r.from_issue_id \
-         WHERE i.archived = 0 AND blocker.archived = 0 AND blocker.status != 'done'"
+         WHERE i.archived = 0 AND {OPEN_BLOCKER}"
     );
     let out = match project_key {
         Some(key) => {

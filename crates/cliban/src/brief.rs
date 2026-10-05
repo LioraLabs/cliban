@@ -2,9 +2,10 @@
 //! a prompt. Pure renderers over plain data; no markdown, no tables.
 
 use chrono::{DateTime, Utc};
-use cliban_core::schema::Issue;
+use cliban_core::schema::{Issue, ISSUE_STATUSES};
 use cliban_core::sections::find_section;
 use cliban_core::time::relative;
+use std::collections::HashSet;
 
 const MAX_LINES: usize = 40;
 const MAX_WIDTH: usize = 200;
@@ -92,6 +93,8 @@ pub struct IssueBrief<'a> {
     /// Open blockers: (key, status).
     pub blockers: &'a [(String, String)],
     pub claimed_by: Option<&'a str>,
+    /// Newest durable `log` entry; survives a description rewrite.
+    pub latest_log: Option<(DateTime<Utc>, String)>,
 }
 
 pub fn issue(b: &IssueBrief, now: DateTime<Utc>) -> String {
@@ -121,9 +124,11 @@ pub fn issue(b: &IssueBrief, now: DateTime<Utc>) -> String {
             .collect();
         sentence(&format!("Blocked by {}", list.join(", ")))
     });
-    let newest = crate::descmd::parse_activity_log(&i.description)
-        .into_iter()
-        .max_by_key(|(ts, _)| *ts);
+    let newest = b.latest_log.clone().or_else(|| {
+        crate::descmd::parse_activity_log(&i.description)
+            .into_iter()
+            .max_by_key(|(ts, _)| *ts)
+    });
     lines.push(match newest {
         Some((ts, msg)) => sentence(&format!(
             "Latest log {}: {}",
@@ -143,7 +148,12 @@ pub fn issue(b: &IssueBrief, now: DateTime<Utc>) -> String {
 }
 
 /// Board summary over `issues`, under a caller-supplied header sentence.
-pub fn board(header: &str, issues: &[Issue], now: DateTime<Utc>) -> String {
+pub fn board(
+    header: &str,
+    issues: &[Issue],
+    edge_blocked: &HashSet<i64>,
+    now: DateTime<Utc>,
+) -> String {
     let mut sorted: Vec<&Issue> = issues.iter().collect();
     sorted.sort_by(|a, b| {
         b.updated_at
@@ -155,7 +165,12 @@ pub fn board(header: &str, issues: &[Issue], now: DateTime<Utc>) -> String {
         lines.push("No issues.".into());
         return cap(lines);
     }
-    let parts: Vec<String> = ["in-progress", "blocked", "in-review", "backlog", "done"]
+    // Display order; a status missing here still counts, after the known ones.
+    const ORDER: [&str; 5] = ["in-progress", "blocked", "in-review", "backlog", "done"];
+    let rank = |s: &str| ORDER.iter().position(|o| *o == s).unwrap_or(ORDER.len());
+    let mut statuses: Vec<&str> = ISSUE_STATUSES.to_vec();
+    statuses.sort_by_key(|s| rank(s));
+    let parts: Vec<String> = statuses
         .iter()
         .filter_map(|s| {
             let n = sorted.iter().filter(|i| i.status == *s).count();
@@ -173,12 +188,18 @@ pub fn board(header: &str, issues: &[Issue], now: DateTime<Utc>) -> String {
         if n == 1 { "" } else { "s" },
         parts.join(", ")
     ));
+    // Blocked is status or an open blocking edge (never for a finished issue).
+    let is_blocked =
+        |i: &Issue| i.status == "blocked" || (i.status != "done" && edge_blocked.contains(&i.id));
     for (status, label) in [
         ("in-progress", "In progress"),
         ("blocked", "Blocked"),
         ("in-review", "In review"),
     ] {
-        for i in sorted.iter().filter(|i| i.status == status) {
+        for i in sorted.iter().filter(|i| match status {
+            "blocked" => is_blocked(i),
+            s => i.status == s && !is_blocked(i),
+        }) {
             lines.push(format!(
                 "{label}: {} {}, updated {}.",
                 i.key,
@@ -198,8 +219,8 @@ pub fn board(header: &str, issues: &[Issue], now: DateTime<Utc>) -> String {
     cap(lines)
 }
 
-/// Activity feed: `(ts, key, text)` newest first.
-pub fn feed(since: &str, events: &[(DateTime<Utc>, String, String)], now: DateTime<Utc>) -> String {
+/// Activity feed: `(ts, sentence-without-age)` newest first.
+pub fn feed(since: &str, events: &[(DateTime<Utc>, String)], now: DateTime<Utc>) -> String {
     let n = events.len();
     let mut lines = vec![if n == 0 {
         sentence(&format!("No changes since {since}"))
@@ -209,8 +230,8 @@ pub fn feed(since: &str, events: &[(DateTime<Utc>, String, String)], now: DateTi
             if n == 1 { "" } else { "s" }
         ))
     }];
-    for (ts, key, text) in events {
-        lines.push(sentence(&format!("{}, {key}: {text}", relative(*ts, now))));
+    for (ts, text) in events {
+        lines.push(sentence(&format!("{}, {text}", relative(*ts, now))));
     }
     cap(lines)
 }
@@ -279,6 +300,7 @@ mod tests {
             milestone: Some("M1"),
             blockers: &[("K-2".into(), "backlog".into())],
             claimed_by: Some("bob"),
+            latest_log: None,
         };
         let out = issue(&b, now());
         assert!(out.contains("Status in-progress, milestone M1."), "{out}");
@@ -295,7 +317,7 @@ mod tests {
             iss("K-2", "backlog", 1, ""),
             iss("K-3", "backlog", 9, ""),
         ];
-        let out = board("Project K, Kay.", &v, now());
+        let out = board("Project K, Kay.", &v, &HashSet::new(), now());
         assert!(
             out.contains("3 issues: 1 in progress, 2 in backlog."),
             "{out}"
@@ -303,12 +325,12 @@ mod tests {
         assert!(out.contains("In progress: K-1 Title K-1, updated 5h ago."));
         assert!(!out.contains("K-3"));
         assert!(out.contains("Newest change 1h ago: K-2 Title K-2, now backlog."));
-        assert!(board("H.", &[], now()).contains("No issues."));
+        assert!(board("H.", &[], &HashSet::new(), now()).contains("No issues."));
     }
 
     #[test]
     fn feed_orders_as_given() {
-        let e = vec![(now(), "K-1".to_string(), "hello".to_string())];
+        let e = vec![(now(), "K-1: hello".to_string())];
         let out = feed("1d", &e, now());
         assert_eq!(out, "1 change since 1d.\njust now, K-1: hello.\n");
     }

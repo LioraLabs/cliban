@@ -193,8 +193,13 @@ pub async fn run(db: &Option<String>, a: ActivityArgs) -> CliResult<()> {
             .iter()
             // No actor prefix: session ids do not read aloud.
             .map(|e| {
-                let body = e.message.as_deref().unwrap_or(&e.title);
-                (e.ts, e.key.clone(), body.to_string())
+                let text = match (e.kind.as_str(), &e.message) {
+                    ("created" | "completed", None) => {
+                        format!("{} was {}: {}", e.key, e.kind, e.title.trim_end_matches('.'))
+                    }
+                    (_, m) => format!("{}: {}", e.key, m.as_deref().unwrap_or(&e.title)),
+                };
+                (e.ts, text)
             })
             .collect();
         print!("{}", crate::brief::feed(&since_str, &evs, now));

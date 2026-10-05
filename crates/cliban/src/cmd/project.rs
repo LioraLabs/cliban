@@ -425,9 +425,10 @@ async fn show(
             })
             .await?;
         let header = format!("Project {}, {}.", p.key, p.name);
+        let blocked = crate::cmd::issue::edge_blocked(&store).await?;
         print!(
             "{}",
-            crate::brief::board(&header, &list, chrono::Utc::now())
+            crate::brief::board(&header, &list, &blocked, chrono::Utc::now())
         );
         return Ok(());
     }

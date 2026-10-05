@@ -1050,6 +1050,16 @@ fn require_section(issue: &Issue, anchor: &str, create: bool) -> Result<(), clib
     ))
 }
 
+/// Ids of issues with an open blocking edge (core's rule, all projects).
+pub async fn edge_blocked(store: &Store) -> CliResult<std::collections::HashSet<i64>> {
+    Ok(store
+        .call(|conn| relations::list_blocked(conn, None))
+        .await?
+        .into_iter()
+        .map(|i| i.id)
+        .collect())
+}
+
 async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
     let key = parse_issue_key(&a.key)?;
     let store = store_open::open(db).await?;
@@ -1061,20 +1071,15 @@ async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
 
     if a.brief {
         let id = issue.id;
-        let (blockers, claimed_by) = store
+        let (blockers, claimed_by, latest_log) = store
             .call(move |conn| {
-                let mut open = Vec::new();
-                for r in relations::for_issue(conn, id)? {
-                    if r.kind != "blocked_by" {
-                        continue;
-                    }
-                    if let Some(t) = issues::get_by_key(conn, &r.target_key)? {
-                        if t.status != "done" {
-                            open.push((t.key, t.status));
-                        }
-                    }
-                }
-                Ok((open, claims::get(conn, id)?.map(|c| c.claimed_by)))
+                let open = relations::open_blockers(conn, id)?
+                    .into_iter()
+                    .map(|t| (t.key, t.status))
+                    .collect::<Vec<_>>();
+                let log = cliban_core::contexts::activity_log::latest_of_kind(conn, id, "log")?
+                    .map(|e| (e.ts, e.message));
+                Ok((open, claims::get(conn, id)?.map(|c| c.claimed_by), log))
             })
             .await?;
         let (ms_name, _) = resolve_refs(&store, &issue).await?;
@@ -1083,6 +1088,7 @@ async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
             milestone: Some(&ms_name),
             blockers: &blockers,
             claimed_by: claimed_by.as_deref(),
+            latest_log,
         };
         print!("{}", crate::brief::issue(&b, Utc::now()));
         return Ok(());
@@ -1327,9 +1333,10 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
     }
 
     if a.brief {
+        let blocked = edge_blocked(&store).await?;
         print!(
             "{}",
-            crate::brief::board("Board summary.", &issues, Utc::now())
+            crate::brief::board("Board summary.", &issues, &blocked, Utc::now())
         );
         return Ok(());
     }
