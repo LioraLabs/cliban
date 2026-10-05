@@ -4,6 +4,7 @@ mod cmd;
 mod descmd;
 
 mod audit;
+mod brief;
 mod errors;
 mod lint;
 mod output;

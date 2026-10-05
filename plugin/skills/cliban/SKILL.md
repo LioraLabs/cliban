@@ -31,6 +31,13 @@ error messages that name the fix.
 - **Output follows the reader**: piped stdout → JSON/NDJSON, TTY → tables;
   `--json`/`--table` force it, `$CLIBAN_OUTPUT` pins it. Mutations echo one
   compact lean JSON line when piped. `cat` is the exception: always bytes.
+- **Status questions take `--brief`** ("how's X going?", "what's blocked?"):
+  `project show`, `milestone show`, `issue show`, `issue ls`, and `activity`
+  print at most 40 lines of plain sentences with relative ages — counts by
+  status, what is in progress or blocked, the newest change; for an issue its
+  status, spec gist, blockers, and latest log. Safe to read aloud or paste
+  into a prompt; a single `issue show --json` can run to tens of thousands of
+  characters. Reach for JSON only when you need a field.
 
 ## Traps
 
@@ -124,6 +131,9 @@ The bodies are the payload: `ls` to find keys, `show` to read one entity,
 ## The non-obvious reads
 
 ```bash
+cliban project show --brief                # "how's the project going?" in ≤40 speakable lines
+cliban issue show PROJ-42 --brief          # title, status, spec gist, blockers, latest log
+cliban activity --since 1d --brief         # one sentence per change, newest first
 cliban issue ls                            # per-milestone open-status counts
 cliban issue ls --all                      # every issue row, including done/archived
 cliban issue ls --ready                    # takeable: backlog, unblocked, unclaimed — composes with every filter

@@ -145,6 +145,9 @@ pub enum MilestoneCmd {
         /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
         #[arg(long, conflicts_with = "json")]
         table: bool,
+        /// short plain-text summary for reading aloud or pasting into a prompt
+        #[arg(long, conflicts_with_all = ["json", "table"])]
+        brief: bool,
     },
     /// Edit a milestone
     Edit {
@@ -261,7 +264,18 @@ pub async fn run(db: &Option<String>, args: MilestoneArgs) -> CliResult<()> {
             project,
             json,
             table,
-        } => show(db, name, project, crate::output::mode(json, table), json).await,
+            brief,
+        } => {
+            show(
+                db,
+                name,
+                project,
+                crate::output::mode(json, table),
+                json,
+                brief,
+            )
+            .await
+        }
         MilestoneCmd::Edit {
             project,
             name,
@@ -629,6 +643,7 @@ async fn show(
     project: Option<String>,
     mode: Mode,
     explicit_json: bool,
+    brief: bool,
 ) -> CliResult<()> {
     let project_key = crate::scope::required_project(project)?;
 
@@ -658,6 +673,23 @@ async fn show(
         })
         .await?;
     let count = issue_list.len() as i64;
+
+    if brief {
+        let mut header = format!(
+            "Milestone {} in {}, status {}",
+            m.name, project_key, m.status
+        );
+        if let Some(t) = m.target_date {
+            header += &format!(", target {}", format_date(t));
+        }
+        header.push('.');
+        let blocked = crate::cmd::issue::edge_blocked(&store).await?;
+        print!(
+            "{}",
+            crate::brief::board(&header, &issue_list, &blocked, Utc::now())
+        );
+        return Ok(());
+    }
 
     if mode.is_json() {
         let value = crate::output::build_milestone_json(

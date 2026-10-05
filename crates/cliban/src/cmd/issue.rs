@@ -159,6 +159,9 @@ pub struct ShowArgs {
     /// pipe human-readable output through $PAGER
     #[arg(long)]
     pager: bool,
+    /// short plain-text summary for reading aloud or pasting into a prompt
+    #[arg(long, conflicts_with_all = ["json", "table"])]
+    brief: bool,
 }
 
 #[derive(clap::Args)]
@@ -217,6 +220,9 @@ pub struct LsArgs {
     /// only issues with at least one open blocker
     #[arg(long, conflicts_with = "search")]
     blocked: bool,
+    /// short plain-text summary for reading aloud or pasting into a prompt
+    #[arg(long, conflicts_with_all = ["json", "table", "search"])]
+    brief: bool,
 }
 
 #[derive(clap::Args)]
@@ -1044,6 +1050,16 @@ fn require_section(issue: &Issue, anchor: &str, create: bool) -> Result<(), clib
     ))
 }
 
+/// Ids of issues with an open blocking edge (core's rule, all projects).
+pub async fn edge_blocked(store: &Store) -> CliResult<std::collections::HashSet<i64>> {
+    Ok(store
+        .call(|conn| relations::list_blocked(conn, None))
+        .await?
+        .into_iter()
+        .map(|i| i.id)
+        .collect())
+}
+
 async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
     let key = parse_issue_key(&a.key)?;
     let store = store_open::open(db).await?;
@@ -1052,6 +1068,31 @@ async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
         .call(move |conn| issues::get_by_key(conn, &lookup))
         .await?
         .ok_or_else(|| CliError::not_found(format!("not found: {key}")))?;
+
+    if a.brief {
+        let id = issue.id;
+        let (blockers, claimed_by, latest_log) = store
+            .call(move |conn| {
+                let open = relations::open_blockers(conn, id)?
+                    .into_iter()
+                    .map(|t| (t.key, t.status))
+                    .collect::<Vec<_>>();
+                let log = cliban_core::contexts::activity_log::latest_of_kind(conn, id, "log")?
+                    .map(|e| (e.ts, e.message));
+                Ok((open, claims::get(conn, id)?.map(|c| c.claimed_by), log))
+            })
+            .await?;
+        let (ms_name, _) = resolve_refs(&store, &issue).await?;
+        let b = crate::brief::IssueBrief {
+            issue: &issue,
+            milestone: Some(&ms_name),
+            blockers: &blockers,
+            claimed_by: claimed_by.as_deref(),
+            latest_log,
+        };
+        print!("{}", crate::brief::issue(&b, Utc::now()));
+        return Ok(());
+    }
 
     if crate::output::mode(a.json, a.table).is_json() {
         let inputs = issue_json_inputs(&store, &issue).await?;
@@ -1214,7 +1255,7 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
     if status.is_none() && !a.all {
         issues.retain(|i| i.status != "done");
     }
-    if summary {
+    if summary && !a.brief {
         return write_issue_summary(&store, &issues, crate::output::mode(a.json, a.table)).await;
     }
 
@@ -1289,6 +1330,15 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
     }
     if a.limit > 0 {
         issues.truncate(a.limit as usize);
+    }
+
+    if a.brief {
+        let blocked = edge_blocked(&store).await?;
+        print!(
+            "{}",
+            crate::brief::board("Board summary.", &issues, &blocked, Utc::now())
+        );
+        return Ok(());
     }
 
     if crate::output::mode(a.json, a.table).is_json() {
