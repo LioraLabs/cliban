@@ -22,6 +22,7 @@ use cliban_core::contexts::{activity_log, issues, milestones, projects};
 use cliban_core::schema::{ActivityLogEntry, Issue};
 use cliban_core::time::{format_usec, relative};
 
+use crate::brief::elide;
 use crate::descmd;
 use crate::errors::CliResult;
 use crate::store_open;
@@ -32,18 +33,6 @@ const FEED_TIME_FORMAT: &str = "%Y-%m-%dT%H:%MZ";
 
 /// Character budget for the trailing text column of the human feed.
 const TEXT_WIDTH: usize = 110;
-
-/// Truncate to `max` characters (not bytes), marking the cut.
-fn elide(s: &str, max: usize) -> String {
-    let flat = s.replace('\n', " ");
-    if flat.chars().count() <= max {
-        return flat;
-    }
-    flat.chars()
-        .take(max.saturating_sub(1))
-        .chain(['…'])
-        .collect()
-}
 
 #[derive(clap::Args)]
 pub struct ActivityArgs {
@@ -73,6 +62,9 @@ pub struct ActivityArgs {
     /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
     #[arg(long, conflicts_with = "json")]
     table: bool,
+    /// short plain-text summary for reading aloud or pasting into a prompt
+    #[arg(long, conflicts_with_all = ["json", "table"])]
+    brief: bool,
 }
 
 struct Event {
@@ -196,6 +188,14 @@ pub async fn run(db: &Option<String>, a: ActivityArgs) -> CliResult<()> {
     }
 
     let now = Utc::now();
+    if a.brief {
+        let evs: Vec<_> = events
+            .iter()
+            .map(|e| (e.ts, e.key.clone(), e.text()))
+            .collect();
+        print!("{}", crate::brief::feed(&since_str, &evs, now));
+        return Ok(());
+    }
     if crate::output::mode(a.json, a.table).is_json() {
         for e in &events {
             println!("{}", serde_json::to_string(&event_json(e)).unwrap());

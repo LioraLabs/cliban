@@ -57,6 +57,9 @@ pub enum ProjectCmd {
         /// human output (overrides $CLIBAN_OUTPUT and pipe detection)
         #[arg(long, conflicts_with = "json")]
         table: bool,
+        /// short plain-text summary for reading aloud or pasting into a prompt
+        #[arg(long, conflicts_with_all = ["json", "table"])]
+        brief: bool,
     },
     /// Print the raw description exactly as stored — never formatted
     Cat {
@@ -204,7 +207,12 @@ pub async fn run(db: &Option<String>, args: ProjectArgs) -> CliResult<()> {
             )
             .await
         }
-        ProjectCmd::Show { key, json, table } => show(db, key, json, table).await,
+        ProjectCmd::Show {
+            key,
+            json,
+            table,
+            brief,
+        } => show(db, key, json, table, brief).await,
         ProjectCmd::Cat { key, section } => cat(db, key, section).await,
         ProjectCmd::Search {
             first,
@@ -388,7 +396,13 @@ async fn ls(
     Ok(())
 }
 
-async fn show(db: &Option<String>, key: Option<String>, json: bool, table: bool) -> CliResult<()> {
+async fn show(
+    db: &Option<String>,
+    key: Option<String>,
+    json: bool,
+    table: bool,
+    brief: bool,
+) -> CliResult<()> {
     let key = crate::scope::project_identity(key)?;
     let store = store_open::open(db).await?;
     let lookup = key.clone();
@@ -396,6 +410,27 @@ async fn show(db: &Option<String>, key: Option<String>, json: bool, table: bool)
         .call(move |conn| projects::get_by_key(conn, &lookup))
         .await?
         .ok_or_else(|| CliError::not_found(format!("not found: {key}")))?;
+    if brief {
+        let pk = p.key.clone();
+        let list = store
+            .call(move |conn| {
+                cliban_core::contexts::issues::list(
+                    conn,
+                    cliban_core::contexts::issues::ListOpts {
+                        project: Some(&pk),
+                        archived: false,
+                        ..Default::default()
+                    },
+                )
+            })
+            .await?;
+        let header = format!("Project {}, {}.", p.key, p.name);
+        print!(
+            "{}",
+            crate::brief::board(&header, &list, chrono::Utc::now())
+        );
+        return Ok(());
+    }
     if crate::output::mode(json, table).is_json() {
         let v = project_json_detail(&p, crate::output::single_detail(json));
         println!("{}", serde_json::to_string_pretty(&v).unwrap());

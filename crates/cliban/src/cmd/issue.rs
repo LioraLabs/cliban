@@ -159,6 +159,9 @@ pub struct ShowArgs {
     /// pipe human-readable output through $PAGER
     #[arg(long)]
     pager: bool,
+    /// short plain-text summary for reading aloud or pasting into a prompt
+    #[arg(long, conflicts_with_all = ["json", "table"])]
+    brief: bool,
 }
 
 #[derive(clap::Args)]
@@ -217,6 +220,9 @@ pub struct LsArgs {
     /// only issues with at least one open blocker
     #[arg(long, conflicts_with = "search")]
     blocked: bool,
+    /// short plain-text summary for reading aloud or pasting into a prompt
+    #[arg(long, conflicts_with_all = ["json", "table", "search"])]
+    brief: bool,
 }
 
 #[derive(clap::Args)]
@@ -1053,6 +1059,35 @@ async fn show(db: &Option<String>, a: ShowArgs) -> CliResult<()> {
         .await?
         .ok_or_else(|| CliError::not_found(format!("not found: {key}")))?;
 
+    if a.brief {
+        let id = issue.id;
+        let (blockers, claimed_by) = store
+            .call(move |conn| {
+                let mut open = Vec::new();
+                for r in relations::for_issue(conn, id)? {
+                    if r.kind != "blocked_by" {
+                        continue;
+                    }
+                    if let Some(t) = issues::get_by_key(conn, &r.target_key)? {
+                        if t.status != "done" {
+                            open.push((t.key, t.status));
+                        }
+                    }
+                }
+                Ok((open, claims::get(conn, id)?.map(|c| c.claimed_by)))
+            })
+            .await?;
+        let (ms_name, _) = resolve_refs(&store, &issue).await?;
+        let b = crate::brief::IssueBrief {
+            issue: &issue,
+            milestone: Some(&ms_name),
+            blockers: &blockers,
+            claimed_by: claimed_by.as_deref(),
+        };
+        print!("{}", crate::brief::issue(&b, Utc::now()));
+        return Ok(());
+    }
+
     if crate::output::mode(a.json, a.table).is_json() {
         let inputs = issue_json_inputs(&store, &issue).await?;
         println!(
@@ -1214,7 +1249,7 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
     if status.is_none() && !a.all {
         issues.retain(|i| i.status != "done");
     }
-    if summary {
+    if summary && !a.brief {
         return write_issue_summary(&store, &issues, crate::output::mode(a.json, a.table)).await;
     }
 
@@ -1289,6 +1324,14 @@ async fn ls(db: &Option<String>, a: LsArgs) -> CliResult<()> {
     }
     if a.limit > 0 {
         issues.truncate(a.limit as usize);
+    }
+
+    if a.brief {
+        print!(
+            "{}",
+            crate::brief::board("Board summary.", &issues, Utc::now())
+        );
+        return Ok(());
     }
 
     if crate::output::mode(a.json, a.table).is_json() {
@@ -2551,8 +2594,9 @@ async fn import(db: &Option<String>, a: ImportArgs) -> CliResult<()> {
             let name = lbl.clone();
             store
                 .call(move |conn| {
-                    let issue = issues::get_by_id(conn, id)?
-                        .ok_or_else(|| cliban_core::Error::NamedNotFound(format!("issue id {id}")))?;
+                    let issue = issues::get_by_id(conn, id)?.ok_or_else(|| {
+                        cliban_core::Error::NamedNotFound(format!("issue id {id}"))
+                    })?;
                     issues::add_label(conn, &issue, &name)
                 })
                 .await

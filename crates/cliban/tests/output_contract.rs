@@ -227,12 +227,8 @@ fn piped_single_entity_reads_are_lean_but_explicit_json_is_full() {
         assert!(full.get("description").is_some(), "{full}");
     }
 
-    let pinned: serde_json::Value = serde_json::from_str(&ok_env(
-        &db,
-        &["issue", "show", "CLI-1"],
-        JSON,
-    ))
-    .unwrap();
+    let pinned: serde_json::Value =
+        serde_json::from_str(&ok_env(&db, &["issue", "show", "CLI-1"], JSON)).unwrap();
     assert!(pinned.get("description").is_some(), "{pinned}");
 }
 
@@ -252,7 +248,10 @@ fn log_echo_omits_the_entry_and_not_found_names_the_identity() {
         (vec!["issue", "show", "CLI-404"], "CLI-404"),
         (vec!["issue", "log", "CLI-404", "note"], "CLI-404"),
         (vec!["issue", "mv", "CLI-404", "done"], "CLI-404"),
-        (vec!["issue", "edit", "CLI-404", "--title", "nope"], "CLI-404"),
+        (
+            vec!["issue", "edit", "CLI-404", "--title", "nope"],
+            "CLI-404",
+        ),
         (vec!["issue", "cat", "CLI-404"], "CLI-404"),
         (vec!["issue", "archive", "CLI-404"], "CLI-404"),
         (
@@ -261,26 +260,23 @@ fn log_echo_omits_the_entry_and_not_found_names_the_identity() {
         ),
         (vec!["issue", "release", "CLI-404"], "CLI-404"),
         (vec!["issue", "lint", "CLI-404"], "CLI-404"),
-        (
-            vec!["issue", "add", "work", "--project", "MISS"],
-            "MISS",
-        ),
-        (
-            vec!["issue", "cp", "CLI-1", "--project", "MISS"],
-            "MISS",
-        ),
+        (vec!["issue", "add", "work", "--project", "MISS"], "MISS"),
+        (vec!["issue", "cp", "CLI-1", "--project", "MISS"], "MISS"),
         (vec!["project", "show", "MISS"], "MISS"),
-        (
-            vec!["project", "edit", "MISS", "--name", "Missing"],
-            "MISS",
-        ),
+        (vec!["project", "edit", "MISS", "--name", "Missing"], "MISS"),
         (
             vec!["milestone", "show", "missing", "--project", "CLI"],
             "missing",
         ),
         (
             vec![
-                "milestone", "edit", "missing", "--project", "CLI", "--status", "completed",
+                "milestone",
+                "edit",
+                "missing",
+                "--project",
+                "CLI",
+                "--status",
+                "completed",
             ],
             "missing",
         ),

@@ -66,8 +66,7 @@ pub fn mode(json_flag: bool, table_flag: bool) -> Mode {
 /// lean; an explicit flag or environment pin is a deliberate full read.
 pub fn single_detail(json_flag: bool) -> Detail {
     if json_flag
-        || std::env::var("CLIBAN_OUTPUT")
-            .is_ok_and(|v| v.trim().eq_ignore_ascii_case("json"))
+        || std::env::var("CLIBAN_OUTPUT").is_ok_and(|v| v.trim().eq_ignore_ascii_case("json"))
     {
         Detail::Full
     } else {

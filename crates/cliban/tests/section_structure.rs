@@ -165,12 +165,28 @@ fn note_add_refuses_a_structure_breaking_body() {
     );
     let fence = run(
         &db,
-        &["project", "note", "add", "TST", "bad", "--body", "x\n\n```\nunclosed"],
+        &[
+            "project",
+            "note",
+            "add",
+            "TST",
+            "bad",
+            "--body",
+            "x\n\n```\nunclosed",
+        ],
     );
     assert_eq!(fence.code, 2, "fence body must refuse: {}", fence.stderr);
     let h2 = run(
         &db,
-        &["project", "note", "add", "TST", "worse", "--body", "x\n\n## Phantom\n\ny"],
+        &[
+            "project",
+            "note",
+            "add",
+            "TST",
+            "worse",
+            "--body",
+            "x\n\n## Phantom\n\ny",
+        ],
     );
     assert_eq!(h2.code, 2, "H2 body must refuse: {}", h2.stderr);
     let desc = ok(&db, &["project", "cat", "TST"]);

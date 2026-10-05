@@ -187,7 +187,10 @@ pub fn check_section_structure(
              it in a fenced code block"
         ));
     }
-    if let Some(lost) = expected.iter().find(|e| count(&expected, e) > count(&got, e)) {
+    if let Some(lost) = expected
+        .iter()
+        .find(|e| count(&expected, e) > count(&got, e))
+    {
         return Err(format!(
             "the write would leave the \"## {lost}\" section unreachable behind an \
              unclosed code fence; close the fence — if the description already \
@@ -732,8 +735,8 @@ mod tests {
         // entry's heading into a real boundary; indentation closes it at the
         // item boundary, so both entries land and no section appears.
         let ts = Utc.with_ymd_and_hms(2026, 6, 19, 14, 46, 30).unwrap();
-        let d = append_activity_log("## Spec\n\ns\n", "opening a fence\n\n```\nquoted", ts)
-            .unwrap();
+        let d =
+            append_activity_log("## Spec\n\ns\n", "opening a fence\n\n```\nquoted", ts).unwrap();
         let msg = "more quote\n```\n\n## Phantom\n\nsplit content";
         let out = append_activity_log(&d, msg, ts).unwrap();
         assert_eq!(
@@ -741,7 +744,11 @@ mod tests {
             vec!["Spec".to_string(), "Activity Log".to_string()],
             "{out}"
         );
-        assert_eq!(activity_entries(&out).len(), 2, "both entries render: {out}");
+        assert_eq!(
+            activity_entries(&out).len(),
+            2,
+            "both entries render: {out}"
+        );
     }
 
     #[test]
