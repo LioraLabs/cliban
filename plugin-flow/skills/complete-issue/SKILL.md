@@ -69,6 +69,12 @@ does not know where its risk is. The marking is asymmetric afterwards: evidence
 arriving mid-loop may add a seam, nothing may remove one — a plan written
 against an unfamiliar codebase is exactly where the risk model is worst.
 
+Each marked seam records the **invariant** it protects: the property that must
+hold for everything downstream of it to be worth building. Naming the invariant
+is not naming the defect — it tells the reviewer what to check without handing
+it your theory of where the bug is, and you know it already, because it is why
+you drew the seam there.
+
 ## The loop
 
 Per task, in plan order, one at a time — implementers share a worktree and
@@ -85,6 +91,17 @@ re-derived on every wake.
    the ticket branch; report SHA range, evidence, files touched, and what it
    wants reviewed and why; never spawn subagents of its own, and never touch
    the board, the plan, the next task, `main`, or the milestone branch.
+   Every dispatch also carries the **standing audit** — three questions the
+   implementer answers in its report before it claims done. Review findings
+   cluster here, and each is far cheaper to answer than to review:
+   - **Unrecognized input.** For every function written or changed: what
+     happens to input it does not recognize? Silently dropping it is a defect
+     unless the brief says otherwise. Refusing it with a message that names
+     the problem is the default.
+   - **The error exit.** What does the failure path leave behind? Every
+     acquire, bracket, or mutation needs its release on the exit nobody tests.
+   - **Transaction granularity.** One user gesture is one atomic, undoable
+     unit. Two writes where the user made one motion is the bug.
 2. **Dispatch a fresh verifier** (contract Verifier binding) with the SHA range
    and the same task brief — never the implementer's report, which is the claim
    under test. It runs three checks and returns `PASS` or `FAIL: <one line>`:

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.0
+
+- Give every implementer dispatch a **standing audit** — unrecognized input, the error exit, transaction granularity — answered in its report before it claims done. Across a seven-ticket milestone, 8 of 10 review rounds found an Important finding or rejected, and nearly every finding was one of those three questions unasked: a function that silently dropped what it did not recognize, a failure path that skipped its restore, or one user gesture written as several transactions. Reviews were not slow because reviewing is slow; they were slow because the same defect classes kept arriving. Asking the implementer is far cheaper than paying a reviewer to find it and a second implementer to fix it.
+- Make each review seam **record the invariant it protects**, and carry that invariant in the seam's review brief. The planner already knows it, because it is why the seam was drawn there. Naming the invariant is not naming the defect, so it steers the reviewer without the anchoring the brief already forbids.
+- Replace the pass-2 coin flip with a rule: run it, whatever the handoff recommends, when the ticket **publishes exports later tickets build on** or **deletes, converts, or migrates existing data**; waive it elsewhere. Those are the two cases a seam reviewer is structurally unable to weigh from one ticket's diff. The rule was earned — the one pass 2 run under it caught a conversion that silently deleted a user's hand-written file on open, while the same ticket's standards axis found only Minors.
+- Tell the orchestrator that a delegate killed by an **infrastructure limit** (rate limit, quota, transport error) is neither a strike nor a recovery case: confirm the worktree and board are untouched, then re-dispatch the same brief. Only a death with work half-landed goes through `recover-milestone`.
+
 ## 0.12.0
 
 - Rebuild `complete-issue` as a **plan → execute loop** with three roles instead of one prose page. The planner (session model) plans and dispatches; an implementer (mid-tier) writes one task; a fresh verifier (mid-tier) re-runs the gate and reads the range against the brief, returning `PASS` or `FAIL` — mechanically, never judgment. New contract bindings: Implementer and Verifier alongside Reviewer.

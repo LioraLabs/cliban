@@ -16,7 +16,8 @@ earlier reviewer. Use the reviewer bound by `docs/agents/issue-tracker.md`, or a
 general-purpose agent when none is bound, on the session model.
 
 Give it the Spec, the plan, the implementers' claims, the base and head SHAs of
-the diff since the last seam, the tests, and the project notes matching the
+the diff since the last seam, the tests, the invariant the plan recorded for this
+seam, and the project notes matching the
 ticket — a reviewer without the repo's known traps re-derives them or misses
 them — but never your own theory of where the defect is. Then two axes, in
 parallel, so neither pollutes the other's context:
@@ -78,6 +79,14 @@ completion wake, on the reported ready SHA, at every confidence level — a
 ticket whose final seam review passed is already reviewed; pass 2 hunts what
 the planner could not see. Findings brief a fresh planner on the ticket,
 which lands a new ready SHA; a skip is logged as the orchestrator's waiver.
+
+Two cases run it whatever the report recommends, because they are the two the
+planner's own reviewers were structurally unable to weigh: the ticket
+**publishes exports that later tickets build on**, or it **deletes, converts,
+or migrates existing data**. A seam reviewer sees one ticket's diff; neither
+the cost of a wrong shared interface nor the content a conversion quietly drops
+is visible inside it. Everywhere else, a final seam that passed is reviewed
+work, and waiving is the default.
 
 **Integration.** At a wave boundary the orchestrator reviews the assembled wave,
 not the tickets: the conflicts git does not mark. A wave of one has no siblings

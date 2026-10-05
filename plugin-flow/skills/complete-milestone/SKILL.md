@@ -123,6 +123,12 @@ of that ticket's state — it owns them. Independent siblings continue while
 dependents wait. After a second death on the same ticket, stop retrying and
 ask the user.
 
+A delegate killed by an infrastructure limit — a rate limit, a quota, a
+transport error — is neither a strike nor a recovery case. Nothing it was
+doing was wrong and usually nothing reached disk. Confirm the worktree and the
+board sit where the dispatch found them, then re-dispatch the same brief; only
+a death with work half-landed goes through `recover-milestone`.
+
 ## 5. Integrate
 
 A completion report is a claim to verify: confirm the issue is `in-review` and
