@@ -17,8 +17,11 @@
 
 # Every file that claims a version. `bump` rewrites these, `version-sync` guards
 # them, and sealing the set is what makes the guard re-run exactly when one moves.
-probe version:sites
-    files { "Cargo.toml" "Cargo.lock" "crates/*/Cargo.toml" "packaging/aur/PKGBUILD" }
+files version:sites
+    "Cargo.toml"
+    "Cargo.lock"
+    "crates/*/Cargo.toml"
+    "packaging/aur/PKGBUILD"
 
 # version-sync also asks whether each plugin tree moved since the last release,
 # so every plugin source is an input to it, not just the manifest that claims a
@@ -27,50 +30,77 @@ probe version:sites
 #
 # Found the hard way. With only version:sites sealed, editing a skill left the
 # check cached green while it was really red, and `release` hangs off `check`.
-probe version:plugins
-    files { "plugin/**" "plugin-flow/**" }
+files version:plugins
+    "plugin/**"
+    "plugin-flow/**"
 
 # What the cargo suite actually depends on besides the sources. PKGBUILD is
 # deliberately absent — an AUR edit should not invalidate the test suite.
-probe rust:manifests
-    files { "Cargo.toml" "Cargo.lock" "crates/*/Cargo.toml" }
+files rust:manifests
+    "Cargo.toml"
+    "Cargo.lock"
+    "crates/*/Cargo.toml"
 
-probe rust:toolchain
-    tools { cargo }
+tools rust:toolchain
+    cargo
 
-probe shell:linter
-    tools { shellcheck }
+tools shell:linter
+    shellcheck
 
 # `bash -n` is a bash parse, so bash's own version determines the answer.
-probe flow:linter
-    tools { bash shellcheck }
+tools flow:linter
+    bash
+    shellcheck
 
 # What the cliban-flow shell suite drives. cliban is in here deliberately: the
 # suite asserts on what cliban writes to a board, so a new cliban is a reason to
 # re-run it rather than replay a green from the last one. It is also why
 # test-flow stays off `check` — see below.
-probe flow:tools
-    tools { bash cliban git python3 }
+tools flow:tools
+    bash
+    cliban
+    git
+    python3
 
-probe node:toolchain
-    tools { node npm }
+tools node:toolchain
+    node
+    npm
 
 # Build/test configuration the extension check reads but never iterates.
-probe vscode:config
-    files { "editors/vscode/package.json" "editors/vscode/package-lock.json" "editors/vscode/tsconfig.json" "editors/vscode/esbuild.mjs" "editors/vscode/webview/styles.css" "editors/vscode/test/fixtures/fake-cliban.js" }
+files vscode:config
+    "editors/vscode/package.json"
+    "editors/vscode/package-lock.json"
+    "editors/vscode/tsconfig.json"
+    "editors/vscode/esbuild.mjs"
+    "editors/vscode/webview/styles.css"
+    "editors/vscode/test/fixtures/fake-cliban.js"
+
+# Source sets the one-unit recipes read without naming them in their commands.
+files flow:sources
+    "plugin-flow/scripts/cliban-flow"
+    "plugin-flow/tests/*.sh"
+
+files rust:sources
+    "crates/**/*.rs"
+
+files vscode:sources
+    "editors/vscode/src/**/*.ts"
+    "editors/vscode/shared/**/*.ts"
+    "editors/vscode/webview/**/*.ts"
+    "editors/vscode/test/**/*.ts"
 
 # ---------------------------------------------------------------- gates
 
 # The drift guard. v0.1.0 shipped a binary reporting the wrong version because
 # nothing checked; this is that check.
 recipe version-sync
-    ingredients "scripts/check-version-sync.py"
+    gather "scripts/check-version-sync.py"
     seal version:sites version:plugins
     test { python3 $<in> }
 
 # install.sh is piped into `sh` by strangers, so it gets parsed and linted.
 recipe lint-install
-    ingredients "install.sh"
+    gather "install.sh"
     seal shell:linter
     test { sh -n $<in> }
     test { shellcheck -s sh $<in> }
@@ -80,7 +110,7 @@ recipe lint-install
 # is `bash -n` rather than `sh -n`: these files declare bash, and dash's grammar
 # is not the one they have to satisfy.
 recipe lint-flow
-    ingredients "plugin-flow/scripts/cliban-flow" "plugin-flow/tests/*.sh"
+    gather "plugin-flow/scripts/cliban-flow" "plugin-flow/tests/*.sh"
     seal flow:linter
     test { bash -n $<in> }
     test { shellcheck -x $<in> }
@@ -96,28 +126,23 @@ recipe lint-flow
 # `check`, which would make releasing cliban require an already-installed
 # cliban. Fixtures are hermetic; the binary they drive is not this tree's.
 recipe test-flow
-    ingredients "plugin-flow/scripts/cliban-flow" "plugin-flow/tests/*.sh"
-    seal flow:tools
+    seal flow:sources flow:tools
     test { plugin-flow/tests/run.sh }
 
 # No $<in> in the body, so this is one unit over the whole source set rather
 # than one cargo run per file.
 recipe test-workspace
-    ingredients "crates/**/*.rs"
-    seal rust:manifests rust:toolchain
+    seal rust:sources rust:manifests rust:toolchain
     test { cargo test --workspace }
 
 recipe clippy
-    ingredients "crates/**/*.rs"
-    seal rust:manifests rust:toolchain
+    seal rust:sources rust:manifests rust:toolchain
     test { cargo clippy --workspace --all-targets -- -D warnings }
 
 # No $<in> in the body: one unit over the whole extension source set, like
 # test-workspace. `npm ci` keeps node_modules honest to the lockfile.
 recipe vscode-ext
-    ingredients "editors/vscode/src/**/*.ts" "editors/vscode/shared/**/*.ts"
-        "editors/vscode/webview/**/*.ts" "editors/vscode/test/**/*.ts"
-    seal node:toolchain vscode:config
+    seal vscode:sources node:toolchain vscode:config
     test { npm --prefix editors/vscode ci --no-audit --no-fund }
     test { npm --prefix editors/vscode run check }
 
