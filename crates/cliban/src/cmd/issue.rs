@@ -2594,9 +2594,8 @@ async fn import(db: &Option<String>, a: ImportArgs) -> CliResult<()> {
             let name = lbl.clone();
             store
                 .call(move |conn| {
-                    let issue = issues::get_by_id(conn, id)?.ok_or_else(|| {
-                        cliban_core::Error::NamedNotFound(format!("issue id {id}"))
-                    })?;
+                    let issue = issues::get_by_id(conn, id)?
+                        .ok_or_else(|| cliban_core::Error::NamedNotFound(format!("issue id {id}")))?;
                     issues::add_label(conn, &issue, &name)
                 })
                 .await
