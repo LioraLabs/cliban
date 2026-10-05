@@ -272,8 +272,8 @@ mod tests {
                  ## Phantom\n\n- 2026-08-08T10:01Z — stranded tail\n";
         let f = lint_description(d);
         assert!(
-            f.iter()
-                .any(|f| f.severity == Severity::Error && f.message.contains("--description-file")),
+            f.iter().any(|f| f.severity == Severity::Error
+                && f.message.contains("--description-file")),
             "stranded entry must be an error naming the repair: {f:?}"
         );
     }
@@ -407,10 +407,7 @@ mod tests {
         // Silently dropped, it removes the ticket from collision detection.
         let d = "## Spec\n\ns\n\n## Files\n\n- M good/path.rs\n- X bad/status.rs\n";
         let f = lint_description(d);
-        let bad: Vec<_> = f
-            .iter()
-            .filter(|f| f.message.contains("## Files"))
-            .collect();
+        let bad: Vec<_> = f.iter().filter(|f| f.message.contains("## Files")).collect();
         assert_eq!(bad.len(), 1, "{f:?}");
         assert_eq!(bad[0].severity, Severity::Error, "{f:?}");
         assert!(bad[0].message.contains("X bad/status.rs"), "{f:?}");

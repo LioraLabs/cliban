@@ -181,7 +181,15 @@ fn explicit_note_body_beats_piped_stdin() {
     let db = seeded("note_arg_wins");
     let r = run_piped_stdin(
         &db,
-        &["project", "note", "add", "SF", "T", "--body", "flag body"],
+        &[
+            "project",
+            "note",
+            "add",
+            "SF",
+            "T",
+            "--body",
+            "flag body",
+        ],
         "pipe body\n",
     );
     assert_eq!(r.code, 0, "stderr: {}", r.stderr);

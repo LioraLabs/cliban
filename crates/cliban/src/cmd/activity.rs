@@ -191,7 +191,11 @@ pub async fn run(db: &Option<String>, a: ActivityArgs) -> CliResult<()> {
     if a.brief {
         let evs: Vec<_> = events
             .iter()
-            .map(|e| (e.ts, e.key.clone(), e.text()))
+            // No actor prefix: session ids do not read aloud.
+            .map(|e| {
+                let body = e.message.as_deref().unwrap_or(&e.title);
+                (e.ts, e.key.clone(), body.to_string())
+            })
             .collect();
         print!("{}", crate::brief::feed(&since_str, &evs, now));
         return Ok(());

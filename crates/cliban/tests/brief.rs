@@ -214,6 +214,19 @@ fn activity_brief_is_short_and_newest_first() {
     let db = seeded();
     let out = ok(&db, &["activity", "-p", "BR", "--brief"]);
     check(&out, &["changes since 1d.", "BR-2:", "wired up the gizmo"]);
+
+    // Actor ids do not read aloud, so the brief leaves them out.
+    let r = Command::new(env!("CARGO_BIN_EXE_cliban"))
+        .args(["--db", &db, "issue", "log", "BR-1", "spoken note"])
+        .env_remove("CLIBAN_DB")
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env("CLIBAN_ACTOR", "agent:robot")
+        .output()
+        .expect("run cliban");
+    assert!(r.status.success());
+    let out = ok(&db, &["activity", "-p", "BR", "--brief"]);
+    assert!(out.contains("BR-1: spoken note."), "{out}");
+    assert!(!out.contains("agent:robot"), "{out}");
 }
 
 #[test]

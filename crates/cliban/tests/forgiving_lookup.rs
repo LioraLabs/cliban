@@ -80,13 +80,13 @@ fn sole_weak_milestone_match_is_a_json_candidate_not_a_selection() {
     let db = seeded("weak");
     ok(&db, &["milestone", "add", "Dropdown cleanup", "-p", "CLI"]);
 
-    let out = run(&db, &["milestone", "show", "d", "-p", "CLI", "--json"]);
+    let out = run(
+        &db,
+        &["milestone", "show", "d", "-p", "CLI", "--json"],
+    );
     assert_eq!(out.status.code(), Some(1));
     let row: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(
-        row,
-        serde_json::json!({"name": "Dropdown cleanup", "project": "CLI"})
-    );
+    assert_eq!(row, serde_json::json!({"name": "Dropdown cleanup", "project": "CLI"}));
 }
 
 #[test]
@@ -108,9 +108,19 @@ fn forgiving_name_is_shared_by_milestone_commands() {
     );
     ok(
         &db,
-        &["milestone", "log", "DROPDOWN CLEANUP", "note", "-p", "CLI"],
+        &[
+            "milestone",
+            "log",
+            "DROPDOWN CLEANUP",
+            "note",
+            "-p",
+            "CLI",
+        ],
     );
-    ok(&db, &["milestone", "waves", "Dropdwn cleanup", "-p", "CLI"]);
+    ok(
+        &db,
+        &["milestone", "waves", "Dropdwn cleanup", "-p", "CLI"],
+    );
 }
 
 #[test]

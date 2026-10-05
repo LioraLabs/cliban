@@ -38,7 +38,10 @@ fn waves_partition_open_work_and_ignore_related_to() {
     run(db, &["issue", "mv", "CLI-5", "done"]);
     run(db, &["issue", "archive", "CLI-6"]);
 
-    let raw = run(db, &["milestone", "waves", "M", "-p", "CLI", "--json"]);
+    let raw = run(
+        db,
+        &["milestone", "waves", "M", "-p", "CLI", "--json"],
+    );
     let positions = ["collisions", "done", "external_blocked", "waves"]
         .map(|key| raw.find(&format!("\"{key}\"")).unwrap());
     assert!(positions.is_sorted(), "{raw}");
@@ -76,48 +79,9 @@ fn waves_report_a_same_wave_path_collision_without_chaining() {
     let a = files(&["src/shared.rs", "src/only_a.rs"]);
     let b = files(&["src/shared.rs"]);
     let c = files(&["src/only_c.rs"]);
-    run(
-        db,
-        &[
-            "issue",
-            "add",
-            "a",
-            "-p",
-            "CLI",
-            "-m",
-            "M",
-            "--description",
-            &a,
-        ],
-    );
-    run(
-        db,
-        &[
-            "issue",
-            "add",
-            "b",
-            "-p",
-            "CLI",
-            "-m",
-            "M",
-            "--description",
-            &b,
-        ],
-    );
-    run(
-        db,
-        &[
-            "issue",
-            "add",
-            "c",
-            "-p",
-            "CLI",
-            "-m",
-            "M",
-            "--description",
-            &c,
-        ],
-    );
+    run(db, &["issue", "add", "a", "-p", "CLI", "-m", "M", "--description", &a]);
+    run(db, &["issue", "add", "b", "-p", "CLI", "-m", "M", "--description", &b]);
+    run(db, &["issue", "add", "c", "-p", "CLI", "-m", "M", "--description", &c]);
 
     let raw = run(db, &["milestone", "waves", "M", "-p", "CLI", "--json"]);
     let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
@@ -150,34 +114,8 @@ fn waves_do_not_collide_tickets_the_graph_already_serialises() {
     run(db, &["project", "add", "CLI", "Cliban"]);
     run(db, &["milestone", "add", "M", "-p", "CLI"]);
     let shared = files(&["src/shared.rs"]);
-    run(
-        db,
-        &[
-            "issue",
-            "add",
-            "first",
-            "-p",
-            "CLI",
-            "-m",
-            "M",
-            "--description",
-            &shared,
-        ],
-    );
-    run(
-        db,
-        &[
-            "issue",
-            "add",
-            "second",
-            "-p",
-            "CLI",
-            "-m",
-            "M",
-            "--description",
-            &shared,
-        ],
-    );
+    run(db, &["issue", "add", "first", "-p", "CLI", "-m", "M", "--description", &shared]);
+    run(db, &["issue", "add", "second", "-p", "CLI", "-m", "M", "--description", &shared]);
     run(db, &["issue", "edit", "CLI-2", "--blocked-by", "CLI-1"]);
 
     let raw = run(db, &["milestone", "waves", "M", "-p", "CLI", "--json"]);
@@ -200,37 +138,11 @@ fn a_collision_is_reported_without_reordering_the_waves() {
     run(db, &["project", "add", "CLI", "Cliban"]);
     run(db, &["milestone", "add", "M", "-p", "CLI"]);
     let shared = files(&["src/shared.rs"]);
-    run(
-        db,
-        &[
-            "issue",
-            "add",
-            "head",
-            "-p",
-            "CLI",
-            "-m",
-            "M",
-            "--description",
-            &shared,
-        ],
-    );
+    run(db, &["issue", "add", "head", "-p", "CLI", "-m", "M", "--description", &shared]);
     for title in ["mid", "tail"] {
         run(db, &["issue", "add", title, "-p", "CLI", "-m", "M"]);
     }
-    run(
-        db,
-        &[
-            "issue",
-            "add",
-            "sibling",
-            "-p",
-            "CLI",
-            "-m",
-            "M",
-            "--description",
-            &shared,
-        ],
-    );
+    run(db, &["issue", "add", "sibling", "-p", "CLI", "-m", "M", "--description", &shared]);
     run(db, &["issue", "edit", "CLI-2", "--blocked-by", "CLI-1"]);
     run(db, &["issue", "edit", "CLI-3", "--blocked-by", "CLI-2"]);
 

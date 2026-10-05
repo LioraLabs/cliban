@@ -688,11 +688,7 @@ fn edit_refuses_to_drop_the_activity_log() {
             "## Spec\n\nrewritten\n",
         ],
     );
-    assert_eq!(
-        r.code, 2,
-        "dropping ## Activity Log must refuse: {}",
-        r.stderr
-    );
+    assert_eq!(r.code, 2, "dropping ## Activity Log must refuse: {}", r.stderr);
     assert!(
         r.stderr.contains("Activity Log"),
         "the refusal names the section: {}",
