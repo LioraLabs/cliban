@@ -91,8 +91,8 @@ re-derived on every wake.
    the ticket branch; report SHA range, evidence, files touched, and what it
    wants reviewed and why; never spawn subagents of its own, and never touch
    the board, the plan, the next task, `main`, or the milestone branch.
-   When the same check fails twice inside its dispatch, it consults the
-   advisor, if it has one, before it reports failure. That comes ahead of the
+   When the same check fails twice inside its dispatch, it calls the
+   `advisor` tool, if it has one, before it reports failure. That comes ahead of the
    escalation in step 3; it does not replace it.
    Every dispatch also carries the **standing audit** — three questions the
    implementer answers in its report before it claims done. Review findings
@@ -113,8 +113,8 @@ re-derived on every wake.
    base and its tests kept, the new or changed tests fail, then pass again once
    restored. A test that passes against untouched code was written after the
    fact or asserts the implementation back to itself, and neither the gate nor a
-   diff can see it. Mechanical only; judgment is the reviewer's, so the
-   verifier never consults the advisor.
+   diff can see it. Mechanical only, so the verifier never
+   calls the `advisor` tool.
 3. **`PASS`** — tick the checkbox and log one line. **`FAIL`** — a fresh
    implementer takes the task with the failure as its brief; the second failure
    escalates to a fresh implementer one tier up. **Three strikes:** the same

@@ -2,8 +2,8 @@
 
 ## 0.15.0
 
-- Tell the **implementer** to consult the advisor (Claude Code's experimental `advisorModel`, which Sonnet subagents inherit) when the same check fails twice inside one dispatch, before reporting failure. It comes ahead of the escalation ladder (fresh implementer, one tier up, three strikes) and does not replace it. A short dispatch is where an advisor call is cheap, since each call re-reads the whole uncached transcript.
-- Tell the **verifier** never to consult it. The verifier returns `PASS` or `FAIL` mechanically, and judgment belongs to the seam reviewer, which stays independent because the advisor reads the planner's own transcript.
+- Tell the **implementer** to call the `advisor` tool (Claude Code's experimental `advisorModel`, which Sonnet subagents inherit), when it has one, if the same check fails twice inside one dispatch, before reporting failure. It comes ahead of the escalation ladder (fresh implementer, one tier up, three strikes) and does not replace it. A short dispatch is where an advisor call is cheap, since each call re-reads the whole uncached transcript.
+- Tell the **verifier** never to call it. The verifier returns `PASS` or `FAIL` mechanically, and judgment belongs to the seam reviewer.
 
 ## 0.14.0
 
