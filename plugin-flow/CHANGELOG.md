@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.15.0
+
+- Tell the **implementer** to consult the advisor (Claude Code's experimental `advisorModel`, which Sonnet subagents inherit) when the same check fails twice inside one dispatch, before reporting failure. It comes ahead of the escalation ladder (fresh implementer, one tier up, three strikes) and does not replace it. A short dispatch is where an advisor call is cheap, since each call re-reads the whole uncached transcript.
+- Tell the **verifier** never to consult it. The verifier returns `PASS` or `FAIL` mechanically, and judgment belongs to the seam reviewer, which stays independent because the advisor reads the planner's own transcript.
+
 ## 0.14.0
 
 - Give every implementer dispatch a **standing audit** — unrecognized input, the error exit, transaction granularity — answered in its report before it claims done. Across a seven-ticket milestone, 8 of 10 review rounds found an Important finding or rejected, and nearly every finding was one of those three questions unasked: a function that silently dropped what it did not recognize, a failure path that skipped its restore, or one user gesture written as several transactions. Reviews were not slow because reviewing is slow; they were slow because the same defect classes kept arriving. Asking the implementer is far cheaper than paying a reviewer to find it and a second implementer to fix it.
